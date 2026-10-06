@@ -15,13 +15,7 @@ close_if_open() {
   fi
 }
 
-if [ -z "$(git status --porcelain)" ]; then
-  echo "no pending change intents — nothing to release"
-  close_if_open "No pending change intents remain."
-  exit 0
-fi
-
-if [ -z "$(git diff --name-only "origin/$BASE" -- 'apps/**/package.json' 'packages/**/package.json')" ]; then
+if [ -z "$(git diff --name-only "origin/$BASE" -- 'packages/*/package.json')" ]; then
   echo "no package.json version bumps against origin/$BASE — not opening a release PR"
   close_if_open "No package version bumps against $BASE."
   exit 0
@@ -30,8 +24,10 @@ fi
 git config user.name 'github-actions[bot]'
 git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 git switch --force-create "$BRANCH"
-git add -A -- apps packages .changeset pnpm-lock.yaml
-git commit -m 'chore(release): version packages'
+git add -A -- packages .changeset pnpm-lock.yaml
+if ! git diff --cached --quiet; then
+  git commit -m 'chore(release): version packages'
+fi
 git push --force origin "$BRANCH"
 
 body=$(mktemp)

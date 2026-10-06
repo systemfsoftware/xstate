@@ -14,7 +14,7 @@ type Pkg = {
   private?: boolean
 }
 
-type Released = { name: string; version: string }
+export type Released = { name: string; version: string }
 
 const publicPackages = async (): Promise<Released[]> => {
   const pkgs = JSON.parse(await run('pnpm', ['ls', '-r', '--json', '--depth=-1'])) as Pkg[]
@@ -23,14 +23,19 @@ const publicPackages = async (): Promise<Released[]> => {
     .map(({ name, version }) => ({ name, version }))
 }
 
-const tagOf = ({ name, version }: Released): string => `${name}@v${version}`
+export const tagOf = ({ name, version }: Released): string => `${name}@v${version}`
 
-const isTagged = async (tag: string): Promise<boolean> => (await run('git', ['tag', '--list', tag])).trim() !== ''
+export const owedPackages = (released: Released[], taggedTags: ReadonlySet<string>): Released[] =>
+  released.filter((pkg) => !taggedTags.has(tagOf(pkg)))
+
+export const isTagged = async (tag: string, repo = '.'): Promise<boolean> =>
+  (await run('git', ['-C', repo, 'tag', '--list', tag])).trim() !== ''
 
 export const loadWorkspaceCycle = async (): Promise<CycleEntry[]> => {
   const released = await publicPackages()
-  const tagged = await Promise.all(released.map((pkg) => isTagged(tagOf(pkg))))
-  return released.filter((_, i) => !tagged[i]).map((pkg) => ({
+  const tagged = await Promise.all(released.map((pkg) => isTagged(tagOf(pkg)).then((t) => t ? tagOf(pkg) : undefined)))
+  const taggedTags = new Set(tagged.filter((tag): tag is string => tag !== undefined))
+  return owedPackages(released, taggedTags).map((pkg) => ({
     ...pkg,
     tag: tagOf(pkg),
     changelog: join('.changeset', 'changelogs', `${pkg.name.replace('/', '!')}@${pkg.version}.md`),

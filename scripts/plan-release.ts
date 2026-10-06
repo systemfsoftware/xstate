@@ -4,14 +4,24 @@ import { parseArgs } from '@std/cli/parse-args'
 import { loadWorkspaceCycle } from './lib/cycle.ts'
 import { countPendingIntents } from './lib/pending-intents.ts'
 
-const pending = await countPendingIntents('.changeset')
+export type Phase = 'release' | 'version' | 'none'
 
-const owed = (await loadWorkspaceCycle()).length
-const phase = owed > 0 ? 'release' : pending > 0 ? 'version' : 'none'
-const outputs = [`phase=${phase}`, `pending_intents=${pending}`, `this_cycle=${owed}`].join('\n')
+export const decidePhase = (owed: number, pending: number): Phase =>
+  owed > 0 ? 'release' : pending > 0 ? 'version' : 'none'
 
-console.error(`plan-release: pending_intents=${pending} this_cycle=${owed} -> phase=${phase}`)
+export const renderOutputs = (phase: Phase, pending: number, owed: number): string =>
+  [`phase=${phase}`, `pending_intents=${pending}`, `this_cycle=${owed}`].join('\n')
 
-const { output } = parseArgs(Deno.args, { string: ['output'] })
-if (output) await Deno.writeTextFile(output, `${outputs}\n`, { append: true })
-else console.log(outputs)
+if (import.meta.main) {
+  const pending = await countPendingIntents('.changeset')
+
+  const owed = (await loadWorkspaceCycle()).length
+  const phase = decidePhase(owed, pending)
+  const outputs = renderOutputs(phase, pending, owed)
+
+  console.error(`plan-release: pending_intents=${pending} this_cycle=${owed} -> phase=${phase}`)
+
+  const { output } = parseArgs(Deno.args, { string: ['output'] })
+  if (output) await Deno.writeTextFile(output, `${outputs}\n`, { append: true })
+  else console.log(outputs)
+}
