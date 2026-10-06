@@ -9,8 +9,10 @@
       url = "github:systemfsoftware/comment-checker";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # pnpm-release-management#8's head: its sandbox gives macOS runs a private
+    # XDG_RUNTIME_DIR, where pnpm 12 takes its store-operation lock.
     pnpm-release-management = {
-      url = "github:systemfsoftware/pnpm-release-management/149e762e73549f1664e792bcc048729a30fa41da";
+      url = "github:systemfsoftware/pnpm-release-management/8f1984418fef130956a3d1f50dc471fd1984d2ec";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
     };
