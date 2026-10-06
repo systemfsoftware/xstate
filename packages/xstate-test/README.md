@@ -1622,18 +1622,18 @@ where `coverage` is `testCoverageToJSON()` of the whole campaign.
 
 `TestAdapter.run(request)` receives:
 
-| Field                        | Description                                                                                                                                                |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `events`                     | `{ type, caseId, generator, weight }` per event case.                                                                                                      |
-| `commands`                   | `{ type, generator, weight, src? }` per configured command. `type` is `'advance'`, `'checkpoint'`, `'stop'`, or `'outcome'`; `src` is set for `'outcome'`. |
-| `runBudget`                  | Runs to use, when a frontier or batch fixes it.                                                                                                            |
-| `runOffset`                  | Runs completed by earlier batches. Offset a fixed seed by it.                                                                                              |
-| `createEvent(type, payload)` | Builds a typed event.                                                                                                                                      |
-| `createRunner()`             | Creates a `PropertyScenarioRunner` for one run or shrink attempt.                                                                                          |
+| Field                        | Description                                                                                                                                                                                                                                    |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `events`                     | `{ type, caseId, generator, weight }` per event case.                                                                                                                                                                                          |
+| `commands`                   | `{ type, generator, weight, src? }` per configured command. `type` is `'advance'`, `'checkpoint'`, `'stop'`, or `'outcome'`; `src` is set for `'outcome'`.                                                                                     |
+| `runBudget`                  | Runs to use, when a frontier or batch fixes it.                                                                                                                                                                                                |
+| `runOffset`                  | Runs completed by earlier batches. Offset a fixed seed by it.                                                                                                                                                                                  |
+| `createEvent(type, payload)` | Builds a typed event.                                                                                                                                                                                                                          |
+| `createRunner(run?)`         | Creates a `PropertyScenarioRunner` for one run or shrink attempt. `run` is the adapter's per-run context — `shrink`, the frozen swarm subset, and a `report(outcome)` the runner calls on disposal. An adapter that never shrinks may omit it. |
 
 Each run:
 
-1. `createRunner()`, then `await runner.start()`.
+1. `createRunner(run?)`, then `await runner.start()`.
 2. For each step: an event (`runner.canRunGenerated(type, generated, caseId)`,
    then `await runner.runGenerated(type, generated, caseId)`), a command
    (`runner.canRunCommand(true)`, then `advance(ms)`, `checkpoint(label)`, or

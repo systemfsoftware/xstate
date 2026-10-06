@@ -9,6 +9,7 @@ import type {
   TestAdapter,
   TestAdapterRequest,
   TestAdapterResult,
+  TestAdapterRunContext,
 } from './engine/index.js'
 import { withCurrentScheduler } from './scheduler.js'
 
@@ -18,6 +19,28 @@ import { withCurrentScheduler } from './scheduler.js'
  */
 const awaited = <A>(value: A | PromiseLike<A>): Effect.Effect<Awaited<A>> =>
   Effect.promise(() => Promise.resolve(value))
+
+interface RunSequencer {
+  nextRun(): TestAdapterRunContext
+}
+
+function createRunSequencer(): RunSequencer {
+  let failureSeen = false
+  let frozenSwarm: readonly string[] | undefined
+  return {
+    nextRun: () => ({
+      shrink: failureSeen,
+      swarm: frozenSwarm,
+      report: ({ passed, swarm }) => {
+        if (passed || failureSeen) {
+          return
+        }
+        failureSeen = true
+        frozenSwarm = swarm
+      },
+    }),
+  }
+}
 
 /**
  * Runs one fast-check model scenario: start, the generated commands, then
@@ -57,13 +80,14 @@ const runCommands = <
   TEvent extends EventObject,
 >(
   request: TestAdapterRequest<TSnapshot, TEvent>,
+  sequencer: RunSequencer,
   generated: Iterable<
     fc.AsyncCommand<PropertyScenarioRunner<TSnapshot, TEvent>, undefined, false>
   >,
   scheduler: fc.Scheduler | undefined,
 ): Promise<void> =>
   Effect.runPromise(Effect.gen(function*() {
-    const runner = request.createRunner()
+    const runner = request.createRunner(sequencer.nextRun())
     const scenario = (): Promise<void> => runScenario(runner, generated)
     if (scheduler === undefined) {
       yield* awaited(scenario())
@@ -467,6 +491,7 @@ class FastCheckAdapter implements TestAdapter<FastCheckGeneratorKind> {
         false
       >(commands, commandConstraints)
       const schedulerOptions = normalizeSchedulerOptions(options.scheduler)
+      const sequencer = createRunSequencer()
       const property = schedulerOptions !== undefined
         ? fc.asyncProperty(
           commandSequence,
@@ -476,18 +501,21 @@ class FastCheckAdapter implements TestAdapter<FastCheckGeneratorKind> {
               : undefined,
           ),
           (generated, scheduler) =>
-            withCurrentScheduler(scheduler, () =>
-              runCommands(request, generated, scheduler).catch((error: unknown) => {
-                // Only a failing run's schedule is worth reporting; capturing
-                // in `finally` would overwrite it with the last run fast-check
-                // executed, which may be a passing shrink candidate.
-                schedulerReport = summarizeSchedulerReport(scheduler)
-                throw error
-              })),
+            withCurrentScheduler(
+              scheduler,
+              () =>
+                runCommands(request, sequencer, generated, scheduler).catch((error: unknown) => {
+                  // Only a failing run's schedule is worth reporting; capturing
+                  // in `finally` would overwrite it with the last run fast-check
+                  // executed, which may be a passing shrink candidate.
+                  schedulerReport = summarizeSchedulerReport(scheduler)
+                  throw error
+                }),
+            ),
         )
         : fc.asyncProperty(
           commandSequence,
-          (generated) => runCommands(request, generated, undefined),
+          (generated) => runCommands(request, sequencer, generated, undefined),
         )
       const {
         maxCommands: _,

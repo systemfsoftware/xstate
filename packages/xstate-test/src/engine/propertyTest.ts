@@ -12,7 +12,6 @@ import * as Effect from 'effect/Effect'
 import * as Exit from 'effect/Exit'
 import { dual } from 'effect/Function'
 import * as Logger from 'effect/Logger'
-import * as MutableRef from 'effect/MutableRef'
 import * as Ref from 'effect/Ref'
 import { XSTATE_INIT, XSTATE_STOP } from './constants.js'
 import {
@@ -344,7 +343,20 @@ export interface TestAdapterRequest<
    */
   readonly runOffset?: number | undefined
   readonly createEvent: (type: string, payload: unknown) => TEvent
-  readonly createRunner: () => PropertyScenarioRunner<TSnapshot, TEvent>
+  readonly createRunner: (
+    run?: TestAdapterRunContext,
+  ) => PropertyScenarioRunner<TSnapshot, TEvent>
+}
+
+export interface TestAdapterRunOutcome {
+  readonly passed: boolean
+  readonly swarm: readonly string[] | undefined
+}
+
+export interface TestAdapterRunContext {
+  readonly shrink: boolean
+  readonly swarm: readonly string[] | undefined
+  readonly report: (outcome: TestAdapterRunOutcome) => void
 }
 
 /** @experimental */
@@ -3943,17 +3955,11 @@ const propertyTestProgram = <
       const count = swarmMinimum + Math.floor(rng() * (shuffled.length - swarmMinimum + 1))
       return shuffled.slice(0, count).sort()
     }
-    // Shrinking re-runs the failing scenario, so the enabled subset is frozen to
-    // the one the failing run used as soon as a run fails.
-    const frozenSwarm = MutableRef.make<readonly string[] | undefined>(
-      undefined,
-    )
     const targetCandidates: PropertyTargetCandidate<
       SnapshotFromSource<TSource>,
       EventFromSource<TSource>
     >[] = []
     const targetFrontierLimit = targetFrontierOptions?.maxFrontiers ?? DEFAULT_MAX_FRONTIERS
-    const failureSeen = MutableRef.make(false)
     const failureStore = options.failures
     const failureKey = failureStore !== undefined
       ? (failureStore.key ??
@@ -4009,19 +4015,10 @@ const propertyTestProgram = <
       >,
       runIndex: number,
       enabled: readonly string[] | undefined,
+      run: TestAdapterRunContext | undefined,
     ): void => {
       const passed = runner.isFinished()
-      if (!passed) {
-        // Every later run the adapter starts is a shrink attempt.
-        MutableRef.set(failureSeen, true)
-      }
-      if (
-        swarmOptions !== null &&
-        !passed &&
-        MutableRef.get(frozenSwarm) === undefined
-      ) {
-        MutableRef.set(frozenSwarm, enabled)
-      }
+      run?.report({ passed, swarm: enabled })
       const trace = tryValue(() => runner.getTrace())
       if (trace === undefined) {
         return
@@ -4105,9 +4102,9 @@ const propertyTestProgram = <
               assertEventPayload(payload, type)
               return { ...payload, type } as EventFromSource<TSource>
             },
-            createRunner: () => {
+            createRunner: (run) => {
               coverage.runs++
-              if (MutableRef.get(failureSeen)) {
+              if (run?.shrink === true) {
                 coverage.shrinkRuns++
               }
               const runsBeforeThisOne = coverage.runs - attemptedRunsBefore - 1
@@ -4142,11 +4139,11 @@ const propertyTestProgram = <
                 runner.setTargetFunction(options.target)
               }
               runner.setFormatSnapshot(options.formatSnapshot)
-              if (MutableRef.get(failureSeen)) {
+              if (run?.shrink === true) {
                 runner.markShrinkRun()
               }
               const enabled = swarmOptions !== null
-                ? MutableRef.get(frozenSwarm) ?? selectSwarmCases(runIndex)
+                ? run?.swarm ?? selectSwarmCases(runIndex)
                 : undefined
               if (enabled !== undefined) {
                 runner.setSwarm(enabled)
@@ -4163,7 +4160,7 @@ const propertyTestProgram = <
                   & { dispose: () => Promise<void> }
               ).dispose = () =>
                 disposeRunnerWithRecord(dispose, () => {
-                  recordRun(runner, runIndex, enabled)
+                  recordRun(runner, runIndex, enabled, run)
                 })
               return runner
             },
