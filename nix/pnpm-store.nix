@@ -25,15 +25,26 @@ let
   fetchable = runCommand "${pname}-fetchable-pnpm-lock.yaml" { nativeBuildInputs = [ yq-go ]; } ''
     yq 'del(.packages[] | select(.resolution.tarball // "" | test("^file:")))' ${lockFile} > "$out"
   '';
-in
-stdenvNoCC.mkDerivation {
-  name = "${pname}-pnpm-store";
-  dontUnpack = true;
-  mitmCache = importPnpmLock {
+  # pnpm on darwin rejects the leaf certificates mitm-cache forges for https
+  # (`invalid peer certificate: EkuError` on macos-latest), whichever CA it is
+  # handed. So the replay serves the same tarballs over plain http: pnpm fetches
+  # from http://registry.npmjs.org/, and the cache answers from the https tree it
+  # recorded. The lockfile's integrity, not the transport, authenticates every
+  # tarball.
+  recorded = importPnpmLock {
     inherit pname;
     version = "0";
     lockFile = fetchable;
   };
+  overHttp = runCommand "${pname}-pnpm-mitm-cache-http" { } ''
+    mkdir "$out"
+    ln -s ${recorded}/https "$out/http"
+  '';
+in
+stdenvNoCC.mkDerivation {
+  name = "${pname}-pnpm-store";
+  dontUnpack = true;
+  mitmCache = overHttp;
   nativeBuildInputs = [
     mitm-cache
     nodejs
@@ -50,12 +61,10 @@ stdenvNoCC.mkDerivation {
       '') files
     )}
     # mitm-cache replays the fetches as a plain-HTTP proxy on 127.0.0.1.
-    export HOME="$TMPDIR" https_proxy="http://$https_proxy" http_proxy="http://$http_proxy"
+    export HOME="$TMPDIR" http_proxy="http://$http_proxy"
+    unset https_proxy
     export pnpm_config_store_dir="$out" pnpm_config_trust_lockfile=true pnpm_config_update_notifier=false
-    # The replay presents certificates signed by mitm-cache's throwaway CA. pnpm
-    # 12's platform verifier reads SSL_CERT_FILE on linux but the keychain on
-    # darwin, so hand the CA to pnpm as an extra root on every system.
-    export NODE_EXTRA_CA_CERTS="$MITM_CACHE_CA"
+    echo 'registry=http://registry.npmjs.org/' > .npmrc
     pnpm fetch
     # pnpm may register the build directory as a project using the store;
     # the link would dangle, and the launcher binds this directory read-only.
