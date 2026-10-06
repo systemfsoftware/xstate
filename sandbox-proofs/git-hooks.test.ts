@@ -1,9 +1,4 @@
-interface Outcome {
-  readonly code: number
-  readonly out: string
-}
-
-const decoder = new TextDecoder()
+import { type Outcome, run as spawn } from './spawn.ts'
 
 const MACHINE_INDEPENDENT_IDENTITY = {
   GIT_AUTHOR_NAME: 'Hook Sandbox Proof',
@@ -12,32 +7,11 @@ const MACHINE_INDEPENDENT_IDENTITY = {
   GIT_COMMITTER_EMAIL: 'hook-sandbox-proof@example.invalid',
 }
 
-const ENV_A_SCOPED_ALLOW_RUN_CAN_SPAWN = Object.fromEntries(
-  Object.entries(Deno.env.toObject()).filter(([name]) => !/^(LD|DYLD)_/.test(name)),
-)
-
-const run = async (
+const run = (
   command: string,
   args: readonly string[],
   options: { readonly cwd?: string; readonly env?: Record<string, string>; readonly stdin?: string } = {},
-): Promise<Outcome> => {
-  const child = new Deno.Command(command, {
-    args: [...args],
-    cwd: options.cwd,
-    clearEnv: true,
-    env: { ...ENV_A_SCOPED_ALLOW_RUN_CAN_SPAWN, ...MACHINE_INDEPENDENT_IDENTITY, ...options.env },
-    stdin: options.stdin === undefined ? 'null' : 'piped',
-    stdout: 'piped',
-    stderr: 'piped',
-  }).spawn()
-  if (options.stdin !== undefined) {
-    const writer = child.stdin.getWriter()
-    await writer.write(new TextEncoder().encode(options.stdin))
-    await writer.close()
-  }
-  const { code, stdout, stderr } = await child.output()
-  return { code, out: decoder.decode(stdout) + decoder.decode(stderr) }
-}
+): Promise<Outcome> => spawn(command, args, { ...options, env: { ...MACHINE_INDEPENDENT_IDENTITY, ...options.env } })
 
 const must = async (command: string, args: readonly string[], cwd?: string): Promise<string> => {
   const outcome = await run(command, args, { cwd })
