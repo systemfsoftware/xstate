@@ -14,8 +14,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
     };
+    # systemfsoftware#606's head: the first snapshot whose workspace deps hash
+    # is measured per system, so aarch64-darwin builds the tarballs too.
     systemfsoftware = {
-      url = "github:systemfsoftware/systemfsoftware/c53bfc9253fe1d2d63119d0e4daae00da846432e";
+      url = "github:systemfsoftware/systemfsoftware/bb5956b3521bf96361e94e136cdc7fa968e1db78";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
       inputs.pnpm-release-management.follows = "pnpm-release-management";
@@ -55,9 +57,11 @@
             src = workspace-source;
             pname = "xstate";
             pnpm = pkgs.pnpm_12;
-            # The builder's fetchPnpmDeps covers the whole lockfile; a lockfile
-            # change moves it. `nix build .#workspace-tarballs` prints the new value.
-            hash = "sha256-E5WnbzAONePkEQLg1ceF/Xx+mez2WOk1rMULx1L81ow=";
+            # The builder's fetchPnpmDeps covers the whole lockfile, so a lockfile
+            # change moves this hash. A store that already holds the old output
+            # reuses it silently; `nix build --rebuild` on xstate-pnpm-deps.drv
+            # refetches and prints the new value.
+            hash = "sha256-IfRbA33sUq92eDyI/8QRPt2sOUvtg4n0VHdxCA6+Rvs=";
           }) [ "pnpm-store" ];
           unwrapped = pkgs.callPackage ./nix/comment-checker.nix {
             hashes = "${comment-checker}/nix/release-hashes.json";

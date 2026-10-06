@@ -120,11 +120,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1790234952,
-        "narHash": "sha256-tjQa1vDoHJir4lasZTakz/xgmsfB6SRjeQqaIbefFOk=",
+        "lastModified": 1790928989,
+        "narHash": "sha256-5r3MN/Rx7N9tLapCBmUq6/zCc3C9J7gNif1HybD1fJQ=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "ed34466c59b766481248959a21a6e46cf0c60468",
+        "rev": "368fee9beaab04ca6fe7af28db63caa9badb22fa",
         "type": "github"
       },
       "original": {
@@ -147,17 +147,17 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1791260531,
-        "narHash": "sha256-dBBajLmatd09B8m57SQMj7g98TsA2k5DLwxuIZz4FxU=",
+        "lastModified": 1791300915,
+        "narHash": "sha256-5/XSCCxOjAbWWoe476xi04i0bOaL7/Y40wWBKF9IcaY=",
         "owner": "systemfsoftware",
         "repo": "systemfsoftware",
-        "rev": "c53bfc9253fe1d2d63119d0e4daae00da846432e",
+        "rev": "bb5956b3521bf96361e94e136cdc7fa968e1db78",
         "type": "github"
       },
       "original": {
         "owner": "systemfsoftware",
         "repo": "systemfsoftware",
-        "rev": "c53bfc9253fe1d2d63119d0e4daae00da846432e",
+        "rev": "bb5956b3521bf96361e94e136cdc7fa968e1db78",
         "type": "github"
       }
     },
