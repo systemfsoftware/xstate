@@ -154,6 +154,7 @@ export { parseDelayToMilliseconds as _parseDelayToMilliseconds } from './delay.j
 /** @experimental Used by `@xstate/scxml`; not part of the stable API. */
 export { createMachineFromCompiledConfig as _createMachineFromCompiledConfig } from './createMachine.js'
 export { type EffectDescriptor, getEffectDescriptor } from './effectDescriptor.js'
+export { reportUnhandledError as _reportUnhandledError } from './reportUnhandledError.js'
 export { deliverEvent, runStep, stopActor, terminateActor } from './runtimeHelpers.js'
 export { type Spawner } from './spawn.js'
 export { isMachineSnapshot, type MachineSnapshot } from './State.js'

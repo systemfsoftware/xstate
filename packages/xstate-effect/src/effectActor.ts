@@ -10,6 +10,7 @@ import type {
   SnapshotFrom,
   Subscription,
 } from '@systemfsoftware/xstate'
+import { _reportUnhandledError as reportUnhandledError } from '@systemfsoftware/xstate'
 import { Queue } from 'effect'
 import { dual } from 'effect/Function'
 
@@ -44,9 +45,7 @@ export const safeCall: {
   try {
     fn?.(arg)
   } catch (err) {
-    queueMicrotask(() => {
-      throw err
-    })
+    reportUnhandledError(err)
   }
 })
 

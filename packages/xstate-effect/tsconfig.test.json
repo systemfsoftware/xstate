@@ -11,12 +11,16 @@
       "@systemfsoftware/source"
     ],
     "emitDeclarationOnly": true,
-    "outDir": "node_modules/.cache/tsc/test"
+    "outDir": "node_modules/.cache/tsc/test",
+    "types": [
+      "node"
+    ]
   },
   "include": [
     "test",
     "src/**/*.test.ts",
-    "src/**/*.test.tsx"
+    "src/**/*.test.tsx",
+    "tests"
   ],
   "references": [
     {
