@@ -8,14 +8,14 @@ catalog:
   "@commitlint/config-conventional": ^21.2.0
   "@commitlint/types": ^21.2.0
   "@effect/tsgo": ^0.45.0
-  "@systemfsoftware/effect-gherkin-spec": ^6.0.1
-  "@systemfsoftware/oxlint-config-recommended": ^3.4.0
+  "@systemfsoftware/effect-gherkin-spec": ^7.0.1
+  "@systemfsoftware/oxlint-config-recommended": ^4.0.0
   "@systemfsoftware/stryker-ignorer-effect-schema-declarations": ^0.2.0
-  "@systemfsoftware/stryker-js": ^13.1.0
+  "@systemfsoftware/stryker-js": ^15.0.1
   "@systemfsoftware/stryker-js-typescript-checker": ^8.0.1
   "@systemfsoftware/stryker-js-vitest-runner": ^8.0.1
   "@systemfsoftware/tsconfig": ^2.0.1
-  "@systemfsoftware/vitest": ^0.3.0
+  "@systemfsoftware/vitest": ^2.0.0
   "@types/node": ^24
   effect: ^4.0.0-rc.117
   husky: ^9.1.7
