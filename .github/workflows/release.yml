@@ -28,12 +28,17 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/dev-shell
       - name: Preflight intent consumption
-        run: nix develop --command sandbox -- pnpm version -r --dry-run
+        uses: ./.github/actions/sandbox
+        with:
+          command: pnpm version -r --dry-run
+      - name: Decide release phase from repository state
+        uses: ./.github/actions/sandbox
+        with:
+          hosts: jsr.io
+          command: ./scripts/plan-release.ts --output .cache/plan-release.out
       - id: plan
-        name: Decide release phase from repository state
-        run: |
-          nix develop --command sandbox --allow-host jsr.io -- ./scripts/plan-release.ts --output .cache/plan-release.out
-          cat .cache/plan-release.out >> "$GITHUB_OUTPUT"
+        name: Publish the release phase
+        run: cat .cache/plan-release.out >> "$GITHUB_OUTPUT"
 
   version:
     if: needs.plan.outputs.phase == 'version'
@@ -47,26 +52,39 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: ./.github/actions/dev-shell
       - name: Consume pending change intents
-        run: nix develop --command sandbox -- pnpm version -r
+        uses: ./.github/actions/sandbox
+        with:
+          command: pnpm version -r
       - name: Capture release set
-        run: |
-          nix develop --command sandbox --allow-host jsr.io -- ./scripts/tag-released-packages.ts --dry-run --json --output .cache/captured.json
-          cat .cache/captured.json
+        uses: ./.github/actions/sandbox
+        with:
+          hosts: jsr.io
+          command: ./scripts/tag-released-packages.ts --dry-run --json --output .cache/captured.json
+      - name: Print the captured release set
+        run: cat .cache/captured.json
       - name: Assert release notes
+        uses: ./.github/actions/sandbox
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          nix develop --command sandbox --allow-host jsr.io --allow-host api.github.com
-          --pass-env GITHUB_TOKEN --pass-env GITHUB_REPOSITORY
-          -- ./scripts/create-github-releases.ts --assert --captured .cache/captured.json
+        with:
+          hosts: |
+            jsr.io
+            api.github.com
+          pass-env: |
+            GITHUB_TOKEN
+            GITHUB_REPOSITORY
+          command: ./scripts/create-github-releases.ts --assert --captured .cache/captured.json
       - name: Open or update the Release PR
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: changeset-release/main
           BASE: ${{ github.event.repository.default_branch }}
-        run: nix develop --command ./scripts/open-release-pr.sh
+        run: |
+          git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          nix develop --command ./scripts/open-release-pr.sh
 
   release:
     if: needs.plan.outputs.phase == 'release'
@@ -80,22 +98,47 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
       - uses: ./.github/actions/dev-shell
       - name: Capture release set
-        run: nix develop --command sandbox --allow-host jsr.io -- ./scripts/tag-released-packages.ts --dry-run --json --output .cache/captured.json
+        uses: ./.github/actions/sandbox
+        with:
+          hosts: jsr.io
+          command: ./scripts/tag-released-packages.ts --dry-run --json --output .cache/captured.json
       - name: Assert release notes
+        uses: ./.github/actions/sandbox
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          nix develop --command sandbox --allow-host jsr.io --allow-host api.github.com
-          --pass-env GITHUB_TOKEN --pass-env GITHUB_REPOSITORY
-          -- ./scripts/create-github-releases.ts --assert --captured .cache/captured.json
+        with:
+          hosts: |
+            jsr.io
+            api.github.com
+          pass-env: |
+            GITHUB_TOKEN
+            GITHUB_REPOSITORY
+          command: ./scripts/create-github-releases.ts --assert --captured .cache/captured.json
       - name: Tag released versions
-        run: nix develop --command sandbox --allow-host jsr.io --allow-host github.com -- ./scripts/tag-released-packages.ts --captured .cache/captured.json
-      - name: GitHub Releases from authored changelogs
+        uses: ./.github/actions/sandbox
+        with:
+          hosts: jsr.io
+          command: ./scripts/tag-released-packages.ts --captured .cache/captured.json --no-push
+      - name: Push the released tags
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          nix develop --command sandbox --allow-host jsr.io --allow-host api.github.com
-          --pass-env GITHUB_TOKEN --pass-env GITHUB_REPOSITORY
-          -- ./scripts/create-github-releases.ts --captured .cache/captured.json
+        run: |
+          refs=()
+          while IFS= read -r tag; do refs+=("refs/tags/$tag"); done < <(nix develop --command jq -r '.[].tag' .cache/captured.json)
+          [ "${#refs[@]}" -gt 0 ] || { echo 'no tags to push'; exit 0; }
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)" push origin "${refs[@]}"
+      - name: GitHub Releases from authored changelogs
+        uses: ./.github/actions/sandbox
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          hosts: |
+            jsr.io
+            api.github.com
+          pass-env: |
+            GITHUB_TOKEN
+            GITHUB_REPOSITORY
+          command: ./scripts/create-github-releases.ts --captured .cache/captured.json

@@ -1,0 +1,37 @@
+name: Sandbox
+description: >-
+  Runs a command in the dependency sandbox — the project directory
+  read-write, an empty $HOME, a cleared environment and only the listed hosts
+  reachable over HTTPS — leaving host-side reads and writes, such as
+  appending a file to $GITHUB_OUTPUT, to a following step. Secrets reach the
+  sandbox only through the calling step's env: and the pass-env list.
+inputs:
+  hosts:
+    description: Egress hosts to allow, one HOST or HOST:PORT per line
+    default: ""
+  pass-env:
+    description: Environment variable names to keep inside the sandbox, one per line
+    default: ""
+  command:
+    description: The command the sandbox runs
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Run in the sandbox
+      shell: bash
+      env:
+        SANDBOX_HOSTS: ${{ inputs.hosts }}
+        SANDBOX_PASS_ENV: ${{ inputs.pass-env }}
+        SANDBOX_COMMAND: ${{ inputs.command }}
+      run: |
+        args=()
+        while IFS= read -r host; do
+          [ -n "$host" ] || continue
+          args+=(--allow-host "$host")
+        done <<< "$SANDBOX_HOSTS"
+        while IFS= read -r name; do
+          [ -n "$name" ] || continue
+          args+=(--pass-env "$name")
+        done <<< "$SANDBOX_PASS_ENV"
+        nix develop --command sandbox "${args[@]}" -- bash -c "$SANDBOX_COMMAND"

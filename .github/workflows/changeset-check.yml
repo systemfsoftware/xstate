@@ -21,4 +21,7 @@ jobs:
         with:
           install: "false"
       - name: Require a changeset for publishable-package changes
-        run: nix develop --command sandbox --allow-host jsr.io -- ./scripts/check-changeset.ts ${{ github.event.pull_request.base.sha }}
+        uses: ./.github/actions/sandbox
+        with:
+          hosts: jsr.io
+          command: ./scripts/check-changeset.ts ${{ github.event.pull_request.base.sha }}

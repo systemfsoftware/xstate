@@ -26,14 +26,23 @@ jobs:
       - uses: ./.github/actions/dev-shell
         with:
           install: "false"
+      - name: Plan mutation shards
+        uses: ./.github/actions/sandbox
+        with:
+          hosts: |
+            jsr.io
+            registry.npmjs.org
+          command: ./scripts/mutation-shards.ts --output .cache/mutation-shards.out --summary .cache/mutation-summary.md
       - id: shards
+        name: Publish the plan
         run: |
-          nix develop --command sandbox --allow-host jsr.io -- ./scripts/mutation-shards.ts --output .cache/mutation-shards.out
           cat .cache/mutation-shards.out >> "$GITHUB_OUTPUT"
+          cat .cache/mutation-summary.md >> "$GITHUB_STEP_SUMMARY"
 
   mutation:
     name: mutation · ${{ matrix.package }}
     needs: [plan]
+    if: needs.plan.outputs.packages != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 75
     strategy:
@@ -56,7 +65,9 @@ jobs:
           key: stryker-${{ matrix.package }}-${{ github.sha }}
           restore-keys: stryker-${{ matrix.package }}-
       - name: Mutation at break 100
-        run: nix develop --command sandbox -- turbo run mutation --filter="${{ matrix.package }}"
+        uses: ./.github/actions/sandbox
+        with:
+          command: turbo run mutation --filter="${{ matrix.package }}"
       - if: always()
         uses: actions/upload-artifact@v6
         with:

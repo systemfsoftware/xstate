@@ -5,7 +5,7 @@ import { loadCaptured, loadWorkspaceCycle } from './lib/cycle.ts'
 import { run } from './lib/run.ts'
 
 const flags = parseArgs(Deno.args, {
-  boolean: ['dry-run', 'json'],
+  boolean: ['dry-run', 'json', 'no-push'],
   string: ['output', 'captured'],
 })
 
@@ -36,6 +36,10 @@ const made: string[] = []
 for (const { tag } of cycle) {
   await run('git', ['tag', tag])
   made.push(tag)
+}
+if (flags['no-push']) {
+  console.log(`created ${made.length} tag(s): ${made.join(', ')}`)
+  Deno.exit(0)
 }
 await run('git', ['push', 'origin', ...made.map((t) => `refs/tags/${t}`)])
 console.log(`pushed ${made.length} tag(s): ${made.join(', ')}`)
