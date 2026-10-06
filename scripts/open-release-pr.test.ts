@@ -15,7 +15,7 @@ const commit = async (cwd: string, message: string): Promise<void> =>
 
 type Fixture = { root: string; ghLog: string }
 
-const fixture = async ({ bump }: { bump: boolean }): Promise<Fixture> => {
+const fixture = async ({ bump, openPr }: { bump: boolean; openPr?: string }): Promise<Fixture> => {
   const root = await Deno.makeTempDir({ prefix: 'release-pr-root-' })
   const origin = await Deno.makeTempDir({ prefix: 'release-pr-origin-' })
   await git(origin, ['init', '--quiet', '--bare'])
@@ -47,7 +47,13 @@ const fixture = async ({ bump }: { bump: boolean }): Promise<Fixture> => {
   const bin = await Deno.makeTempDir({ prefix: 'release-pr-bin-' })
   const ghLog = join(bin, 'gh.log')
   await Deno.writeTextFile(ghLog, '')
-  await Deno.writeTextFile(join(bin, 'gh'), `#!/usr/bin/env bash\necho "$*" >> ${JSON.stringify(ghLog)}\nexit 0\n`)
+  const listReply = openPr === undefined
+    ? ''
+    : `if [ "$1 $2" = "pr list" ]; then echo ${JSON.stringify(openPr)}; fi\n`
+  await Deno.writeTextFile(
+    join(bin, 'gh'),
+    `#!/usr/bin/env bash\necho "$*" >> ${JSON.stringify(ghLog)}\n${listReply}exit 0\n`,
+  )
   await Deno.chmod(join(bin, 'gh'), 0o755)
 
   return { root, ghLog }
@@ -95,4 +101,41 @@ Deno.test('a run with no version bump against the base does not open a PR', asyn
 
   const log = await Deno.readTextFile(ghLog)
   assert(!log.includes('pr create'), `gh pr create should not have been called:\n${log}`)
+})
+
+Deno.test('a run with no version bump closes an open release PR', async () => {
+  const { root, ghLog } = await fixture({ bump: false, openPr: '42' })
+  const { code, stdout } = await drive(root, ghLog)
+
+  assertEquals(code, 0)
+  assert(stdout.includes('no package.json version bumps'), stdout)
+
+  const lines = (await Deno.readTextFile(ghLog)).split('\n')
+  assert(
+    lines.some((line) => line.startsWith('pr close 42 --delete-branch')),
+    `gh pr close was not called:\n${lines.join('\n')}`,
+  )
+  assert(
+    !lines.some((line) => line.startsWith('pr create ')),
+    `gh pr create should not have been called:\n${lines.join('\n')}`,
+  )
+})
+
+Deno.test('a run that committed version bumps edits an open release PR', async () => {
+  const { root, ghLog } = await fixture({ bump: true, openPr: '42' })
+  const { code, stdout } = await drive(root, ghLog)
+
+  assertEquals(code, 0)
+  assert(!stdout.includes('no package.json version bumps'), stdout)
+
+  const lines = (await Deno.readTextFile(ghLog)).split('\n')
+  const edit = lines.find((line) => line.startsWith('pr edit 42 '))
+  assert(edit !== undefined, `gh pr edit was not called:\n${lines.join('\n')}`)
+  assert(edit.includes('--title'), edit)
+  assert(edit.includes('--body-file'), edit)
+  assert(edit.includes('--add-label release'), edit)
+  assert(
+    !lines.some((line) => line.startsWith('pr create ')),
+    `gh pr create should not have been called:\n${lines.join('\n')}`,
+  )
 })
