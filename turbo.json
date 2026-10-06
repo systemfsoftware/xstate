@@ -43,6 +43,23 @@
       ],
       "cache": true
     },
+    "lint:tsgo": {
+      "outputLogs": "errors-only",
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "tsconfig.json",
+        "tsconfig.*.json",
+        "!**/*.md"
+      ],
+      "outputs": [],
+      "dependsOn": [
+        "^build"
+      ],
+      "env": [
+        "TSGO_FORMAT"
+      ],
+      "cache": true
+    },
     "//#typecheck:node": {
       "outputLogs": "errors-only",
       "inputs": [
