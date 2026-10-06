@@ -52,6 +52,10 @@ stdenvNoCC.mkDerivation {
     # mitm-cache replays the fetches as a plain-HTTP proxy on 127.0.0.1.
     export HOME="$TMPDIR" https_proxy="http://$https_proxy" http_proxy="http://$http_proxy"
     export pnpm_config_store_dir="$out" pnpm_config_trust_lockfile=true pnpm_config_update_notifier=false
+    # The replay presents certificates signed by mitm-cache's throwaway CA. pnpm
+    # 12's platform verifier reads SSL_CERT_FILE on linux but the keychain on
+    # darwin, so hand the CA to pnpm as an extra root on every system.
+    export NODE_EXTRA_CA_CERTS="$MITM_CACHE_CA"
     pnpm fetch
     # pnpm may register the build directory as a project using the store;
     # the link would dangle, and the launcher binds this directory read-only.
