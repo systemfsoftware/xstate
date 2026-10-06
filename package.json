@@ -1,0 +1,38 @@
+{
+  "devDependencies": {
+    "@commitlint/cli": "catalog:",
+    "@commitlint/config-conventional": "catalog:",
+    "@commitlint/types": "catalog:",
+    "@effect/tsgo": "catalog:",
+    "@systemfsoftware/tsconfig": "catalog:",
+    "@types/node": "catalog:",
+    "husky": "catalog:",
+    "lint-staged": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
+    "turbo": "catalog:",
+    "typescript": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "name": "starter",
+  "packageManager": "pnpm@12.4.2",
+  "private": true,
+  "scripts": {
+    "attw": "turbo --concurrency=${TURBO_CONCURRENCY:-50%} attw",
+    "build": "turbo --concurrency=${TURBO_CONCURRENCY:-50%} build",
+    "check:ci": "s=0; pnpm format:check || s=1; TURBO_CONCURRENCY=${TURBO_CONCURRENCY:-100%} pnpm gate:tasks || s=1; pnpm gate:dist || s=1; pnpm mutation || s=1; exit $s",
+    "clean": "turbo clean",
+    "format": "./bin/dprint fmt",
+    "format:check": "./bin/dprint check",
+    "gate:dist": "turbo --concurrency=${TURBO_CONCURRENCY:-100%} build",
+    "gate:tasks": "turbo --concurrency=${TURBO_CONCURRENCY:-50%} --continue lint typecheck typecheck:node test",
+    "lint": "turbo --concurrency=${TURBO_CONCURRENCY:-50%} lint",
+    "mutation": "turbo --concurrency=${TURBO_CONCURRENCY:-50%} mutation",
+    "precommit": "pnpm exec lint-staged --no-revert --config .lintstagedrc.js",
+    "prepare": "husky && effect-tsgo patch --oxlint --no-typescript --skip-missing",
+    "test": "turbo --concurrency=${TURBO_CONCURRENCY:-50%} test",
+    "typecheck": "turbo --concurrency=${TURBO_CONCURRENCY:-50%} --continue typecheck typecheck:node",
+    "typecheck:node": "tsc -p tsconfig.node.json --noEmit"
+  },
+  "type": "module"
+}

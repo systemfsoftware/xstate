@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: format
+            runs-on: ubuntu-latest
+            gate: pnpm format:check
+          - leg: lint
+            runs-on: ubuntu-latest
+            gate: pnpm lint
+          - leg: typecheck
+            runs-on: ubuntu-latest
+            gate: pnpm typecheck
+          - leg: test
+            runs-on: ubuntu-latest
+            gate: pnpm test
+          - leg: dist
+            runs-on: ubuntu-latest
+            gate: pnpm gate:dist
+          - leg: macos
+            runs-on: macos-latest
+            gate: pnpm check:ci
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      OXLINT_FORMAT: github
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: dprint from the flake
+        run: echo "$(nix build --no-link --print-out-paths .#dprint)/bin" >> "$GITHUB_PATH"
+      # pnpm/setup replaces pnpm/action-setup for pnpm v11+ and folds
+      # actions/setup-node into the same step. The node version lives here now.
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@24
+          cache: true
+      - run: pnpm install --frozen-lockfile
+      - name: Turbo cache
+        uses: actions/cache@v6
+        with:
+          path: .turbo/cache
+          key: turbo-${{ runner.os }}-dist-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-dist-
+            turbo-${{ runner.os }}-
+      - name: Gate
+        run: ${{ matrix.gate }}
