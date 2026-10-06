@@ -2,6 +2,7 @@
   "name": "@systemfsoftware/xstate-store",
   "license": "MIT",
   "version": "5.0.0-alpha.5",
+  "private": true,
   "author": "Ryan Lee <drdgvhbh@gmail.com>",
   "repository": {
     "type": "git",
@@ -53,7 +54,6 @@
     "zod": "4.4.3"
   },
   "publishConfig": {
-    "access": "public",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
@@ -76,8 +76,7 @@
         "default": "./dist/validate.mjs"
       },
       "./package.json": "./package.json"
-    },
-    "provenance": true
+    }
   },
   "exports": {
     ".": {

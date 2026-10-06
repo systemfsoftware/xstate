@@ -2,6 +2,7 @@
   "name": "@systemfsoftware/xstate-store-react",
   "license": "MIT",
   "version": "2.1.0-alpha.3",
+  "private": true,
   "author": "Ryan Lee <drdgvhbh@gmail.com>",
   "repository": {
     "type": "git",
@@ -52,15 +53,13 @@
     "zod": "4.4.3"
   },
   "publishConfig": {
-    "access": "public",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.mjs"
       },
       "./package.json": "./package.json"
-    },
-    "provenance": true
+    }
   },
   "exports": {
     ".": {

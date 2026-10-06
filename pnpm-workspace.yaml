@@ -95,3 +95,11 @@ supportedArchitectures:
   os: [linux, darwin]
   cpu: [x64, arm64]
   libc: [glibc]
+versioning:
+  lanes:
+    "@systemfsoftware/xstate": alpha
+    "@systemfsoftware/xstate-effect": alpha
+    "@systemfsoftware/xstate-react": alpha
+    "@systemfsoftware/xstate-store": alpha
+    "@systemfsoftware/xstate-store-react": alpha
+    "@systemfsoftware/xstate-test": alpha
