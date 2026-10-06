@@ -63,7 +63,7 @@ Phase ordering is guaranteed at compile time: each phase returns branded markers
 | 🧪 **Vitest**             | Fast unit and integration test runner with TypeScript support                          |
 | 🔬 **Stryker**            | Mutation testing ensuring tests fail when bugs are introduced                          |
 | 📦 **tsdown**             | Fast TypeScript bundler building dual ESM and type declarations                        |
-| 📝 **Changesets**         | Automated versioning and changelog generation with npm OIDC provenance                 |
+| 📝 **Changesets**         | Automated versioning and changelog generation; git-tag releases, Nix-flake dist        |
 | 🪝 **Husky & Commitlint** | Git hooks enforcing conventional commit standards                                      |
 | 🌳 **Worktrunk Scripts**  | Deno-powered git worktree lifecycle hooks for isolated agent work                      |
 
@@ -107,7 +107,7 @@ pnpm install
 
 1. Rename `packages/starter` to your desired package name (e.g., `packages/my-lib`).
 2. Update `name`, `description`, and `author` in `packages/starter/package.json`.
-3. Remove `"private": true` from `package.json` when you are ready to publish.
+3. Remove `"private": true` from `package.json` when you are ready to release it (a non-private workspace package enters the release set).
 
 ### 4. Build and Verify
 

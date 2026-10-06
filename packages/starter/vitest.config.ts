@@ -9,6 +9,6 @@ export default defineConfig({
     include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
   },
   resolve: {
-    alias: [{ find: /^@systemfsoftware/xstate$/, replacement: srcUrl('index.ts') }],
+    alias: [{ find: /^@systemfsoftware\/xstate$/, replacement: srcUrl('index.ts') }],
   },
 })
