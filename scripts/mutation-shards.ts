@@ -4,46 +4,41 @@ import { parseArgs } from '@std/cli/parse-args'
 import { expandGlob } from '@std/fs/expand-glob'
 import { dirname, join, relative, toFileUrl } from '@std/path'
 import { parse as parseYaml } from '@std/yaml'
-import { Exit, Schema } from 'effect'
+import { Schema } from 'effect'
+import { loadReleaseSet, type ReleaseSetRefusal, renderReleaseSetRefusal } from './lib/release-set.ts'
+import { decodeAt, decodeText, readTextAt, readWorkspace } from './lib/workspace.ts'
 
-const Workspace = Schema.Struct({ packages: Schema.Array(Schema.String) })
+const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9-._~]+\/)?[a-z0-9-~][a-z0-9-._~]*$/
 
 const Manifest = Schema.Struct({
-  name: Schema.String,
-  private: Schema.optionalKey(Schema.Boolean),
+  name: Schema.String.pipe(
+    Schema.check(
+      Schema.isPattern(PACKAGE_NAME_PATTERN, { message: 'expected an npm package name' }),
+      Schema.isMaxLength(214, { message: 'expected at most 214 characters' }),
+    ),
+  ),
   scripts: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   stryker: Schema.optionalKey(Schema.Struct({ mutate: Schema.optionalKey(Schema.Array(Schema.String)) })),
 })
 
-const Ledger = Schema.Struct({
-  entries: Schema.Array(
-    Schema.Struct({
-      rule: Schema.String,
-      scope: Schema.String,
-      reason: Schema.String,
-      removedBy: Schema.String,
-    }),
-  ),
+const LedgerEntryStruct = Schema.Struct({
+  rule: Schema.String,
+  scope: Schema.String,
+  reason: Schema.String,
+  removedBy: Schema.String,
 })
+
+type LedgerEntry = (typeof LedgerEntryStruct)['Type']
+
+const Ledger = Schema.Struct({ entries: Schema.Array(LedgerEntryStruct) })
 
 const StrykerConfigModule = Schema.Struct({
   default: Schema.Struct({ mutate: Schema.Array(Schema.String) }),
 })
 
-type Decoded<S extends Schema.ConstraintDecoder<unknown>> =
-  | { readonly ok: true; readonly value: S['Type'] }
-  | { readonly ok: false }
-
 export type Exempt = { readonly package: string; readonly rule: string; readonly removedBy: string }
 
-type LedgerEntry = {
-  readonly rule: string
-  readonly scope: string
-  readonly reason: string
-  readonly removedBy: string
-}
-
-export type Refusal =
+type MutationRefusal =
   | { readonly _tag: 'EmptyWorkspace' }
   | { readonly _tag: 'VacuousPlan' }
   | { readonly _tag: 'MalformedWorkspace'; readonly file: string }
@@ -59,6 +54,8 @@ export type Refusal =
     readonly mutate: readonly string[]
   }
   | { readonly _tag: 'PublishableWithoutMutationOrLedger'; readonly package: string }
+
+export type Refusal = MutationRefusal | ReleaseSetRefusal
 
 export type MutationPlan = {
   readonly packages: readonly string[]
@@ -89,7 +86,14 @@ export const renderRefusal = (refusal: Refusal): string => {
         JSON.stringify(refusal.mutate)
       } matches no files`
     case 'PublishableWithoutMutationOrLedger':
-      return `${refusal.package}: publishable package without a mutation script and without an XS1 debt-ledger entry`
+      return `${refusal.package}: release-set package without a mutation script and without an XS1 debt-ledger entry`
+    case 'MalformedReleaseSet':
+    case 'DuplicateReleaseEntry':
+    case 'UnknownWorkspaceMember':
+    case 'MalformedReleaseManifest':
+    case 'ReleasePackageNotPrivate':
+    case 'PublishableWorkspaceMember':
+      return renderReleaseSetRefusal(refusal)
   }
 }
 
@@ -111,34 +115,6 @@ export const renderSummary = (plan: MutationPlan): string => {
   ].join('\n')
 }
 
-const decodeAt = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, value: unknown): Decoded<S> => {
-  const decoded = Schema.decodeUnknownExit(schema)(value)
-  return Exit.isSuccess(decoded) ? { ok: true, value: decoded.value } : { ok: false }
-}
-
-const readTextAt = async (file: string): Promise<string | undefined> => {
-  try {
-    return await Deno.readTextFile(file)
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return undefined
-    throw error
-  }
-}
-
-const decodeText = <S extends Schema.ConstraintDecoder<unknown>>(
-  schema: S,
-  text: string,
-  parse: (text: string) => unknown,
-): Decoded<S> => {
-  let parsed: unknown
-  try {
-    parsed = parse(text)
-  } catch {
-    return { ok: false }
-  }
-  return decodeAt(schema, parsed)
-}
-
 const matchesAnyFile = async (dir: string, mutate: readonly string[]): Promise<boolean> => {
   const exclude = ['**/node_modules/**', ...mutate.filter((glob) => glob.startsWith('!')).map((glob) => glob.slice(1))]
   for (const glob of mutate.filter((glob) => !glob.startsWith('!'))) {
@@ -152,14 +128,13 @@ export const planMutationShards = async (root: string): Promise<MutationPlan> =>
   const exempt: Exempt[] = []
   const refusals: Refusal[] = []
 
-  const workspaceFile = join(root, 'pnpm-workspace.yaml')
-  const workspaceText = await readTextAt(workspaceFile)
-  if (workspaceText === undefined) {
-    return { packages: [], exempt: [], refusals: [{ _tag: 'MalformedWorkspace', file: workspaceFile }] }
-  }
-  const workspace = decodeText(Workspace, workspaceText, parseYaml)
+  const releaseSet = await loadReleaseSet(root)
+  if (!releaseSet.ok) return { packages: [], exempt: [], refusals: releaseSet.refusals }
+  const releaseNames = new Set(releaseSet.packages.map(({ name }) => name))
+
+  const workspace = await readWorkspace(root)
   if (!workspace.ok) {
-    return { packages: [], exempt: [], refusals: [{ _tag: 'MalformedWorkspace', file: workspaceFile }] }
+    return { packages: [], exempt: [], refusals: [{ _tag: 'MalformedWorkspace', file: workspace.file }] }
   }
 
   const ledgerFile = join(root, 'debt-ledger.yaml')
@@ -173,13 +148,7 @@ export const planMutationShards = async (root: string): Promise<MutationPlan> =>
     entries = ledger.value.entries
   }
 
-  const manifests: string[] = []
-  for (const glob of workspace.value.packages) {
-    for await (const entry of expandGlob(join(glob, 'package.json'), { root, exclude: ['**/node_modules/**'] })) {
-      manifests.push(entry.path)
-    }
-  }
-  manifests.sort()
+  const manifests = [...workspace.manifests]
   if (manifests.length === 0) {
     return { packages: [], exempt: [], refusals: [{ _tag: 'EmptyWorkspace' }] }
   }
@@ -204,7 +173,7 @@ export const planMutationShards = async (root: string): Promise<MutationPlan> =>
     }
 
     if (manifest.value.scripts?.mutation === undefined) {
-      if (manifest.value.private !== true) {
+      if (releaseNames.has(name)) {
         const entry = entries.find((candidate) => candidate.rule === 'XS1' && candidate.scope === name)
         if (entry === undefined) refusals.push({ _tag: 'PublishableWithoutMutationOrLedger', package: name })
         else exempt.push({ package: name, rule: entry.rule, removedBy: entry.removedBy })

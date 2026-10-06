@@ -8,7 +8,6 @@ const SHARED_STRYKER = join(REPO_ROOT, 'stryker.shared.ts')
 
 type Fixture = {
   readonly name: string
-  readonly private?: boolean
   readonly mutation?: boolean
   readonly config?: readonly string[]
   readonly manifestMutate?: readonly string[]
@@ -18,17 +17,25 @@ type Fixture = {
 
 const workspaceOf = async (
   fixtures: readonly Fixture[],
-  options: { readonly ledger?: string } = {},
+  options: { readonly ledger?: string; readonly workspace?: string; readonly releaseSet?: readonly string[] } = {},
 ): Promise<string> => {
   const root = await Deno.makeTempDir({ prefix: 'mutation-shards-' })
-  await Deno.writeTextFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n')
+  await Deno.writeTextFile(
+    join(root, 'pnpm-workspace.yaml'),
+    options.workspace ?? 'packages:\n  - packages/*\n',
+  )
   await Deno.writeTextFile(join(root, 'debt-ledger.yaml'), options.ledger ?? 'entries: []\n')
+  await Deno.writeTextFile(
+    join(root, 'release-set.json'),
+    `${JSON.stringify({ packages: options.releaseSet ?? [] }, null, 2)}\n`,
+  )
   for (const fixture of fixtures) {
     const dir = join(root, 'packages', fixture.name)
     await Deno.mkdir(join(dir, 'src'), { recursive: true })
     const manifest = fixture.manifest ?? JSON.stringify({
       name: `@fixture/${fixture.name}`,
-      ...(fixture.private === true ? { private: true } : {}),
+      version: '1.0.0',
+      private: true,
       ...((fixture.mutation ?? fixture.config !== undefined) ? { scripts: { mutation: 'stryker run' } } : {}),
       ...(fixture.manifestMutate === undefined ? {} : { stryker: { mutate: fixture.manifestMutate } }),
     })
@@ -108,8 +115,11 @@ Deno.test('a package whose config mutate globs match no file is refused', async 
   })
 })
 
-Deno.test('a publishable package with neither a mutation script nor a ledger entry is refused', async () => {
-  const root = await workspaceOf([{ name: 'loose', mutation: false, files: ['src/order.ts'] }])
+Deno.test('a release-set package with neither a mutation script nor a ledger entry is refused', async () => {
+  const root = await workspaceOf(
+    [{ name: 'loose', mutation: false, files: ['src/order.ts'] }],
+    { releaseSet: ['packages/loose'] },
+  )
   assertEquals(await planMutationShards(root), {
     packages: [],
     exempt: [],
@@ -117,8 +127,21 @@ Deno.test('a publishable package with neither a mutation script nor a ledger ent
   })
 })
 
+Deno.test('the release set decides: a mutation-less package outside it is ignored', async () => {
+  const root = await workspaceOf([
+    { name: 'listed', mutation: false, files: ['src/order.ts'] },
+    { name: 'ignored', mutation: false, files: ['src/order.ts'] },
+  ], { releaseSet: ['packages/listed'] })
+  assertEquals(await planMutationShards(root), {
+    packages: [],
+    exempt: [],
+    refusals: [{ _tag: 'PublishableWithoutMutationOrLedger', package: '@fixture/listed' }],
+  })
+})
+
 Deno.test('a ledger-exempt package is planned empty and listed in the summary', async () => {
   const root = await workspaceOf([{ name: 'legacy', mutation: false, files: ['src/order.ts'] }], {
+    releaseSet: ['packages/legacy'],
     ledger: [
       'entries:',
       '  - rule: XS1',
@@ -140,10 +163,10 @@ Deno.test('a ledger-exempt package is planned empty and listed in the summary', 
   assertStringIncludes(summary, '#42')
 })
 
-Deno.test('a private package with neither a script nor a ledger entry is ignored', async () => {
+Deno.test('a workspace member outside the release set is ignored', async () => {
   const root = await workspaceOf([
     { name: 'core', config: ['src/**/*.ts'], files: ['src/order.ts'] },
-    { name: 'internal', private: true, mutation: false, files: ['src/order.ts'] },
+    { name: 'internal', mutation: false, files: ['src/order.ts'] },
   ])
   assertEquals(await planMutationShards(root), {
     packages: ['@fixture/core'],
@@ -169,5 +192,93 @@ Deno.test('a malformed debt ledger is refused by decode with the file named', as
     packages: [],
     exempt: [],
     refusals: [{ _tag: 'MalformedLedger', file: join(root, 'debt-ledger.yaml') }],
+  })
+})
+
+Deno.test('a mutation script without a stryker.config.ts is refused', async () => {
+  const root = await workspaceOf([{ name: 'core', mutation: true, files: ['src/order.ts'] }])
+  assertEquals(await planMutationShards(root), {
+    packages: [],
+    exempt: [],
+    refusals: [{ _tag: 'MutationPackageWithoutConfig', package: '@fixture/core' }],
+  })
+})
+
+Deno.test('a stryker config whose import throws is refused with the config named', async () => {
+  const root = await workspaceOf([{ name: 'core', mutation: true, files: ['src/order.ts'] }])
+  const configFile = join(root, 'packages', 'core', 'stryker.config.ts')
+  await Deno.writeTextFile(configFile, "throw new Error('boom')\n")
+  assertEquals(await planMutationShards(root), {
+    packages: [],
+    exempt: [],
+    refusals: [{ _tag: 'MalformedStrykerConfig', file: configFile }],
+  })
+})
+
+Deno.test('a stryker config whose default mutate is not a string array is refused with the config named', async () => {
+  const root = await workspaceOf([{ name: 'core', mutation: true, files: ['src/order.ts'] }])
+  const configFile = join(root, 'packages', 'core', 'stryker.config.ts')
+  await Deno.writeTextFile(configFile, "export default { mutate: ['src/**/*.ts', 7] }\n")
+  assertEquals(await planMutationShards(root), {
+    packages: [],
+    exempt: [],
+    refusals: [{ _tag: 'MalformedStrykerConfig', file: configFile }],
+  })
+})
+
+Deno.test('an unparseable or wrongly shaped pnpm-workspace.yaml is refused with the file named', async () => {
+  for (const workspace of ['[', 'packages: not-a-list\n']) {
+    const root = await workspaceOf([], { workspace })
+    assertEquals(await planMutationShards(root), {
+      packages: [],
+      exempt: [],
+      refusals: [{ _tag: 'MalformedWorkspace', file: join(root, 'pnpm-workspace.yaml') }],
+    })
+  }
+})
+
+Deno.test('a manifest name with shell metacharacters is refused by decode with the file named', async () => {
+  const root = await workspaceOf([{
+    name: 'core',
+    manifest: JSON.stringify({
+      name: 'foo"; touch /tmp/pwn; echo "',
+      private: true,
+      scripts: { mutation: 'stryker run' },
+    }),
+    files: ['src/order.ts'],
+  }])
+  assertEquals(await planMutationShards(root), {
+    packages: [],
+    exempt: [],
+    refusals: [{ _tag: 'MalformedManifest', file: join(root, 'packages', 'core', 'package.json') }],
+  })
+})
+
+Deno.test('a manifest name that breaks the npm grammar is refused by decode with the file named', async () => {
+  for (const name of ['_leading', 'UPPER', 'a'.repeat(215)]) {
+    const root = await workspaceOf([{
+      name: 'core',
+      manifest: JSON.stringify({ name, private: true, scripts: { mutation: 'stryker run' } }),
+      files: ['src/order.ts'],
+    }])
+    assertEquals(await planMutationShards(root), {
+      packages: [],
+      exempt: [],
+      refusals: [{ _tag: 'MalformedManifest', file: join(root, 'packages', 'core', 'package.json') }],
+    })
+  }
+})
+
+Deno.test('a valid scoped manifest name is planned from its config', async () => {
+  const root = await workspaceOf([{
+    name: 'core',
+    manifest: JSON.stringify({ name: '@fixture/valid-name', private: true, scripts: { mutation: 'stryker run' } }),
+    config: ['src/**/*.ts'],
+    files: ['src/order.ts'],
+  }])
+  assertEquals(await planMutationShards(root), {
+    packages: ['@fixture/valid-name'],
+    exempt: [],
+    refusals: [],
   })
 })

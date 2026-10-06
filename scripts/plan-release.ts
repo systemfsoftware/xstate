@@ -3,6 +3,7 @@
 import { parseArgs } from '@std/cli/parse-args'
 import { loadWorkspaceCycle } from './lib/cycle.ts'
 import { countPendingIntents } from './lib/pending-intents.ts'
+import { ReleaseSetError, renderReleaseSetRefusal } from './lib/release-set.ts'
 
 export type Phase = 'release' | 'version' | 'none'
 
@@ -15,7 +16,16 @@ export const renderOutputs = (phase: Phase, pending: number, owed: number): stri
 if (import.meta.main) {
   const pending = await countPendingIntents('.changeset')
 
-  const owed = (await loadWorkspaceCycle()).length
+  let owed: number
+  try {
+    owed = (await loadWorkspaceCycle()).length
+  } catch (error) {
+    if (error instanceof ReleaseSetError) {
+      for (const refusal of error.refusals) console.error(`plan-release: ${renderReleaseSetRefusal(refusal)}`)
+      Deno.exit(1)
+    }
+    throw error
+  }
   const phase = decidePhase(owed, pending)
   const outputs = renderOutputs(phase, pending, owed)
 

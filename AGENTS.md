@@ -22,8 +22,11 @@ The `@systemfsoftware/xstate*` packages: systemfsoftware's owned fork of XState 
 | `START-4` | Full CI validation passes before completion         | `pnpm check:ci`     |
 
 Turbo declares `dist/**` as each package's build output; `pnpm gate:dist` runs
-that build. `nix build .#workspace-tarballs` packs every public workspace package
-through pnpm-release-management's `mkPnpmWorkspacePackages`.
+that build. `nix build .#workspace-tarballs` packs every package listed in
+`release-set.json` through pnpm-release-management's `mkPnpmWorkspacePackages`.
+Every workspace package is `"private": true`, since nothing here is published to
+npm. Gate: the Changeset Check workflow's `scripts/check-changeset.ts` refuses a
+workspace package that is not private.
 
 ## CI
 

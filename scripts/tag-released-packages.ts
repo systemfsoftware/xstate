@@ -1,7 +1,8 @@
 #!/usr/bin/env -S deno run --config=scripts/deno.json --allow-read --allow-write --allow-run=git,pnpm --allow-net=jsr.io --allow-import
 
 import { parseArgs } from '@std/cli/parse-args'
-import { loadCaptured, loadWorkspaceCycle } from './lib/cycle.ts'
+import { type CycleEntry, loadCaptured, loadWorkspaceCycle } from './lib/cycle.ts'
+import { ReleaseSetError, renderReleaseSetRefusal } from './lib/release-set.ts'
 import { run } from './lib/run.ts'
 
 const flags = parseArgs(Deno.args, {
@@ -9,7 +10,16 @@ const flags = parseArgs(Deno.args, {
   string: ['output', 'captured'],
 })
 
-const cycle = flags.captured ? await loadCaptured(flags.captured) : await loadWorkspaceCycle()
+let cycle: CycleEntry[]
+try {
+  cycle = flags.captured ? await loadCaptured(flags.captured) : await loadWorkspaceCycle()
+} catch (error) {
+  if (error instanceof ReleaseSetError) {
+    for (const refusal of error.refusals) console.error(`tag-released-packages: ${renderReleaseSetRefusal(refusal)}`)
+    Deno.exit(1)
+  }
+  throw error
+}
 
 if (flags.output) {
   await Deno.writeTextFile(flags.output, JSON.stringify(cycle, null, 2))

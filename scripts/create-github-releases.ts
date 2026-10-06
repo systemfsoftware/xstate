@@ -2,7 +2,9 @@
 
 import { parseArgs } from '@std/cli/parse-args'
 import { Octokit, RequestError } from 'octokit'
+import { changelogSection } from './lib/changelog.ts'
 import { type CycleEntry, loadCaptured, loadWorkspaceCycle } from './lib/cycle.ts'
+import { ReleaseSetError, renderReleaseSetRefusal } from './lib/release-set.ts'
 import { run } from './lib/run.ts'
 
 const flags = parseArgs(Deno.args, {
@@ -10,7 +12,16 @@ const flags = parseArgs(Deno.args, {
   string: ['captured'],
 })
 
-const cycle: CycleEntry[] = flags.captured ? await loadCaptured(flags.captured) : await loadWorkspaceCycle()
+let cycle: CycleEntry[]
+try {
+  cycle = flags.captured ? await loadCaptured(flags.captured) : await loadWorkspaceCycle()
+} catch (error) {
+  if (error instanceof ReleaseSetError) {
+    for (const refusal of error.refusals) console.error(`create-github-releases: ${renderReleaseSetRefusal(refusal)}`)
+    Deno.exit(1)
+  }
+  throw error
+}
 
 if (cycle.length === 0) {
   console.log('no this-cycle releases — empty captured set')
@@ -33,7 +44,14 @@ for (const entry of cycle) {
     )
     Deno.exit(1)
   }
-  pending.push({ entry, body: raw.trim() })
+  const body = changelogSection(raw, version)
+  if (body === undefined) {
+    console.error(
+      `::error::Missing changelog section for ${name}@${version}: expected a "## ${version}" section in ${changelog}.`,
+    )
+    Deno.exit(1)
+  }
+  pending.push({ entry, body })
 }
 
 if (flags.assert) {

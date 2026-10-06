@@ -47,7 +47,7 @@ pnpm lint
 # Run all CI gates locally
 pnpm check:ci
 
-# Pack every public package into a tarball
+# Pack every package listed in release-set.json into a tarball
 nix build .#workspace-tarballs
 ```
 
