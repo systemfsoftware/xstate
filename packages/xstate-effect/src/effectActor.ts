@@ -10,9 +10,9 @@ import type {
   SnapshotFrom,
   Subscription,
 } from '@systemfsoftware/xstate'
-import { _reportUnhandledError as reportUnhandledError } from '@systemfsoftware/xstate'
 import { Queue } from 'effect'
 import { dual } from 'effect/Function'
+import { reportUnhandledError } from './reportUnhandledError.js'
 
 /** A mailbox item that reports a failed fire-and-forget action. */
 export interface ActionFailure {

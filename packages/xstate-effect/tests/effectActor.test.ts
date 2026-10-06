@@ -1,7 +1,7 @@
 import { it } from '@systemfsoftware/vitest'
 import { createMachine } from '@systemfsoftware/xstate'
 import { createEffectActor } from '@systemfsoftware/xstate-effect'
-import { Effect, Exit, Scope } from 'effect'
+import { Deferred, Duration, Effect, Exit, Schema, Scope } from 'effect'
 
 const emitterMachine = createMachine({
   initial: 'active',
@@ -24,18 +24,22 @@ const identifiedMachine = createMachine({
 
 const NOTIFICATION_ENTRIES = 4
 
-const reportedOrder = async (): Promise<ReadonlyArray<string>> => {
+const ActorJson = Schema.fromJsonString(
+  Schema.Struct({
+    xstate$$type: Schema.Finite,
+    id: Schema.String,
+  }),
+)
+
+const reportedOrder = Effect.gen(function*() {
   const order: string[] = []
   const errorA = new Error('listener A threw')
   const errorB = new Error('listener B threw')
-  let complete: () => void = () => {}
-  const recorded = new Promise<void>((resolve) => {
-    complete = resolve
-  })
+  const recorded = yield* Deferred.make<void>()
   const record = (entry: string) => {
     order.push(entry)
     if (order.length === NOTIFICATION_ENTRIES) {
-      complete()
+      Deferred.doneUnsafe(recorded, Effect.void)
     }
   }
   process.setUncaughtExceptionCaptureCallback((error: unknown) => {
@@ -47,15 +51,14 @@ const reportedOrder = async (): Promise<ReadonlyArray<string>> => {
         : 'error-unexpected',
     )
   })
-  const scope = await Effect.runPromise(Scope.make())
-  try {
-    const actor = await Effect.runPromise(
-      Scope.provide(createEffectActor(emitterMachine), scope),
-    )
+  const services = yield* Effect.context<never>()
+  const scope = yield* Scope.make()
+  return yield* Effect.gen(function*() {
+    const actor = yield* Scope.provide(createEffectActor(emitterMachine), scope)
     actor.on('pinged', () => {
-      setTimeout(() => {
-        record('timer-marker')
-      }, 0)
+      Effect.runCallbackWith(services)(Effect.sleep(Duration.millis(1)), {
+        onExit: () => record('timer-marker'),
+      })
     })
     actor.on('pinged', () => {
       throw errorA
@@ -69,18 +72,20 @@ const reportedOrder = async (): Promise<ReadonlyArray<string>> => {
       })
     })
     actor.send({ type: 'PING' })
-    await recorded
+    yield* Deferred.await(recorded)
     return order
-  } finally {
-    process.setUncaughtExceptionCaptureCallback(null)
-    await Effect.runPromise(Scope.close(scope, Exit.void))
-  }
-}
+  }).pipe(
+    Effect.ensuring(Scope.close(scope, Exit.void)),
+    Effect.ensuring(
+      Effect.sync(() => process.setUncaughtExceptionCaptureCallback(null)),
+    ),
+  )
+})
 
 it.live(
   'Should_ReportListenerErrorsAsMacrotasksInNotificationOrder_When_TwoListenersThrow',
   function*({ expect }) {
-    const order = yield* Effect.promise(reportedOrder)
+    const order = yield* reportedOrder
     yield* expect(order).toEqual([
       'microtask-marker',
       'timer-marker',
@@ -93,16 +98,17 @@ it.live(
 it.live(
   'Should_SerializeAnEffectActorWithUpstreamTypeTag_When_Stringified',
   function*({ expect }) {
-    const json = yield* Effect.promise(async () => {
-      const scope = await Effect.runPromise(Scope.make())
-      try {
-        const actor = await Effect.runPromise(
-          Scope.provide(createEffectActor(identifiedMachine), scope),
+    const json = yield* Effect.gen(function*() {
+      const scope = yield* Scope.make()
+      return yield* Effect.gen(function*() {
+        const actor = yield* Scope.provide(
+          createEffectActor(identifiedMachine),
+          scope,
         )
-        return JSON.stringify(actor)
-      } finally {
-        await Effect.runPromise(Scope.close(scope, Exit.void))
-      }
+        return yield* Schema.encodeEffect(ActorJson)(actor.toJSON()).pipe(
+          Effect.orDie,
+        )
+      }).pipe(Effect.ensuring(Scope.close(scope, Exit.void)))
     })
     yield* expect(json).toEqual('{"xstate$$type":1,"id":"identified"}')
   },
