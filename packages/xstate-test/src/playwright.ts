@@ -2,6 +2,7 @@ import type { EventObject, Snapshot } from '@systemfsoftware/xstate'
 import * as Data from 'effect/Data'
 import * as Effect from 'effect/Effect'
 import { dual } from 'effect/Function'
+import { ensuringFinalizerWins } from './engine/finalizerError.js'
 import type {
   TestFixture,
   TestStateAssertions,
@@ -654,7 +655,7 @@ export const createPlaywrightSut: {
           ...(config.stop !== undefined ? { stop: () => config.stop!(page) } : {}),
           dispose: ({ passed }: TestSutDisposeContext) =>
             Effect.runPromise(
-              Effect.ensuring(
+              ensuringFinalizerWins(
                 Effect.gen(function*() {
                   for (const [event, listener] of listeners) {
                     page.off?.(event, listener)

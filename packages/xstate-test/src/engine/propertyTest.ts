@@ -47,6 +47,7 @@ import {
   isEventDescriptorObject,
   normalizeEventDescriptors,
 } from './eventDescriptors.js'
+import { ensuringFinalizerWins } from './finalizerError.js'
 import {
   createOutcomeStub,
   PropertyOutcomeRegistry,
@@ -3743,7 +3744,7 @@ const disposeRunnerWithRecord = (
   record: () => void,
 ): Promise<void> =>
   Effect.runPromise(
-    Effect.ensuring(
+    ensuringFinalizerWins(
       Effect.promise(() => Promise.resolve(dispose())),
       Effect.sync(record),
     ),
@@ -4831,7 +4832,7 @@ const replayTestProgram = <TSource extends ActorLogic<any, any, any>>(
       }
       throw new ReplayNotReproducedError(failedAt ?? runner.getStableStep())
     })
-    return yield* Effect.ensuring(
+    return yield* ensuringFinalizerWins(
       timeline,
       Effect.promise(() => runner.dispose()),
     )

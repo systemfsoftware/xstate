@@ -3,6 +3,7 @@ import { initialTransition, transition } from '@systemfsoftware/xstate'
 import * as Effect from 'effect/Effect'
 import { dual } from 'effect/Function'
 import * as Ref from 'effect/Ref'
+import { ensuringFinalizerWins } from './finalizerError.js'
 import { defaultEquivalent, type TestSutContext } from './propertyTest.js'
 
 /**
@@ -360,7 +361,7 @@ export const runParallelPropertyCommands: {
       )
     })
 
-    yield* Effect.ensuring(
+    yield* ensuringFinalizerWins(
       run,
       Effect.promise(() => Promise.resolve(session.dispose?.())),
     )
