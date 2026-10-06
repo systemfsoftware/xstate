@@ -6,11 +6,11 @@
 # https://github.com/dprint/dprint/releases/tag/0.54.0
 #
 # Its plugins are WebAssembly that dprint would otherwise download at run time
-# from the URLs in dprint.json. Each one is fetched here against a pinned hash,
-# and the wrapper hands dprint the store copies, so formatting never reaches the
-# network and works inside the sandbox. A plugin URL without a hash below fails
-# evaluation.
-{ lib, stdenv, stdenvNoCC, fetchurl, unzip, autoPatchelfHook, xz, writeShellScriptBin, dprintConfig }:
+# from the URLs in dprint.json. Each one is fetched here against a pinned hash
+# and seeded into dprint's URL-keyed plugin cache, so formatting never reaches
+# the network and works inside the sandbox. A plugin URL without a hash below
+# fails evaluation.
+{ lib, stdenv, stdenvNoCC, fetchurl, unzip, autoPatchelfHook, xz, jq, writeShellScriptBin, dprintConfig }:
 
 let
   version = "0.54.0";
@@ -45,12 +45,14 @@ let
     "https://plugins.dprint.dev/g-plane/pretty_yaml-v0.5.0.wasm" = "sha256-6ua021G7ZW7Ciwy/OHXTA1Joj9PGEx3SZGtvaA//gzo=";
   };
 
+  urls = (builtins.fromJSON (builtins.readFile dprintConfig)).plugins;
+
   plugins = map
     (url: fetchurl {
       inherit url;
       hash = pluginHashes.${url} or (throw "dprint: no pinned hash for plugin ${url}; add it to nix/dprint.nix");
     })
-    (builtins.fromJSON (builtins.readFile dprintConfig)).plugins;
+    urls;
 
   unwrapped = stdenvNoCC.mkDerivation {
   pname = "dprint";
@@ -83,10 +85,68 @@ let
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
   };
   };
+
+  # A caller's argv must reach dprint exactly as typed, so the pinned plugins
+  # cannot arrive as a --plugins flag. dprint resolves a config's plugin URLs
+  # against DPRINT_CACHE_DIR before the network, so this builds that cache from
+  # the store copies and rekeys each entry from the local path dprint recorded
+  # to the URL the config asks for.
+  pluginCache = stdenvNoCC.mkDerivation {
+    name = "dprint-plugin-cache";
+    dontUnpack = true;
+    nativeBuildInputs = [ jq ];
+
+    buildPhase = ''
+      runHook preBuild
+      export HOME="$TMPDIR"
+      export DPRINT_CACHE_DIR="$TMPDIR/cache"
+      ${unwrapped}/bin/dprint output-resolved-config \
+        --config-discovery=false \
+        --plugins ${lib.escapeShellArgs plugins} > /dev/null
+      jq --argjson urls '${urlsJson}' \
+        '.plugins |= with_entries(
+          .key as $key
+          | ($key | split("/") | last | sub("^[^-]+-"; "")) as $base
+          | ($urls[] | select((split("/") | last) == $base)) as $url
+          | .key = "remote:" + $url
+          | .value |= del(.fileHash)
+          | .value.createdTime = 0
+        )' \
+        "$DPRINT_CACHE_DIR/plugin-cache-manifest.json" > "$TMPDIR/manifest.json"
+      mv "$TMPDIR/manifest.json" "$DPRINT_CACHE_DIR/plugin-cache-manifest.json"
+      runHook postBuild
+    '';
+
+    installPhase = ''
+      runHook preInstall
+      mkdir -p "$out/plugins"
+      cp -r "$TMPDIR/cache/plugins/." "$out/plugins/"
+      cp "$TMPDIR/cache/plugin-cache-manifest.json" "$out/"
+      runHook postInstall
+    '';
+  };
+
+  urlsJson = builtins.toJSON urls;
+
+  pluginCacheName = baseNameOf pluginCache;
 in
-# --plugins takes several values, so --config-discovery=true (dprint's default)
-# ends the list before the caller's own arguments.
+# dprint writes its lock and incremental files under DPRINT_CACHE_DIR, so the
+# store seed is linked into a writable directory rather than read where it sits.
+# The caller's argv is untouched: `--version` and every subcommand reach dprint
+# exactly as typed.
 writeShellScriptBin "dprint" ''
-  if [ "$#" -eq 0 ]; then exec ${unwrapped}/bin/dprint; fi
-  exec ${unwrapped}/bin/dprint "$1" --plugins ${lib.escapeShellArgs plugins} --config-discovery=true "''${@:2}"
+  seed=${pluginCache}
+  cache="''${XDG_CACHE_HOME:-''${HOME:-/tmp}/.cache}/xstate-dprint/${pluginCacheName}"
+  cleanup=""
+  if ! mkdir -p "$cache" 2>/dev/null; then
+    cache="$(mktemp -d)"
+    cleanup="$cache"
+  fi
+  ln -sfn "$seed/plugins" "$cache/plugins"
+  ln -sfn "$seed/plugin-cache-manifest.json" "$cache/plugin-cache-manifest.json"
+  export DPRINT_CACHE_DIR="$cache"
+  ${unwrapped}/bin/dprint "$@"
+  status=$?
+  [ -n "$cleanup" ] && rm -rf "$cleanup"
+  exit $status
 ''
