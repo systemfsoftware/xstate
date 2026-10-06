@@ -28,6 +28,12 @@ Every workspace package is `"private": true`, since nothing here is published to
 npm. Gate: the Changeset Check workflow's `scripts/check-changeset.ts` refuses a
 workspace package that is not private.
 
+## Working Rules
+
+| ID           | Rule                                                                                                                                                                                                             | Gate                                                                                                                                      |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **REPO-W10** | Clearing a lint diagnostic meets the rule's intent at that site. No hoisting code out of the rule's view, no type-only overloads the runtime cannot reach, and no keyword swaps that keep the same control flow. | `review` — wrong: a flagged `if` becomes a `?:` or moves into an unlinted helper; right: the branch becomes a dispatch over a closed type |
+
 ## CI
 
 - Every job runs on GitHub-hosted runners: `ubuntu-latest`, and `macos-latest` for the macOS `check:ci` leg. This repository is public, and the org's self-hosted fleet runner group admits only private repositories (fork safety), so a `[self-hosted, systemfsoftware-runner, *]` job here queues forever. Gate: review of the workflow diff.
