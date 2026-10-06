@@ -77,7 +77,7 @@
             # change moves this hash. A store that already holds the old output
             # reuses it silently; `nix build --rebuild` on xstate-pnpm-deps.drv
             # refetches and prints the new value.
-            hash = "sha256-IfRbA33sUq92eDyI/8QRPt2sOUvtg4n0VHdxCA6+Rvs=";
+            hash = "sha256-VzJPe60xzjLCf2FyMmkafplDUcB7cbn7mopXDgy3QoA=";
           }) [ "pnpm-store" ];
           unwrapped = pkgs.callPackage ./nix/comment-checker.nix {
             hashes = "${comment-checker}/nix/release-hashes.json";
@@ -99,7 +99,7 @@
               pname = "xstate";
               lockFile = ./pnpm-lock.yaml;
               workspaceFile = ./pnpm-workspace.yaml;
-              files = { ".sfs-deps" = sfs-deps; };
+              files = { ".sfs-deps" = sfs-deps; patches = ./patches; };
             };
             sandbox-proofs = pkgs.callPackage "${sandbox-source}/proofs.nix" { inherit sandbox; };
             comment-checker = pkgs.callPackage ./nix/comment-checker-sandbox.nix { comment-checker = unwrapped; };

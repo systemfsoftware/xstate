@@ -1,5 +1,6 @@
-import { quietBuild } from '@systemfsoftware/tsdown-config/quiet-build'
 import { defineConfig } from 'tsdown'
+
+import { quietBuild } from '../../tsdown.shared.ts'
 
 type ExportEntry = string | Record<string, string | undefined>
 

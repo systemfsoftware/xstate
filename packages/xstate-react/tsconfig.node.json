@@ -3,10 +3,12 @@
   "compilerOptions": {
     "composite": true,
     "noEmit": true,
-    "tsBuildInfoFile": "node_modules/.cache/tsconfig.node.tsbuildinfo"
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig.node.tsbuildinfo",
+    "allowImportingTsExtensions": true
   },
   "include": [
     "tsdown.config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "../../*.shared.ts"
   ]
 }

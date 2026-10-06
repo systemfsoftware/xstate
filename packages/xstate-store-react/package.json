@@ -23,7 +23,7 @@
     "test": "vitest run",
     "lint:tsgo": "effect-tsgo diagnostics --project tsconfig.app.json --format ${TSGO_FORMAT:-text} && effect-tsgo diagnostics --project tsconfig.test.json --format ${TSGO_FORMAT:-text}",
     "attw": "attw --pack .",
-    "api:check": "api-extractor-quiet run",
+    "api:check": "api-extractor run",
     "api:update": "api-extractor run --local"
   },
   "dependencies": {
@@ -36,10 +36,8 @@
     "@effect/tsgo": "catalog:",
     "@microsoft/api-extractor": "catalog:",
     "@systemfsoftware/arethetypeswrong-cli": "catalog:",
-    "@systemfsoftware/tsconfig": "workspace:^",
-    "@systemfsoftware/tsdown-config": "workspace:^",
-    "@systemfsoftware/vitest": "workspace:^",
-    "@systemfsoftware/vitest-config": "workspace:^",
+    "@systemfsoftware/tsconfig": "catalog:",
+    "@systemfsoftware/vitest": "catalog:",
     "@testing-library/react": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
