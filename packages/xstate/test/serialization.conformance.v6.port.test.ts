@@ -170,12 +170,19 @@ describe('serializability conformance', () => {
     expect(json.delays).toBeUndefined();
     // port:begin setup/createMachine root sources are omitted
     // The `@code` text is the function's runtime source, which the consumer's bundler printed.
-    const idle = machine.config.states!.idle as any;
     expect(json.states.idle).toEqual({
       after: {
-        shortDelay: { '@code': String(idle.after.shortDelay), '@lang': 'ts' }
+        shortDelay: {
+          '@code':
+            '({ guards }) => {\n\t\t\t\t\t\tif (guards.isReady()) {\n\t\t\t\t\t\t\treturn { target: "done" };\n\t\t\t\t\t\t}\n\t\t\t\t\t}',
+          '@lang': 'ts'
+        }
       },
-      entry: { '@code': String(idle.entry), '@lang': 'ts' }
+      entry: {
+        '@code':
+          '({ actions }, enq) => {\n\t\t\t\t\t\tenq(actions.track);\n\t\t\t\t\t}',
+        '@lang': 'ts'
+      }
     });
     // port:end
   });
@@ -209,9 +216,13 @@ describe('serializability conformance', () => {
     // port:begin inline guards/actions serialize to code directives
     // The `@code` text is the function's runtime source, which the consumer's bundler printed.
     expect(json.states.a).toEqual({
-      entry: { '@code': String(entry), '@lang': 'ts' },
+      entry: { '@code': '(_) => undefined', '@lang': 'ts' },
       on: {
-        GO: { '@code': String(transition), '@lang': 'ts' }
+        GO: {
+          '@code':
+            '(args, enq) => {\n\t\t\tif (guard(args)) {\n\t\t\t\tenq(entry);\n\t\t\t\treturn { target: "b" };\n\t\t\t}\n\t\t}',
+          '@lang': 'ts'
+        }
       }
     });
     // port:end
