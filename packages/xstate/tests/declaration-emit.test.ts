@@ -12,6 +12,8 @@ const tsc = path.join(path.dirname(typescript), 'bin/tsc')
 
 const FIXTURES = ['narrowed-context', 'strict-targets', 'registered-child-parent', 'created-invoke'] as const
 
+const TSC_COMPILE_BUDGET_MS = 60_000
+
 const COMPILER_FLAGS = [
   '--ignoreConfig',
   '--strict',
@@ -150,7 +152,7 @@ it('Should_EmitEveryFixtureDeclarationWithoutDiagnostics_When_TypeScript7Compile
     manyUnderBudget: true,
     manyP0Members: 1,
   })
-})
+}, TSC_COMPILE_BUDGET_MS)
 
 it('Should_NameOnlyEntryPointExports_When_ADeclarationReachesIntoTheSources', function*({ expect }) {
   const root = yield* emitWorkspace
@@ -178,7 +180,7 @@ it('Should_NameOnlyEntryPointExports_When_ADeclarationReachesIntoTheSources', fu
     named: true,
     missing: [],
   })
-})
+}, TSC_COMPILE_BUDGET_MS)
 
 it('Should_CompileTheConsumer_When_ItSeesOnlyTheEmittedParentDeclaration', function*({ expect }) {
   const root = yield* emitWorkspace
@@ -201,4 +203,4 @@ it('Should_CompileTheConsumer_When_ItSeesOnlyTheEmittedParentDeclaration', funct
     seesSource: compiled.diagnostics.some((line) => line.includes('registered-child-parent.ts(')),
     diagnostics: diagnosticsOf(compiled, 'registered-child-consumer'),
   }).toEqual({ seesSource: false, diagnostics: [] })
-})
+}, TSC_COMPILE_BUDGET_MS)
