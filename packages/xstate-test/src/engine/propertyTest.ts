@@ -3762,8 +3762,6 @@ const propertyTestProgram = <
     TKind
   >,
 ): Effect.Effect<{ coverage: TestCoverage }> =>
-  // The adapter's callbacks are synchronous, so the campaign's mutable run
-  // state is held in `MutableRef`s those callbacks can read and write.
   Effect.gen(function*() {
     const mode: TestMode = options.mode ?? 'pure'
     if (
@@ -4096,7 +4094,6 @@ const propertyTestProgram = <
           throw new Error('runsPerFrontier must return a positive integer')
         }
         const attemptedRunsBefore = coverage.runs
-        const scenarioRunCount = MutableRef.make(0)
         const result = yield* Effect.promise(() =>
           options.adapter.run({
             events,
@@ -4112,8 +4109,8 @@ const propertyTestProgram = <
               if (MutableRef.get(failureSeen)) {
                 coverage.shrinkRuns++
               }
-              const runIndex = (runOffset ?? 0) +
-                MutableRef.getAndIncrement(scenarioRunCount)
+              const runsBeforeThisOne = coverage.runs - attemptedRunsBefore - 1
+              const runIndex = (runOffset ?? 0) + runsBeforeThisOne
               const runner = new PropertyScenarioRunner(
                 logic as ActorLogic<
                   SnapshotFromSource<TSource>,
@@ -4327,95 +4324,100 @@ const propertyTestProgram = <
       )
       exploration.configuredRunsOverride = maxRuns
       const startedAt = DateTime.toEpochMillis(DateTime.nowUnsafe())
-      const shortestPaths = MutableRef.make<
+      const shortestPaths = yield* Ref.make<
         StatePath<SnapshotFromSource<TSource>, EventFromSource<TSource>>[] | null
       >(null)
-      const getShortestPathsOnce = () => {
-        const cached = MutableRef.get(shortestPaths)
-        if (cached !== null) {
-          return cached
-        }
-        const paths = tryArray(() =>
-          getShortestPaths(logic, {
-            input: options.input,
-            limit: autoFrontierOptions?.limit ?? DEFAULT_FRONTIER_SEARCH_LIMIT,
-          }) as StatePath<
-            SnapshotFromSource<TSource>,
-            EventFromSource<TSource>
-          >[]
-        )
-        // An unenumerable machine simply falls back to random exploration.
-        MutableRef.set(shortestPaths, paths)
-        return paths
-      }
-      const nextFrontierIndex = MutableRef.make(0)
+      const getShortestPathsOnce = (): Effect.Effect<
+        StatePath<SnapshotFromSource<TSource>, EventFromSource<TSource>>[]
+      > =>
+        Effect.gen(function*() {
+          const cached = yield* Ref.get(shortestPaths)
+          if (cached !== null) {
+            return cached
+          }
+          const paths = tryArray(() =>
+            getShortestPaths(logic, {
+              input: options.input,
+              limit: autoFrontierOptions?.limit ?? DEFAULT_FRONTIER_SEARCH_LIMIT,
+            }) as StatePath<
+              SnapshotFromSource<TSource>,
+              EventFromSource<TSource>
+            >[]
+          )
+          // An unenumerable machine simply falls back to random exploration.
+          yield* Ref.set(shortestPaths, paths)
+          return paths
+        })
+      const nextFrontierIndex = yield* Ref.make(0)
       const getAutoScenarios = (
         budget: number,
-      ): [Scenario, number | undefined][] => {
-        const paths = selectUncoveredFrontiers(
-          getShortestPathsOnce(),
-          snapshotCoverage(),
-          autoFrontierOptions!.maxFrontiers ?? DEFAULT_MAX_FRONTIERS,
-        )
-        if (paths.length === 0) {
-          return [[undefined, budget]]
-        }
-        const perFrontier = autoFrontierOptions!.runsPerFrontier ??
-          Math.max(1, Math.floor(budget / paths.length))
-        return paths.map((frontier) => {
-          const id = getFrontierId(frontier)
-          declarePropertyFrontier(coverage, id)
-          return [
-            { frontier, index: MutableRef.getAndIncrement(nextFrontierIndex), id },
-            perFrontier,
-          ] as [
-            Scenario,
-            number | undefined,
-          ]
+      ): Effect.Effect<[Scenario, number | undefined][]> =>
+        Effect.gen(function*() {
+          const paths = selectUncoveredFrontiers(
+            yield* getShortestPathsOnce(),
+            snapshotCoverage(),
+            autoFrontierOptions!.maxFrontiers ?? DEFAULT_MAX_FRONTIERS,
+          )
+          if (paths.length === 0) {
+            return [[undefined, budget]]
+          }
+          const perFrontier = autoFrontierOptions!.runsPerFrontier ??
+            Math.max(1, Math.floor(budget / paths.length))
+          const batch: [Scenario, number | undefined][] = []
+          for (const frontier of paths) {
+            const id = getFrontierId(frontier)
+            declarePropertyFrontier(coverage, id)
+            const index = yield* Ref.getAndUpdate(
+              nextFrontierIndex,
+              (value) => value + 1,
+            )
+            batch.push([{ frontier, index, id }, perFrontier])
+          }
+          return batch
         })
-      }
 
-      const nextTargetIndex = MutableRef.make(0)
+      const nextTargetIndex = yield* Ref.make(0)
       const getTargetScenarios = (
         budget: number,
-      ): [Scenario, number | undefined][] => {
-        const candidates = targetCandidates.slice(0, targetFrontierLimit)
-        if (candidates.length === 0) {
-          return [[undefined, budget]]
-        }
-        const perFrontier = targetFrontierOptions!.runsPerFrontier ??
-          Math.max(1, Math.floor(budget / candidates.length))
-        return candidates.map((candidate) => {
-          const frontier = {
-            state: candidate.state,
-            steps: candidate.events.map((event) => ({
+      ): Effect.Effect<[Scenario, number | undefined][]> =>
+        Effect.gen(function*() {
+          const candidates = targetCandidates.slice(0, targetFrontierLimit)
+          if (candidates.length === 0) {
+            return [[undefined, budget]]
+          }
+          const perFrontier = targetFrontierOptions!.runsPerFrontier ??
+            Math.max(1, Math.floor(budget / candidates.length))
+          const batch: [Scenario, number | undefined][] = []
+          for (const candidate of candidates) {
+            const frontier = {
               state: candidate.state,
-              event,
-            })),
-            weight: candidate.events.length,
-          } as unknown as StatePath<
-            SnapshotFromSource<TSource>,
-            EventFromSource<TSource>
-          >
-          const id = getFrontierId(frontier)
-          declarePropertyFrontier(coverage, id)
-          return [
-            { frontier, index: MutableRef.getAndIncrement(nextTargetIndex), id },
-            perFrontier,
-          ] as [
-            Scenario,
-            number | undefined,
-          ]
+              steps: candidate.events.map((event) => ({
+                state: candidate.state,
+                event,
+              })),
+              weight: candidate.events.length,
+            } as unknown as StatePath<
+              SnapshotFromSource<TSource>,
+              EventFromSource<TSource>
+            >
+            const id = getFrontierId(frontier)
+            declarePropertyFrontier(coverage, id)
+            const index = yield* Ref.getAndUpdate(
+              nextTargetIndex,
+              (value) => value + 1,
+            )
+            batch.push([{ frontier, index, id }, perFrontier])
+          }
+          return batch
         })
-      }
 
       while (exploration.completedRuns < maxRuns) {
         const runsBeforeBatch = exploration.completedRuns
         const budget = Math.min(batchRuns, maxRuns - exploration.completedRuns)
         const batch: [Scenario, number | undefined][] = autoFrontierOptions !== null
-          ? getAutoScenarios(budget)
+          ? yield* getAutoScenarios(budget)
           : targetFrontierOptions !== null
-          ? getTargetScenarios(budget)
+          ? yield* getTargetScenarios(budget)
           : scenarios.map((frontierContext) => [
             frontierContext,
             Math.min(getStaticRunBudget(frontierContext) ?? budget, budget),
