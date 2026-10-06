@@ -1,3 +1,10 @@
 {
-  "packages": []
+  "packages": [
+    "packages/xstate",
+    "packages/xstate-effect",
+    "packages/xstate-react",
+    "packages/xstate-store",
+    "packages/xstate-store-react",
+    "packages/xstate-test"
+  ]
 }
