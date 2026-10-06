@@ -1,7 +1,7 @@
 import { Gherkin, Given, it, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import { Effect, Layer } from 'effect'
 
-import { hello } from '@TODO/starter'
+import { hello } from '@systemfsoftware/xstate'
 
 const Feature = makeFeature({ it })
 
