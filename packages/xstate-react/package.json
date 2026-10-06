@@ -32,7 +32,7 @@
   },
   "peerDependencies": {
     "@systemfsoftware/xstate": "workspace:^",
-    "react": "catalog:"
+    "react": "catalog:peers"
   },
   "peerDependenciesMeta": {
     "@systemfsoftware/xstate": {

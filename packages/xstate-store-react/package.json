@@ -30,7 +30,7 @@
     "@systemfsoftware/xstate-store": "workspace:^"
   },
   "peerDependencies": {
-    "react": "catalog:"
+    "react": "catalog:peers"
   },
   "devDependencies": {
     "@effect/tsgo": "catalog:",

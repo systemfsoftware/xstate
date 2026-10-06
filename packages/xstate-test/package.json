@@ -29,8 +29,8 @@
   "peerDependencies": {
     "@systemfsoftware/xstate": "workspace:^",
     "effect": "catalog:peers",
-    "fast-check": "catalog:",
-    "vitest": "catalog:",
+    "fast-check": "catalog:peers",
+    "vitest": "catalog:peers",
     "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
