@@ -1,4 +1,0 @@
-{
-  "extends": "@systemfsoftware/tsconfig/node",
-  "include": ["stryker.config.ts", "tsdown.config.ts", "vitest.config.ts"]
-}
