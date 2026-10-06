@@ -1,6 +1,6 @@
-# starter
+# xstate
 
-Starter template for TypeScript / Effect libraries and tools.
+The `@systemfsoftware/xstate*` packages: systemfsoftware's owned fork of XState v6 on Effect 4.
 
 ## Boundaries
 
@@ -21,9 +21,9 @@ Starter template for TypeScript / Effect libraries and tools.
 | `START-3` | All test suites pass                                | `pnpm test`         |
 | `START-4` | Full CI validation passes before completion         | `pnpm check:ci`     |
 
-Workspace roots: `packages/` holds libraries, `apps/` holds publishable
-applications — both are workspace globs in `pnpm-workspace.yaml`. Turbo declares
-`dist/**` as each package's build output; `pnpm gate:dist` runs that build.
+Turbo declares `dist/**` as each package's build output; `pnpm gate:dist` runs
+that build. `nix build .#workspace-tarballs` packs every public workspace package
+through pnpm-release-management's `mkPnpmWorkspacePackages`.
 
 ## CI
 
