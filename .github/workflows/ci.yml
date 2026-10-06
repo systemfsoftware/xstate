@@ -57,3 +57,6 @@ jobs:
             turbo-${{ runner.os }}-
       - name: Gate
         run: nix develop --command ${{ matrix.gate }}
+      - name: Workspace tarballs
+        if: matrix.leg == 'dist'
+        run: nix build --no-link --print-build-logs .#workspace-tarballs
