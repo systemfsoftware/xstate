@@ -20,8 +20,10 @@ jobs:
       - uses: ./.github/actions/dev-shell
         with:
           install: "false"
-      - name: Require a changeset for publishable-package changes
+      - name: Require a changeset for release-set package changes
         uses: ./.github/actions/sandbox
         with:
-          hosts: jsr.io
+          hosts: |
+            jsr.io
+            registry.npmjs.org
           command: ./scripts/check-changeset.ts ${{ github.event.pull_request.base.sha }}

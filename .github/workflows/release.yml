@@ -34,7 +34,9 @@ jobs:
       - name: Decide release phase from repository state
         uses: ./.github/actions/sandbox
         with:
-          hosts: jsr.io
+          hosts: |
+            jsr.io
+            registry.npmjs.org
           command: ./scripts/plan-release.ts --output .cache/plan-release.out
       - id: plan
         name: Publish the release phase
@@ -61,7 +63,9 @@ jobs:
       - name: Capture release set
         uses: ./.github/actions/sandbox
         with:
-          hosts: jsr.io
+          hosts: |
+            jsr.io
+            registry.npmjs.org
           command: ./scripts/tag-released-packages.ts --dry-run --json --output .cache/captured.json
       - name: Print the captured release set
         run: cat .cache/captured.json
@@ -104,7 +108,9 @@ jobs:
       - name: Capture release set
         uses: ./.github/actions/sandbox
         with:
-          hosts: jsr.io
+          hosts: |
+            jsr.io
+            registry.npmjs.org
           command: ./scripts/tag-released-packages.ts --dry-run --json --output .cache/captured.json
       - name: Assert release notes
         uses: ./.github/actions/sandbox
@@ -122,7 +128,9 @@ jobs:
       - name: Tag released versions
         uses: ./.github/actions/sandbox
         with:
-          hosts: jsr.io
+          hosts: |
+            jsr.io
+            registry.npmjs.org
           command: ./scripts/tag-released-packages.ts --captured .cache/captured.json --no-push
       - name: Push the released tags
         env:
