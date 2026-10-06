@@ -130,10 +130,16 @@ let
 
   pluginCacheName = baseNameOf pluginCache;
 in
-# dprint writes its lock and incremental files under DPRINT_CACHE_DIR, so the
-# store seed is linked into a writable directory rather than read where it sits.
-# The caller's argv is untouched: `--version` and every subcommand reach dprint
-# exactly as typed.
+# dprint writes into its cache — the manifest, locks, and incremental files —
+# so the store seed is copied into a writable directory rather than read, or
+# linked, where it sits. A symlink into the read-only store would make every
+# such write fail, and a bare `ln -sfn` over an existing real directory (left
+# by a non-Nix dprint) would nest a link inside it while dprint kept reading the
+# stale directory. The copies are refreshed only when a stamp naming the seed's
+# store path is absent or stale, so a repeated run with the same seed does no
+# work, and a changed seed (or a stale real entry) is replaced wholesale. The
+# caller's argv is untouched:
+# `--version` and every subcommand reach dprint exactly as typed.
 writeShellScriptBin "dprint" ''
   seed=${pluginCache}
   cache="''${XDG_CACHE_HOME:-''${HOME:-/tmp}/.cache}/xstate-dprint/${pluginCacheName}"
@@ -142,8 +148,16 @@ writeShellScriptBin "dprint" ''
     cache="$(mktemp -d)"
     cleanup="$cache"
   fi
-  ln -sfn "$seed/plugins" "$cache/plugins"
-  ln -sfn "$seed/plugin-cache-manifest.json" "$cache/plugin-cache-manifest.json"
+  stamp="$cache/seed-path"
+  if [ ! -d "$cache/plugins" ] || [ -L "$cache/plugins" ] \
+    || [ ! -e "$cache/plugin-cache-manifest.json" ] \
+    || [ "$(cat "$stamp" 2>/dev/null)" != "$seed" ]; then
+    rm -rf "$cache/plugins" "$cache/plugin-cache-manifest.json"
+    cp -r "$seed/plugins" "$cache/plugins"
+    cp "$seed/plugin-cache-manifest.json" "$cache/plugin-cache-manifest.json"
+    chmod -R u+w "$cache/plugins" "$cache/plugin-cache-manifest.json"
+    printf '%s\n' "$seed" > "$stamp"
+  fi
   export DPRINT_CACHE_DIR="$cache"
   ${unwrapped}/bin/dprint "$@"
   status=$?
