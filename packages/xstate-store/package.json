@@ -1,0 +1,112 @@
+{
+  "name": "@systemfsoftware/xstate-store",
+  "license": "MIT",
+  "version": "5.0.0-alpha.5",
+  "author": "Ryan Lee <drdgvhbh@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/systemfsoftware/systemfsoftware.git",
+    "directory": "packages/xstate/xstate-store"
+  },
+  "homepage": "https://github.com/systemfsoftware/systemfsoftware/tree/main/packages/xstate/xstate-store#readme",
+  "bugs": "https://github.com/systemfsoftware/systemfsoftware/issues",
+  "description": "Event-driven stores with selectors, undo, persistence and validation — forked under systemfsoftware from statelyai/xstate (@xstate/store at 2146ae26).",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rimraf dist",
+    "build": "tsdown -l warn && pnpm api:check",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "lint:tsgo": "effect-tsgo diagnostics --project tsconfig.app.json --format ${TSGO_FORMAT:-text} && effect-tsgo diagnostics --project tsconfig.test.json --format ${TSGO_FORMAT:-text}",
+    "attw": "attw --pack .",
+    "api:check": "api-extractor-quiet run && api-extractor-quiet run --config api-extractor.persist.json && api-extractor-quiet run --config api-extractor.reset.json && api-extractor-quiet run --config api-extractor.undo.json && api-extractor-quiet run --config api-extractor.validate.json",
+    "api:update": "api-extractor run --local && api-extractor run --local --config api-extractor.persist.json && api-extractor run --local --config api-extractor.reset.json && api-extractor run --local --config api-extractor.undo.json && api-extractor run --local --config api-extractor.validate.json"
+  },
+  "peerDependencies": {
+    "@systemfsoftware/xstate": "workspace:^"
+  },
+  "peerDependenciesMeta": {
+    "@systemfsoftware/xstate": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@effect/tsgo": "catalog:",
+    "@microsoft/api-extractor": "catalog:",
+    "@statelyai/inspect": "0.7.2",
+    "@systemfsoftware/arethetypeswrong-cli": "catalog:",
+    "@systemfsoftware/tsconfig": "workspace:^",
+    "@systemfsoftware/tsdown-config": "workspace:^",
+    "@systemfsoftware/vitest": "workspace:^",
+    "@systemfsoftware/vitest-config": "workspace:^",
+    "@systemfsoftware/xstate": "workspace:^",
+    "@types/node": "catalog:",
+    "happy-dom": "20.14.5",
+    "immer": "10.2.0",
+    "react": "catalog:",
+    "rimraf": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "4.4.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./persist": {
+        "types": "./dist/persist.d.ts",
+        "default": "./dist/persist.mjs"
+      },
+      "./reset": {
+        "types": "./dist/reset.d.ts",
+        "default": "./dist/reset.mjs"
+      },
+      "./undo": {
+        "types": "./dist/undo.d.ts",
+        "default": "./dist/undo.mjs"
+      },
+      "./validate": {
+        "types": "./dist/validate.d.ts",
+        "default": "./dist/validate.mjs"
+      },
+      "./package.json": "./package.json"
+    },
+    "provenance": true
+  },
+  "exports": {
+    ".": {
+      "@systemfsoftware/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./persist": {
+      "@systemfsoftware/source": "./src/persist.ts",
+      "types": "./dist/persist.d.ts",
+      "default": "./dist/persist.mjs"
+    },
+    "./reset": {
+      "@systemfsoftware/source": "./src/reset.ts",
+      "types": "./dist/reset.d.ts",
+      "default": "./dist/reset.mjs"
+    },
+    "./undo": {
+      "@systemfsoftware/source": "./src/undo.ts",
+      "types": "./dist/undo.d.ts",
+      "default": "./dist/undo.mjs"
+    },
+    "./validate": {
+      "@systemfsoftware/source": "./src/validate.ts",
+      "types": "./dist/validate.d.ts",
+      "default": "./dist/validate.mjs"
+    },
+    "./package.json": "./package.json"
+  }
+}

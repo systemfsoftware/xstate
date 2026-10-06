@@ -1,0 +1,404 @@
+import type { AnyActorLogic, EventFromLogic, InputFrom, SnapshotFrom } from '@systemfsoftware/xstate'
+import { initialTransition, transition } from '@systemfsoftware/xstate'
+import * as Effect from 'effect/Effect'
+import { dual } from 'effect/Function'
+import * as Ref from 'effect/Ref'
+import { defaultEquivalent, type TestSutContext } from './propertyTest.js'
+
+/**
+ * Awaits `value` as an Effect. A value and a thenable are both accepted, and a
+ * rejection stays the same error object when the effect is run.
+ */
+const awaited = <A>(value: A | PromiseLike<A>): Effect.Effect<Awaited<A>> =>
+  Effect.promise(() => Promise.resolve(value))
+
+/**
+ * One completed operation of a concurrent history: the event that was sent
+ * (`invocation`), what the system under test answered (`response`), and the
+ * interval during which the operation was in flight. Intervals may overlap.
+ * @experimental
+ */
+export interface LinearizabilityEntry<TEvent = unknown> {
+  readonly id: string | number
+  /** The concurrent branch the operation ran on. Informational. */
+  readonly actor?: string
+  readonly invocation: TEvent
+  readonly response: unknown
+  readonly start: number
+  readonly end: number
+}
+
+/**
+ * The sequential specification a history is checked against.
+ *
+ * @experimental
+ */
+export interface LinearizabilityModel<TState, TEvent = unknown> {
+  readonly initial: TState
+  readonly apply: (
+    state: TState,
+    event: TEvent,
+  ) => { readonly state: TState; readonly response: unknown }
+  readonly equalResponse?: ((model: unknown, observed: unknown) => boolean) | undefined
+  /**
+   * Returns a stable string identity for a state, used to memoize search
+   * branches. Return `undefined` for states that cannot be serialized; those
+   * branches are then explored without memoization. Defaults to
+   * `JSON.stringify`.
+   */
+  readonly serializeState?: ((state: TState) => string | undefined) | undefined
+}
+
+/** @experimental */
+export interface LinearizabilityOptions {
+  /**
+   * Maximum number of candidate linearization steps to explore before giving
+   * up. When the cap is hit the result is `linearizable: false` with
+   * `truncated: true`, which means "not proven", not "proven wrong".
+   */
+  readonly maxExplored?: number | undefined
+}
+
+/** @experimental */
+export interface LinearizabilityResult<TEvent = unknown> {
+  readonly linearizable: boolean
+  /** The sequential order that explains the history, when one was found. */
+  readonly witness?: readonly LinearizabilityEntry<TEvent>[] | undefined
+  readonly explored: number
+  readonly truncated: boolean
+}
+
+const DEFAULT_MAXIMUM_EXPLORED = 100_000
+
+function defaultSerializeState(state: unknown): string | undefined {
+  try {
+    return JSON.stringify(state)
+  } catch {
+    return undefined
+  }
+}
+
+/** Identity of a model snapshot: everything a transition can depend on. */
+function serializeSnapshotIdentity(state: unknown): string | undefined {
+  if (state === null || typeof state !== 'object') {
+    return defaultSerializeState(state)
+  }
+  const snapshot = state as {
+    value?: unknown
+    context?: unknown
+    status?: unknown
+  }
+  return defaultSerializeState({
+    value: snapshot.value,
+    context: snapshot.context,
+    status: snapshot.status,
+  })
+}
+
+/**
+ * Decides whether a concurrent `history` is linearizable against a sequential
+ * `model`: whether some total order of the operations, consistent with the
+ * real-time order of non-overlapping operations, produces exactly the observed
+ * responses.
+ *
+ * The search is the Wing–Gong just-in-time linearization: depth-first over the
+ * operations that could come next (those starting no later than the earliest
+ * end time still outstanding), backtracking whenever a response disagrees with
+ * the model, and memoizing `(state, completed set)` pairs so equivalent
+ * branches are explored once.
+ * @experimental
+ */
+export const checkLinearizable: {
+  <TState, TEvent>(
+    model: LinearizabilityModel<TState, TEvent>,
+    options?: LinearizabilityOptions,
+  ): (
+    history: readonly LinearizabilityEntry<TEvent>[],
+  ) => LinearizabilityResult<TEvent>
+  <TState, TEvent>(
+    history: readonly LinearizabilityEntry<TEvent>[],
+    model: LinearizabilityModel<TState, TEvent>,
+    options?: LinearizabilityOptions,
+  ): LinearizabilityResult<TEvent>
+} = dual(
+  // A `history` is an array, so it tells the data-first form from a data-last
+  // call, whose first argument is a model object.
+  (args) => args.length >= 3 || Array.isArray(args[0]),
+  function checkLinearizable<TState, TEvent>(
+    history: readonly LinearizabilityEntry<TEvent>[],
+    model: LinearizabilityModel<TState, TEvent>,
+    options: LinearizabilityOptions = {},
+  ): LinearizabilityResult<TEvent> {
+    const maxExplored = options.maxExplored ?? DEFAULT_MAXIMUM_EXPLORED
+    const equalResponse = model.equalResponse ?? defaultEquivalent
+    const serializeState = model.serializeState ?? defaultSerializeState
+    const entries = history.slice()
+    const remaining = entries.map(() => true)
+    const witness: LinearizabilityEntry<TEvent>[] = []
+    const seen = new Set<string>()
+    let explored = 0
+    let truncated = false
+
+    function memoKey(state: TState): string | undefined {
+      const serializedState = serializeState(state)
+      if (serializedState === undefined) {
+        return undefined
+      }
+      const completed = entries
+        .map((_, index) => (remaining[index] === true ? '0' : '1'))
+        .join('')
+      return `${completed}|${serializedState}`
+    }
+
+    function search(state: TState): boolean {
+      if (remaining.every((isRemaining) => !isRemaining)) {
+        return true
+      }
+      const key = memoKey(state)
+      if (key !== undefined) {
+        if (seen.has(key)) {
+          return false
+        }
+        seen.add(key)
+      }
+      // An operation can be linearized next only if it started before every
+      // outstanding operation finished; otherwise it would be reordered past an
+      // operation that provably preceded it.
+      let earliestEnd = Infinity
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index]
+        if (entry === undefined) {
+          continue
+        }
+        if (remaining[index] === true && entry.end < earliestEnd) {
+          earliestEnd = entry.end
+        }
+      }
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index]
+        if (entry === undefined) {
+          continue
+        }
+        if (remaining[index] !== true || entry.start > earliestEnd) {
+          continue
+        }
+        if (explored >= maxExplored) {
+          truncated = true
+          return false
+        }
+        explored++
+        const applied = model.apply(state, entry.invocation)
+        if (!equalResponse(applied.response, entry.response)) {
+          continue
+        }
+        remaining[index] = false
+        witness.push(entry)
+        if (search(applied.state)) {
+          return true
+        }
+        witness.pop()
+        remaining[index] = true
+        if (truncated) {
+          return false
+        }
+      }
+      return false
+    }
+
+    const linearizable = search(model.initial)
+    return {
+      linearizable,
+      witness: linearizable ? witness.slice() : undefined,
+      explored,
+      truncated,
+    }
+  },
+)
+
+/**
+ * The system under test driven by {@link runParallelPropertyCommands}.
+ *
+ * @experimental
+ */
+interface ParallelPropertySutSession<TEvent> {
+  /**
+   * Sends an event. The resolved value is the operation's response; when it is
+   * `undefined` the response is read back with `read()`, which makes a
+   * `TestSutSession` usable as-is.
+   */
+  readonly send: (event: TEvent, context?: unknown) => unknown
+  readonly read?: () => unknown
+  readonly dispose?: () => void | Promise<void>
+}
+
+/** @experimental */
+interface ParallelPropertySut<TSnapshot, TEvent> {
+  readonly create: (
+    context: TestSutContext<any, any>,
+  ) =>
+    | ParallelPropertySutSession<TEvent>
+    | Promise<ParallelPropertySutSession<TEvent>>
+  /** Projects a model snapshot to the value a response is compared against. */
+  readonly projectModel: (snapshot: TSnapshot) => unknown
+  /** Projects a raw SUT response before comparison. */
+  readonly projectSut?: (observed: unknown) => unknown
+}
+
+/** @experimental */
+export interface ParallelPropertyCommandsOptions<TLogic extends AnyActorLogic> {
+  /** Events applied sequentially before the concurrent phase starts. */
+  readonly prefix?: readonly EventFromLogic<TLogic>[]
+  /** Each branch runs its events sequentially, all branches run concurrently. */
+  readonly branches: readonly (readonly EventFromLogic<TLogic>[])[]
+  readonly sut: ParallelPropertySut<
+    SnapshotFrom<TLogic>,
+    EventFromLogic<TLogic>
+  >
+  readonly input?: unknown
+  readonly maxExplored?: number
+  readonly equalResponse?: (model: unknown, observed: unknown) => boolean
+  /**
+   * Returns a stable string identity for a model snapshot, used to memoize
+   * search branches. Defaults to the snapshot's `value`, `context` and
+   * `status`, which keeps states that merely share a projection distinct.
+   */
+  readonly serializeState?: (
+    snapshot: SnapshotFrom<TLogic>,
+  ) => string | undefined
+}
+
+/** @experimental */
+export interface ParallelPropertyCommandsResult<
+  TEvent,
+> extends LinearizabilityResult<TEvent> {
+  readonly history: readonly LinearizabilityEntry<TEvent>[]
+}
+
+/**
+ * Runs a sequential prefix and then N branches concurrently against a system
+ * under test, records the resulting concurrent history, and checks it against
+ * the machine's own pure `transition()` as the sequential specification.
+ *
+ * This is the analogue of `parallel_commands` in QuickCheck State Machine and
+ * PropEr: the prefix puts the system in an interesting state, the branches
+ * race, and linearizability decides whether the observed responses could have
+ * come from any sequential interleaving.
+ * @experimental
+ */
+export const runParallelPropertyCommands: {
+  <TLogic extends AnyActorLogic>(
+    options: ParallelPropertyCommandsOptions<TLogic>,
+  ): (
+    logic: TLogic,
+  ) => Promise<ParallelPropertyCommandsResult<EventFromLogic<TLogic>>>
+  <TLogic extends AnyActorLogic>(
+    logic: TLogic,
+    options: ParallelPropertyCommandsOptions<TLogic>,
+  ): Promise<ParallelPropertyCommandsResult<EventFromLogic<TLogic>>>
+} = dual(2, function runParallelPropertyCommands<
+  TLogic extends AnyActorLogic,
+>(
+  logic: TLogic,
+  options: ParallelPropertyCommandsOptions<TLogic>,
+): Promise<ParallelPropertyCommandsResult<EventFromLogic<TLogic>>> {
+  return Effect.runPromise(Effect.gen(function*() {
+    const projectSut = options.sut.projectSut ??
+      ((observed: unknown) => observed)
+    const session = yield* awaited(options.sut.create({
+      logic,
+      input: options.input,
+      snapshot: undefined,
+      label: () => {},
+      classify: () => {},
+      target: () => {},
+    }))
+
+    const clock = yield* Ref.make(0)
+    const history: LinearizabilityEntry<EventFromLogic<TLogic>>[] = []
+
+    const invoke = (event: EventFromLogic<TLogic>): Effect.Effect<unknown> =>
+      Effect.gen(function*() {
+        const sent = yield* awaited(session.send(event))
+        if (sent !== undefined) {
+          return projectSut(sent)
+        }
+        return projectSut(
+          session.read !== undefined
+            ? yield* awaited(session.read())
+            : undefined,
+        )
+      })
+
+    const nextClock = Ref.getAndUpdate(clock, (value) => value + 1)
+
+    const run = Effect.gen(function*() {
+      for (const event of options.prefix ?? []) {
+        yield* invoke(event)
+      }
+      yield* Effect.forEach(
+        options.branches,
+        (branch, branchIndex) =>
+          Effect.gen(function*() {
+            for (const [eventIndex, event] of branch.entries()) {
+              if (event === undefined) {
+                continue
+              }
+              const start = yield* nextClock
+              const response = yield* invoke(event)
+              const end = yield* nextClock
+              history.push({
+                id: `${branchIndex}:${eventIndex}`,
+                actor: `branch-${branchIndex}`,
+                invocation: event,
+                response,
+                start,
+                end,
+              })
+            }
+          }),
+        { concurrency: 'unbounded', discard: true },
+      )
+    })
+
+    yield* Effect.ensuring(
+      run,
+      Effect.promise(() => Promise.resolve(session.dispose?.())),
+    )
+
+    const initialModelState = initialTransition(
+      logic,
+      options.input as InputFrom<TLogic>,
+    )[0] as SnapshotFrom<TLogic>
+    const modelState = (options.prefix ?? []).reduce(
+      (state: SnapshotFrom<TLogic>, event) => transition(logic, state, event)[0] as SnapshotFrom<TLogic>,
+      initialModelState,
+    )
+
+    const result = checkLinearizable<
+      SnapshotFrom<TLogic>,
+      EventFromLogic<TLogic>
+    >(
+      history,
+      {
+        initial: modelState as SnapshotFrom<TLogic>,
+        apply: (state, event) => {
+          const [next] = transition(logic, state, event)
+          return {
+            state: next as SnapshotFrom<TLogic>,
+            response: options.sut.projectModel(next as SnapshotFrom<TLogic>),
+          }
+        },
+        equalResponse: options.equalResponse,
+        // Memoizing on the projection alone collapses distinct states that
+        // share a projection, which prunes valid linearizations.
+        serializeState: (state) =>
+          options.serializeState !== undefined
+            ? options.serializeState(state as SnapshotFrom<TLogic>)
+            : serializeSnapshotIdentity(state),
+      },
+      { maxExplored: options.maxExplored },
+    )
+
+    return { ...result, history }
+  }))
+})
