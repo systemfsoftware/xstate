@@ -9,7 +9,8 @@
     "https_proxy",
     "http_proxy",
     "no_proxy",
-    "NODE_USE_ENV_PROXY"
+    "NODE_USE_ENV_PROXY",
+    "TMPDIR"
   ],
   "tasks": {
     "build": {

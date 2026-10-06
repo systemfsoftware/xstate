@@ -12,6 +12,10 @@ const MACHINE_INDEPENDENT_IDENTITY = {
   GIT_COMMITTER_EMAIL: 'hook-sandbox-proof@example.invalid',
 }
 
+const ENV_A_SCOPED_ALLOW_RUN_CAN_SPAWN = Object.fromEntries(
+  Object.entries(Deno.env.toObject()).filter(([name]) => !/^(LD|DYLD)_/.test(name)),
+)
+
 const run = async (
   command: string,
   args: readonly string[],
@@ -20,7 +24,8 @@ const run = async (
   const child = new Deno.Command(command, {
     args: [...args],
     cwd: options.cwd,
-    env: { ...MACHINE_INDEPENDENT_IDENTITY, ...options.env },
+    clearEnv: true,
+    env: { ...ENV_A_SCOPED_ALLOW_RUN_CAN_SPAWN, ...MACHINE_INDEPENDENT_IDENTITY, ...options.env },
     stdin: options.stdin === undefined ? 'null' : 'piped',
     stdout: 'piped',
     stderr: 'piped',
