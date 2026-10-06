@@ -1,7 +1,7 @@
-import { defineConfig, type StrykerConfig } from '@systemfsoftware/stryker-js/config'
+import type { StrykerConfig } from '@systemfsoftware/stryker-js/config'
 
 export const packageStrykerConfig = (mutate: ReadonlyArray<string>): StrykerConfig =>
-  defineConfig({
+  ({
     checkers: [{ plugin: '@systemfsoftware/stryker-js-typescript-checker' }],
     coverageAnalysis: 'perTest',
     disableBail: true,
@@ -19,4 +19,4 @@ export const packageStrykerConfig = (mutate: ReadonlyArray<string>): StrykerConf
       options: { configFile: 'vitest.config.ts', dir: '.', related: true },
     },
     thresholds: { break: 100, high: 100, low: 100 },
-  })
+  }) satisfies StrykerConfig
