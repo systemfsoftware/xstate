@@ -3,11 +3,13 @@ title: Use a machine in React
 description: Run XState actor logic in a React component.
 ---
 
-Install XState and the React package.
+Install `@systemfsoftware/xstate-react`:
 
 ```bash
-npm install xstate@alpha @xstate/react@alpha
+nix build github:systemfsoftware/xstate#xstate-react
 ```
+
+See the root README's [Install](../../../README.md#install) section for wiring a catalog entry. Its peer `@systemfsoftware/xstate` comes from the same flake (`#xstate`), and `react` from your own package manager.
 
 `useActor(logic, options?)` creates an actor for the component, starts it, and re-renders when it produces a new snapshot.
 

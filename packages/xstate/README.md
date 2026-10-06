@@ -177,8 +177,10 @@ Get started by forking one of these templates on CodeSandbox:
 ## Super quick start
 
 ```bash
-npm install xstate
+nix build github:systemfsoftware/xstate#xstate
 ```
+
+See the root README's [Install](../../README.md#install) section for wiring a catalog entry.
 
 ```ts
 import { createActor, createMachine } from 'xstate'

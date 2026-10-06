@@ -15,10 +15,10 @@ XState Store is a library for **simple event-based state management**. If you wa
 ## Installation
 
 ```bash
-# yarn add @xstate/store
-# pnpm add @xstate/store
-npm install @xstate/store
+nix build github:systemfsoftware/xstate#xstate-store
 ```
+
+See the root README's [Install](../../README.md#install) section for wiring a catalog entry. Its peer `@systemfsoftware/xstate` comes from the same flake (`#xstate`).
 
 ## Quick start
 

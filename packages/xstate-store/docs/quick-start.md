@@ -6,8 +6,10 @@ description: Create and use an XState Store.
 Use XState Store when you need event-based state without a state machine.
 
 ```bash
-npm install @xstate/store@alpha
+nix build github:systemfsoftware/xstate#xstate-store
 ```
+
+See the root README's [Install](../../../README.md#install) section for wiring a catalog entry. Its peer `@systemfsoftware/xstate` comes from the same flake (`#xstate`).
 
 ```ts
 import { createStore } from '@xstate/store'

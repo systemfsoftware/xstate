@@ -15,8 +15,10 @@ XState models how a workflow responds to events. Effect runs the work inside it.
 This package is experimental. It targets XState v6 alpha and Effect 4.
 
 ```bash
-npm install @xstate/effect@alpha xstate@alpha effect@^4
+nix build github:systemfsoftware/xstate#xstate-effect
 ```
+
+See the root README's [Install](../../../README.md#install) section for wiring a catalog entry. Its peer `@systemfsoftware/xstate` comes from the same flake (`#xstate`), and `effect@^4` from your own package manager.
 
 ## Model a release approval
 

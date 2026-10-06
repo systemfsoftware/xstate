@@ -6,8 +6,10 @@ description: Update applications for the current XState Store API.
 Upgrade the package, then update one store at a time.
 
 ```bash
-npm install @xstate/store@alpha
+nix build github:systemfsoftware/xstate#xstate-store
 ```
+
+See the root README's [Install](../../../README.md#install) section for wiring a catalog entry. Its peer `@systemfsoftware/xstate` comes from the same flake (`#xstate`).
 
 Check these areas:
 
