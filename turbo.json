@@ -1,7 +1,15 @@
 {
-  "$schema": "https://v2-10-1.turborepo.dev/schema.json",
+  "$schema": "https://v2-11-7.turborepo.dev/schema.json",
+  "agentGuidance": false,
   "globalPassThroughEnv": [
-    "XDG_CACHE_HOME"
+    "XDG_CACHE_HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "no_proxy",
+    "NODE_USE_ENV_PROXY"
   ],
   "tasks": {
     "build": {
@@ -39,7 +47,20 @@
       "inputs": [
         "tsconfig.node.json",
         "commitlint.config.ts",
-        ".lintstagedrc.js"
+        ".lintstagedrc.js",
+        "oxlint.shared.ts",
+        "stryker.shared.ts",
+        "vitest.shared.ts"
+      ],
+      "outputs": [],
+      "cache": true
+    },
+    "//#test:scripts": {
+      "outputLogs": "errors-only",
+      "inputs": [
+        "scripts/**",
+        "flake.nix",
+        "flake.lock"
       ],
       "outputs": [],
       "cache": true
@@ -49,6 +70,7 @@
         "$TURBO_DEFAULT$",
         "vitest.config.ts",
         "vitest.config.*",
+        "$TURBO_ROOT$/vitest.shared.ts",
         "src/**/*.test.ts",
         "src/**/*.spec.ts",
         "!**/README.md",
@@ -78,6 +100,8 @@
         "$TURBO_DEFAULT$",
         "stryker.config.ts",
         "vitest.config.ts",
+        "$TURBO_ROOT$/stryker.shared.ts",
+        "$TURBO_ROOT$/vitest.shared.ts",
         "vitest.setup.ts",
         "reports/stryker-incremental.json",
         "!**/*.md"
@@ -97,6 +121,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "oxlint.config.ts",
+        "$TURBO_ROOT$/oxlint.shared.ts",
         "tsconfig.json",
         "tsconfig.*.json",
         "!**/*.md"

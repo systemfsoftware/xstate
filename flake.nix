@@ -1,5 +1,5 @@
 {
-  description = "starter toolchain — the formatter and runtimes the check chain shells out to";
+  description = "xstate — the @systemfsoftware/xstate* package tarballs, plus the formatter, runtimes, systemfsoftware packages and dependency sandbox the check chain shells out to";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -9,51 +9,111 @@
       url = "github:systemfsoftware/comment-checker";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # Hashless pnpm store: each lockfile integrity is the fetch hash.
-    # fetchPnpmDeps needs a second store-wide hash that Dependabot cannot update.
-    # A package built from this workspace takes this overlay to get
-    # `importPnpmLock` and `iplConfigHook` into its `callPackage` arguments.
+    pnpm-release-management = {
+      url = "github:systemfsoftware/pnpm-release-management/149e762e73549f1664e792bcc048729a30fa41da";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.comment-checker.follows = "comment-checker";
+    };
+    systemfsoftware = {
+      url = "github:systemfsoftware/systemfsoftware/c53bfc9253fe1d2d63119d0e4daae00da846432e";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.comment-checker.follows = "comment-checker";
+      inputs.pnpm-release-management.follows = "pnpm-release-management";
+    };
+    # The pnpm store is hashless: each tarball's lockfile integrity is its fetch hash, so a lockfile change needs no hash edit.
     importPnpmLock = {
       url = "github:Scrumplex/importPnpmLock.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, comment-checker, importPnpmLock }:
+  outputs = { self, nixpkgs, comment-checker, pnpm-release-management, systemfsoftware, importPnpmLock }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-      forEachSystem = fn: nixpkgs.lib.genAttrs systems (system: fn nixpkgs.legacyPackages.${system});
+      lib = nixpkgs.lib;
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+      forEachSystem = fn: lib.genAttrs systems (system: fn nixpkgs.legacyPackages.${system});
     in
     {
       packages = forEachSystem (pkgs:
         let
-          pkgs' = pkgs.extend importPnpmLock.overlays.default;
-          dprint = pkgs.callPackage ./nix/dprint.nix { };
+          system = pkgs.stdenv.hostPlatform.system;
+          sfs-deps = systemfsoftware.packages.${system}.workspace-tarballs;
+          # One tarball per public workspace package, plus workspace-tarballs
+          # (all of them and index.json). The lockfile names the systemfsoftware
+          # tarballs as file:.sfs-deps/*.tgz, so the builder's source carries
+          # them beside the checkout. The sandbox installs from the hashless
+          # store below, so the builder's own whole-store pnpm-store stays out.
+          workspace-source = pkgs.runCommand "xstate-workspace-source" { } ''
+            cp -r ${self} "$out"
+            chmod -R u+w "$out"
+            cp -r ${sfs-deps} "$out/.sfs-deps"
+            # git carries no empty directory; the builder reads packages/ for the workspace glob.
+            mkdir -p "$out/packages"
+          '';
+          workspace = removeAttrs (pnpm-release-management.lib.mkPnpmWorkspacePackages {
+            inherit pkgs;
+            src = workspace-source;
+            pname = "xstate";
+            pnpm = pkgs.pnpm_12;
+            # The builder's fetchPnpmDeps covers the whole lockfile; a lockfile
+            # change moves it. `nix build .#workspace-tarballs` prints the new value.
+            hash = "sha256-E5WnbzAONePkEQLg1ceF/Xx+mez2WOk1rMULx1L81ow=";
+          }) [ "pnpm-store" ];
           unwrapped = pkgs.callPackage ./nix/comment-checker.nix {
             hashes = "${comment-checker}/nix/release-hashes.json";
           };
-          sandboxed = pkgs.callPackage ./nix/comment-checker-sandbox.nix {
-            comment-checker = unwrapped;
+          sandbox-source = pkgs.applyPatches {
+            name = "sandbox-source";
+            src = "${pnpm-release-management}/nix/sandbox";
+            patches = [ ./nix/patches/sandbox-linked-worktree-git.patch ];
           };
-        in {
-          inherit dprint;
-          comment-checker = sandboxed;
-          comment-checker-unwrapped = unwrapped;
-          default = dprint;
-        });
+          sandbox = pkgs.callPackage "${sandbox-source}/default.nix" { };
+          own = {
+            inherit sfs-deps sandbox;
+            dprint = pkgs.callPackage ./nix/dprint.nix { dprintConfig = ./dprint.json; };
+            pnpm-store = pkgs.callPackage ./nix/pnpm-store.nix {
+              inherit (importPnpmLock.legacyPackages.${system}) importPnpmLock;
+              nodejs = pkgs.nodejs_24;
+              pnpm = pkgs.pnpm_12;
+            } {
+              pname = "xstate";
+              lockFile = ./pnpm-lock.yaml;
+              workspaceFile = ./pnpm-workspace.yaml;
+              files = { ".sfs-deps" = sfs-deps; };
+            };
+            sandbox-proofs = pkgs.callPackage "${sandbox-source}/proofs.nix" { inherit sandbox; };
+            comment-checker = pkgs.callPackage ./nix/comment-checker-sandbox.nix { comment-checker = unwrapped; };
+            comment-checker-unwrapped = unwrapped;
+            default = own.dprint;
+          };
+          clashes = builtins.attrNames (builtins.intersectAttrs own workspace);
+        in
+        assert clashes == [ ] || throw "flake.nix: workspace packages ${lib.concatStringsSep ", " clashes} collide with flake packages";
+        workspace // own);
 
-      # pnpm is deliberately absent: `packageManager` pins pnpm@12.4.2 and
-      # corepack is the one thing allowed to resolve it. A second pnpm on PATH
-      # would answer `pnpm install` with a version the lockfile never saw.
-      devShells = forEachSystem (pkgs: {
-        default = pkgs.mkShell {
-          packages = [
-            self.packages.${pkgs.stdenv.hostPlatform.system}.dprint
-            self.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker
-            pkgs.nodejs_24
-            pkgs.deno
-          ];
-        };
-      });
+      devShells = forEachSystem (pkgs:
+        let
+          own = self.packages.${pkgs.stdenv.hostPlatform.system};
+        in {
+          default = pkgs.mkShell {
+            packages = [
+              own.dprint
+              own.comment-checker
+              own.sandbox
+              pkgs.actionlint
+              pkgs.jq
+              pkgs.nodejs_24
+              pkgs.pnpm_12
+              pkgs.deno
+            ];
+            SANDBOX_PNPM_STORE = own.pnpm-store;
+            shellHook = ''
+              root="$(git rev-parse --show-toplevel)"
+              git config core.hooksPath .husky
+              rm -rf "$root/.sfs-deps"
+              cp -r --no-preserve=mode ${own.sfs-deps} "$root/.sfs-deps"
+            '';
+          };
+        });
     };
 }

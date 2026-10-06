@@ -1,50 +1,79 @@
 allowBuilds:
+  esbuild: true
   msgpackr-extract: false
   onnxruntime-node: false
   protobufjs: false
   sharp: false
 catalog:
-  "@commitlint/cli": ^21.2.1
-  "@commitlint/config-conventional": ^21.2.0
-  "@commitlint/types": ^21.2.0
-  "@effect/tsgo": ^0.45.0
-  "@systemfsoftware/effect-gherkin-spec": ^6.0.1
-  "@systemfsoftware/oxlint-config-recommended": ^3.4.0
-  "@systemfsoftware/stryker-ignorer-effect-schema-declarations": ^0.2.0
-  "@systemfsoftware/stryker-js": ^13.1.0
-  "@systemfsoftware/stryker-js-typescript-checker": ^8.0.1
-  "@systemfsoftware/stryker-js-vitest-runner": ^8.0.1
-  "@systemfsoftware/tsconfig": ^2.0.1
-  "@systemfsoftware/vitest": ^0.3.0
-  "@types/node": ^24
-  effect: ^4.0.0-rc.117
-  husky: ^9.1.7
-  lint-staged: ^17.1.0
-  oxlint: ~1.82.0
+  "@commitlint/cli": 21.2.3
+  "@commitlint/config-conventional": 21.2.3
+  "@commitlint/types": 21.2.3
+  "@effect/tsgo": 0.48.1
+  "@systemfsoftware/effect-cell-types": file:.sfs-deps/effect-cell-types-12.0.0.tgz
+  "@systemfsoftware/effect-gherkin-spec": file:.sfs-deps/effect-gherkin-spec-7.0.1.tgz
+  "@systemfsoftware/effect-schema-discovery": file:.sfs-deps/effect-schema-discovery-2.0.0.tgz
+  "@systemfsoftware/effect-schema-law": file:.sfs-deps/effect-schema-law-5.0.1.tgz
+  "@systemfsoftware/effect-schema-recursion-budget": file:.sfs-deps/effect-schema-recursion-budget-2.0.0.tgz
+  "@systemfsoftware/effect-schema-vite": file:.sfs-deps/effect-schema-vite-3.0.1.tgz
+  "@systemfsoftware/effect-sim-kernel": file:.sfs-deps/effect-sim-kernel-1.0.0.tgz
+  "@systemfsoftware/effect-spec-runtime": file:.sfs-deps/effect-spec-runtime-1.0.1.tgz
+  "@systemfsoftware/oxlint-config-cell-architecture": file:.sfs-deps/oxlint-config-cell-architecture-4.0.0.tgz
+  "@systemfsoftware/oxlint-config-dmmf": file:.sfs-deps/oxlint-config-dmmf-2.0.0.tgz
+  "@systemfsoftware/oxlint-config-recommended": file:.sfs-deps/oxlint-config-recommended-4.0.0.tgz
+  "@systemfsoftware/oxlint-plugin-cell-architecture": file:.sfs-deps/oxlint-plugin-cell-architecture-5.0.0.tgz
+  "@systemfsoftware/oxlint-plugin-dmmf-workflow": file:.sfs-deps/oxlint-plugin-dmmf-workflow-7.0.0.tgz
+  "@systemfsoftware/oxlint-plugin-effect-platform": file:.sfs-deps/oxlint-plugin-effect-platform-2.0.0.tgz
+  "@systemfsoftware/oxlint-plugin-effect-schema": file:.sfs-deps/oxlint-plugin-effect-schema-6.0.0.tgz
+  "@systemfsoftware/oxlint-plugin-test-discipline": file:.sfs-deps/oxlint-plugin-test-discipline-5.0.0.tgz
+  "@systemfsoftware/stryker-ignorer-effect-schema-declarations": 0.2.0
+  "@systemfsoftware/stryker-js": 15.0.1
+  "@systemfsoftware/stryker-js-typescript-checker": 8.1.1
+  "@systemfsoftware/stryker-js-vitest-runner": 8.0.3
+  "@systemfsoftware/trace-spec": file:.sfs-deps/trace-spec-1.0.1.tgz
+  "@systemfsoftware/trace-taxonomy": file:.sfs-deps/trace-taxonomy-1.0.0.tgz
+  "@systemfsoftware/tsconfig": file:.sfs-deps/tsconfig-2.0.1.tgz
+  "@systemfsoftware/vitest": file:.sfs-deps/vitest-2.0.0.tgz
+  "@types/node": 24.19.1
+  effect: 4.0.1
+  lint-staged: 17.6.0
+  oxlint: 1.82.0
   oxlint-tsgolint: 7.0.2001
-  rimraf: ^6.1.3
-  tsdown: ^0.23.0
-  turbo: ^2.10.12
-  typescript: ^7
-  vitest: ^5
+  turbo: 2.11.7
+  typescript: 7.0.2
+  vitest: 5.0.3
 catalogMode: prefer
+ignoreScripts: true
+minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
-  - "@systemfsoftware/effect-gherkin-spec@6.0.1"
-  - "@systemfsoftware/effect-spec-runtime@0.3.2"
-  - "@systemfsoftware/stryker-js-instrumenter@10.0.1"
-  - "@systemfsoftware/stryker-js-plugin-interface@10.0.1"
-  - "@systemfsoftware/stryker-js-plugin-runtime@6.0.4"
-  - "@systemfsoftware/stryker-js-typescript-checker@8.0.1"
-  - "@systemfsoftware/stryker-js-vitest-runner@8.0.1"
-  - "@systemfsoftware/vitest@0.3.0"
-  - "@systemfsoftware/stryker-js@13.1.0"
-  - "@systemfsoftware/oxlint-config-cell-architecture@3.1.0"
-  - "@systemfsoftware/oxlint-config-dmmf@1.3.0"
-  - "@systemfsoftware/oxlint-config-recommended@3.4.0"
-  - "@systemfsoftware/oxlint-plugin-cell-architecture@4.1.0"
-  - "@systemfsoftware/oxlint-plugin-dmmf-workflow@6.1.0"
-  - "@systemfsoftware/oxlint-plugin-effect-schema@5.7.0"
-  - "@systemfsoftware/oxlint-plugin-test-discipline@4.1.0"
+  - effect
+  - "@effect/*"
+  - effect-agent
+  - "@effect-agent/*"
+verifyDepsBeforeRun: warn
+overrides:
+  "@systemfsoftware/effect-cell-types": "catalog:"
+  "@systemfsoftware/effect-gherkin-spec": "catalog:"
+  "@systemfsoftware/effect-schema-discovery": "catalog:"
+  "@systemfsoftware/effect-schema-law": "catalog:"
+  "@systemfsoftware/effect-schema-recursion-budget": "catalog:"
+  "@systemfsoftware/effect-schema-vite": "catalog:"
+  "@systemfsoftware/effect-sim-kernel": "catalog:"
+  "@systemfsoftware/effect-spec-runtime": "catalog:"
+  "@systemfsoftware/oxlint-config-cell-architecture": "catalog:"
+  "@systemfsoftware/oxlint-config-dmmf": "catalog:"
+  "@systemfsoftware/oxlint-config-recommended": "catalog:"
+  "@systemfsoftware/oxlint-plugin-cell-architecture": "catalog:"
+  "@systemfsoftware/oxlint-plugin-dmmf-workflow": "catalog:"
+  "@systemfsoftware/oxlint-plugin-effect-platform": "catalog:"
+  "@systemfsoftware/oxlint-plugin-effect-schema": "catalog:"
+  "@systemfsoftware/oxlint-plugin-test-discipline": "catalog:"
+  "@systemfsoftware/trace-spec": "catalog:"
+  "@systemfsoftware/trace-taxonomy": "catalog:"
+  "@systemfsoftware/tsconfig": "catalog:"
+  "@systemfsoftware/vitest": "catalog:"
 packages:
-  - apps/*
   - packages/*
+supportedArchitectures:
+  os: [linux, darwin]
+  cpu: [x64, arm64]
+  libc: [glibc]
