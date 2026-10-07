@@ -449,15 +449,24 @@ describe('inspect', (it) => {
         const actor = yield* createEffectActor(counterMachine)
         afterInspect(actor, () => {
           actor.send({ type: 'INCREMENT' })
+          actor.send({ type: 'INCREMENT' })
         })
 
-        return yield* Stream.runCollect(inspect(actor).pipe(Stream.take(1)))
+        return yield* Stream.runCollect(inspect(actor).pipe(Stream.take(2)))
       }),
     )
 
-    yield* expect({ types: events.map((event) => event.type), first: events[0] }).toMatchObject({
-      types: ['@xstate.transition'],
-      first: { event: { type: 'INCREMENT' } },
-    })
+    yield* expect(events.map((event) =>
+      event.type === '@xstate.transition'
+        ? {
+          type: event.type,
+          event: event.event.type,
+          context: 'context' in event.snapshot ? event.snapshot.context : undefined,
+        }
+        : { type: event.type }
+    )).toEqual([
+      { type: '@xstate.transition', event: 'INCREMENT', context: { count: 1 } },
+      { type: '@xstate.transition', event: 'INCREMENT', context: { count: 2 } },
+    ])
   })
 })
