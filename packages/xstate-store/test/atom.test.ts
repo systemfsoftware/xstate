@@ -1,45 +1,56 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it, vi } from '@systemfsoftware/vitest'
+
+import { Effect } from 'effect'
+
 import { createAsyncAtom, createAtom, createAtomConfig, createReducerAtom, createStore } from '../src/index.js'
 
-it('creates an atom', () => {
+const afterRealTime = (milliseconds: number): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, milliseconds)
+  return promise
+}
+
+it('creates an atom', function*({ expect }) {
   const atom = createAtom(42)
 
-  expect(atom.get()).toBe(42)
+  yield* expect(atom.get()).toBe(42)
 })
 
-it('creates an atom from atom config', () => {
+it('creates an atom from atom config', function*({ expect }) {
   const config = createAtomConfig(42)
   const atom = config.createAtom()
   const otherAtom = config.createAtom()
 
   atom.set(100)
 
-  expect(atom.get()).toBe(100)
-  expect(otherAtom.get()).toBe(42)
+  yield* expect({ atom: atom.get(), otherAtom: otherAtom.get() }).toEqual({
+    atom: 100,
+    otherAtom: 42,
+  })
 })
 
-it('creates an atom from atom config and input', () => {
+it('creates an atom from atom config and input', function*({ expect }) {
   const config = createAtomConfig((input: { initialCount: number }) => {
     return input.initialCount
   })
   const atom = config.createAtom({ initialCount: 10 })
 
-  expect(atom.get()).toBe(10)
+  yield* expect(atom.get()).toBe(10)
 })
 
-it('sets the value of the atom using a function', () => {
+it('sets the value of the atom using a function', function*({ expect }) {
   const atom = createAtom(0)
 
   atom.set((prev) => prev + 1)
-
-  expect(atom.get()).toBe(1)
+  const first = atom.get()
 
   atom.set((prev) => prev + 1)
+  const second = atom.get()
 
-  expect(atom.get()).toBe(2)
+  yield* expect({ first, second }).toEqual({ first: 1, second: 2 })
 })
 
-it('does not subscribe a writable atom to reads inside its updater', () => {
+it('does not subscribe a writable atom to reads inside its updater', function*({ expect }) {
   const source = createAtom(1)
   const target = createAtom(10)
   const observer = vi.fn()
@@ -48,12 +59,17 @@ it('does not subscribe a writable atom to reads inside its updater', () => {
   target.set((previous) => previous + source.get())
   source.set(2)
 
-  expect(target.get()).toBe(11)
-  expect(observer.mock.calls).toEqual([[11]])
+  const targetValue = target.get()
+  const observerCalls = observer.mock.calls
   subscription.unsubscribe()
+
+  yield* expect({ target: targetValue, observerCalls }).toEqual({
+    target: 11,
+    observerCalls: [[11]],
+  })
 })
 
-it('drains notifications before rethrowing the first subscriber error', () => {
+it('drains notifications before rethrowing the first subscriber error', function*({ expect }) {
   const source = createAtom(0)
   const unrelated = createAtom(0)
   const error = new Error('subscriber failed')
@@ -64,19 +80,42 @@ it('drains notifications before rethrowing the first subscriber error', () => {
   const second = source.subscribe(observer)
   const other = unrelated.subscribe(vi.fn<(value: number) => void>())
 
-  expect(() => source.set(1)).toThrow(error)
-  expect(observer.mock.calls).toEqual([[1]])
+  const errors: unknown[] = []
+  try {
+    source.set(1)
+  } catch (thrown) {
+    errors.push(thrown)
+  }
+  const callsAfterFirst = [...observer.mock.calls]
+
   unrelated.set(1)
-  expect(observer.mock.calls).toEqual([[1]])
-  expect(() => source.set(2)).toThrow(error)
-  expect(observer.mock.calls).toEqual([[1], [2]])
+  const callsAfterUnrelated = [...observer.mock.calls]
+
+  try {
+    source.set(2)
+  } catch (thrown) {
+    errors.push(thrown)
+  }
+  const callsAfterSecond = [...observer.mock.calls]
 
   first.unsubscribe()
   second.unsubscribe()
   other.unsubscribe()
+
+  yield* expect({
+    errors,
+    callsAfterFirst,
+    callsAfterUnrelated,
+    callsAfterSecond,
+  }).toEqual({
+    errors: [error, error],
+    callsAfterFirst: [[1]],
+    callsAfterUnrelated: [[1]],
+    callsAfterSecond: [[1], [2]],
+  })
 })
 
-it('rethrows undefined and still delivers reentrant notifications', () => {
+it('rethrows undefined and still delivers reentrant notifications', function*({ expect }) {
   const source = createAtom(0)
   const nested = createAtom(0)
   const order: string[] = []
@@ -98,26 +137,34 @@ it('rethrows undefined and still delivers reentrant notifications', () => {
     }),
   ]
   let didThrow = false
+  let thrown: unknown
   try {
     source.set(1)
   } catch (error) {
     didThrow = true
-    expect(error).toBeUndefined()
+    thrown = error
   }
-  expect(didThrow).toBe(true)
-  expect(order).toEqual(['first', 'second', 'nested', 'nested-second'])
+  const notifications = [...order]
   subscriptions.forEach((subscription) => subscription.unsubscribe())
+
+  yield* expect({ didThrow, thrown, notifications }).toEqual({
+    didThrow: true,
+    thrown: undefined,
+    notifications: ['first', 'second', 'nested', 'nested-second'],
+  })
 })
 
-it('can set the value to undefined', () => {
+it('can set the value to undefined', function*({ expect }) {
   const atom = createAtom<number | undefined>(1)
-  expect(atom.get()).toBe(1)
+  const initial = atom.get()
 
   atom.set(undefined)
-  expect(atom.get()).toBe(undefined)
+  const updated = atom.get()
+
+  yield* expect({ initial, updated }).toEqual({ initial: 1, updated: undefined })
 })
 
-it('can subscribe to atom changes', () => {
+it('can subscribe to atom changes', function*({ expect }) {
   const log = vi.fn()
   const atom = createAtom(0)
 
@@ -125,14 +172,12 @@ it('can subscribe to atom changes', () => {
 
   atom.set(1)
 
-  expect(log).toHaveBeenCalledWith(1)
-
   atom.set(2)
 
-  expect(log).toHaveBeenCalledWith(2)
+  yield* expect(log.mock.calls).toEqual([[1], [2]])
 })
 
-it('can unsubscribe from atom changes', () => {
+it('can unsubscribe from atom changes', function*({ expect }) {
   const log = vi.fn()
   const atom = createAtom(0)
 
@@ -140,30 +185,33 @@ it('can unsubscribe from atom changes', () => {
 
   atom.set(1)
 
-  expect(log).toHaveBeenCalledWith(1)
-
   sub.unsubscribe()
 
   atom.set(2)
 
-  expect(log).toHaveBeenCalledTimes(1)
+  yield* expect({ calls: log.mock.calls, value: atom.get() }).toEqual({
+    calls: [[1]],
+    value: 2,
+  })
 })
 
-it('can create a combined atom', () => {
+it('can create a combined atom', function*({ expect }) {
   const nameAtom = createAtom('a')
   const numAtom = createAtom(3)
   const combinedAtom = createAtom(() => nameAtom.get().repeat(numAtom.get()))
 
-  expect(combinedAtom.get()).toBe('aaa')
+  const initial = combinedAtom.get()
 
   nameAtom.set('b')
 
-  expect(combinedAtom.get()).toBe('bbb')
+  const afterName = combinedAtom.get()
 
   numAtom.set(5)
+
+  yield* expect({ initial, afterName }).toEqual({ initial: 'aaa', afterName: 'bbb' })
 })
 
-it('allows updates to a computed dependency during a subscription callback', () => {
+it('allows updates to a computed dependency during a subscription callback', function*({ expect }) {
   const atom = createAtom({ a: 0, b: 0, c: 0 })
 
   const a0 = createAtom(() => atom.get().a)
@@ -178,16 +226,20 @@ it('allows updates to a computed dependency during a subscription callback', () 
   atom.set((ctx) => ({ ...ctx, a: ctx.a + 1 }))
   atom.set((ctx) => ({ ...ctx, a: ctx.a + 1 }))
 
-  expect(a0.get()).toBe(3)
-  expect(a1.get()).toBe(3)
-  expect(b0.get()).toBe(3)
-  expect(b1.get()).toBe(3)
-  expect(atom.get().a).toBe(3)
-  expect(atom.get().b).toBe(3)
-  expect(atom.get().c).toBe(3)
+  const snapshot = atom.get()
+
+  yield* expect({
+    a0: a0.get(),
+    a1: a1.get(),
+    b0: b0.get(),
+    b1: b1.get(),
+    a: snapshot.a,
+    b: snapshot.b,
+    c: snapshot.c,
+  }).toEqual({ a0: 3, a1: 3, b0: 3, b1: 3, a: 3, b: 3, c: 3 })
 })
 
-it('does not loop when updating a computed dependency which affects an atoms own state', () => {
+it('does not loop when updating a computed dependency which affects an atoms own state', function*({ expect }) {
   const count = createAtom(0)
   const a = createAtom(() => count.get())
 
@@ -195,11 +247,10 @@ it('does not loop when updating a computed dependency which affects an atoms own
 
   count.set((val) => val + 1)
 
-  expect(a.get()).toBe(2)
-  expect(count.get()).toBe(2)
+  yield* expect({ a: a.get(), count: count.get() }).toEqual({ a: 2, count: 2 })
 })
 
-it('works with a mix of atoms and stores', () => {
+it('works with a mix of atoms and stores', function*({ expect }) {
   const countAtom = createAtom(0)
   const store = createStore({
     context: { name: 'David' },
@@ -218,21 +269,30 @@ it('works with a mix of atoms and stores', () => {
 
   combinedAtom.subscribe(log)
 
-  expect(combinedAtom.get()).toBe('David 0')
+  const initial = combinedAtom.get()
 
   store.send({ type: 'nameUpdated', name: 'John' })
 
-  expect(combinedAtom.get()).toBe('John 0')
+  const afterSend = combinedAtom.get()
 
   countAtom.set(1)
 
-  expect(log).toHaveBeenCalledTimes(2)
-  expect(log).toHaveBeenCalledWith('John 1')
-  expect(countAtom.get()).toBe(1)
-  expect(combinedAtom.get()).toBe('John 1')
+  yield* expect({
+    initial,
+    afterSend,
+    count: countAtom.get(),
+    combined: combinedAtom.get(),
+    logCalls: log.mock.calls,
+  }).toEqual({
+    initial: 'David 0',
+    afterSend: 'John 0',
+    count: 1,
+    combined: 'John 1',
+    logCalls: [['John 0'], ['John 1']],
+  })
 })
 
-it('works with stores', () => {
+it('works with stores', function*({ expect }) {
   const nameStore = createStore({
     context: { name: 'David' },
     on: {
@@ -253,18 +313,24 @@ it('works with stores', () => {
     () => nameStore.get().context.name + ` ${countStore.get().context.count}`,
   )
 
-  expect(combinedAtom.get()).toBe('David 0')
+  const initial = combinedAtom.get()
 
   nameStore.trigger.nameUpdated({ name: 'John' })
 
-  expect(combinedAtom.get()).toBe('John 0')
+  const afterName = combinedAtom.get()
 
   countStore.trigger.increment()
 
-  expect(combinedAtom.get()).toBe('John 1')
+  const afterCount = combinedAtom.get()
+
+  yield* expect({ initial, afterName, afterCount }).toEqual({
+    initial: 'David 0',
+    afterName: 'John 0',
+    afterCount: 'John 1',
+  })
 })
 
-it('works with selectors', () => {
+it('works with selectors', function*({ expect }) {
   const store = createStore({
     context: { name: 'David', count: 0 },
     on: {
@@ -276,14 +342,16 @@ it('works with selectors', () => {
 
   const combinedAtom = createAtom(() => 2 * count.get())
 
-  expect(combinedAtom.get()).toBe(0)
+  const initial = combinedAtom.get()
 
   store.trigger.increment()
 
-  expect(combinedAtom.get()).toBe(2)
+  const after = combinedAtom.get()
+
+  yield* expect({ initial, after }).toEqual({ initial: 0, after: 2 })
 })
 
-it('allows sending events to the store during a selector subscription', () => {
+it('allows sending events to the store during a selector subscription', function*({ expect }) {
   const store = createStore({
     context: { a: 0, b: 0 },
     on: {
@@ -299,11 +367,15 @@ it('allows sending events to the store during a selector subscription', () => {
   store.trigger.a()
   store.trigger.a()
 
-  expect(store.get().context.a).toBe(3)
-  expect(store.get().context.b).toBe(3)
+  const snapshot = store.get()
+
+  yield* expect({
+    a: snapshot.context.a,
+    b: snapshot.context.b,
+  }).toEqual({ a: 3, b: 3 })
 })
 
-it('works with selectors (get API)', () => {
+it('works with selectors (get API)', function*({ expect }) {
   const store = createStore({
     context: { name: 'David', count: 0 },
     on: {
@@ -315,27 +387,31 @@ it('works with selectors (get API)', () => {
 
   const combinedAtom = createAtom(() => 2 * count.get())
 
-  expect(combinedAtom.get()).toBe(0)
+  const initial = combinedAtom.get()
 
   store.trigger.increment()
 
-  expect(combinedAtom.get()).toBe(2)
+  const after = combinedAtom.get()
+
+  yield* expect({ initial, after }).toEqual({ initial: 0, after: 2 })
 })
 
-it('combined atoms should be read-only', () => {
+it('combined atoms should be read-only', function*({ expect }) {
   const atom1 = createAtom(0)
   const atom2 = createAtom(1)
   const combinedAtom = createAtom(() => atom1.get() + atom2.get())
 
-  expect(combinedAtom.get()).toBe(1)
+  const before = combinedAtom.get()
 
   // @ts-expect-error
   combinedAtom.set?.(2)
 
-  expect(combinedAtom.get()).toBe(1)
+  const after = combinedAtom.get()
+
+  yield* expect({ before, after }).toEqual({ before: 1, after: 1 })
 })
 
-it('combined atom getters accept only prev as an argument', () => {
+it('combined atom getters accept only prev as an argument', function*({ expect }) {
   const atom = createAtom(1)
 
   createAtom<number>(
@@ -343,28 +419,33 @@ it('combined atom getters accept only prev as an argument', () => {
     (_read, _prev) => atom.get(),
   )
 
-  // prev is valid
-  createAtom<number>((prev) => atom.get() + (prev ?? 0))
+  const combined = createAtom<number>((prev) => atom.get() + (prev ?? 0))
+
+  yield* expect(combined.get()).toBe(1)
 })
 
-it('conditionally read atoms are properly read in combined atoms', () => {
+it('conditionally read atoms are properly read in combined atoms', function*({ expect }) {
   const atom1 = createAtom(true)
   const atom2 = createAtom(false)
   const activatorAtom = createAtom<'inactive' | 'active'>('inactive')
   const combinedAtom = createAtom(() => activatorAtom.get() === 'active' ? atom1.get() : atom2.get())
 
-  expect(combinedAtom.get()).toBe(false)
+  const initial = combinedAtom.get()
 
   activatorAtom.set('active')
-
-  expect(combinedAtom.get()).toBe(true)
+  const active = combinedAtom.get()
 
   activatorAtom.set('inactive')
+  const inactive = combinedAtom.get()
 
-  expect(combinedAtom.get()).toBe(false)
+  yield* expect({ initial, active, inactive }).toEqual({
+    initial: false,
+    active: true,
+    inactive: false,
+  })
 })
 
-it('conditionally read atoms are properly unsubscribed when no longer needed', () => {
+it('conditionally read atoms are properly unsubscribed when no longer needed', function*({ expect }) {
   const atom1 = createAtom(true)
   const activatorAtom = createAtom<'inactive' | 'active'>('active')
   const combinedAtom = createAtom(() => activatorAtom.get() === 'active' ? atom1.get() : {})
@@ -375,43 +456,42 @@ it('conditionally read atoms are properly unsubscribed when no longer needed', (
     vals.push(val)
   })
 
-  expect(vals).toEqual([])
+  const snapshots: unknown[][] = [[...vals]]
 
   atom1.set(false)
-
-  expect(vals).toEqual([false])
+  snapshots.push([...vals])
 
   atom1.set(true)
-
-  expect(vals).toEqual([false, true])
+  snapshots.push([...vals])
 
   activatorAtom.set('inactive')
-
-  // From here, atom1 should no longer be subscribed to
-  // Without the unsubscribe logic, this would be [false, true, {}, {}, ...]
-
-  expect(vals).toEqual([false, true, {}])
+  snapshots.push([...vals])
 
   atom1.set(false)
-
-  expect(vals).toEqual([false, true, {}])
+  snapshots.push([...vals])
 
   atom1.set(true)
-
-  expect(vals).toEqual([false, true, {}])
-
-  // Subscribing again should cause atom1 to be subscribed again
+  snapshots.push([...vals])
 
   activatorAtom.set('active')
-
-  expect(vals).toEqual([false, true, {}, true])
+  snapshots.push([...vals])
 
   atom1.set(false)
+  snapshots.push([...vals])
 
-  expect(vals).toEqual([false, true, {}, true, false])
+  yield* expect(snapshots).toEqual([
+    [],
+    [false],
+    [false, true],
+    [false, true, {}],
+    [false, true, {}],
+    [false, true, {}],
+    [false, true, {}, true],
+    [false, true, {}, true, false],
+  ])
 })
 
-it('handles diamond dependencies with single update', () => {
+it('handles diamond dependencies with single update', function*({ expect }) {
   const log = vi.fn()
   const sourceAtom = createAtom(1)
 
@@ -424,69 +504,57 @@ it('handles diamond dependencies with single update', () => {
     log(x)
   })
 
-  // Initial value: (1 * 2) + (1 * 3) = 5
-  expect(bottomAtom.get()).toBe(5)
-  expect(log).toHaveBeenCalledTimes(0)
+  const initial = bottomAtom.get()
+  const logCallsBefore = [...log.mock.calls]
 
-  // Update source: (2 * 2) + (2 * 3) = 10
   sourceAtom.set(2)
 
   const result = bottomAtom.get()
 
-  expect(result).toBe(10)
-
-  // Without proper diamond problem handling, log might be called multiple times
-  // as the update propagates through both paths
-  expect(log).toHaveBeenCalledTimes(1)
-  expect(log).toHaveBeenCalledWith(10)
+  yield* expect({ initial, logCallsBefore, result, logCalls: log.mock.calls })
+    .toEqual({ initial: 5, logCallsBefore: [], result: 10, logCalls: [[10]] })
 })
 
-it('handles complex diamond dependencies correctly', () => {
+it('handles complex diamond dependencies correctly', function*({ expect }) {
   const log = vi.fn()
 
-  // Base atom D
   const atomD = createAtom(1)
 
-  // Level 1 - C depends on D
   const atomC = createAtom(() => atomD.get() * 2)
 
-  // Level 2 - B depends on C and D
   const atomB = createAtom(() => atomC.get() + atomD.get())
 
-  // Level 3 - A depends on B, C, and D
   const atomA = createAtom(() => atomB.get() + atomC.get() + atomD.get())
 
   atomA.subscribe(log)
 
-  // Initial computation:
-  // D = 1
-  // C = D * 2 = 2
-  // B = C + D = 3
-  // A = B + C + D = 6
-  expect(atomA.get()).toBe(6)
-  expect(log).toHaveBeenCalledTimes(0)
+  const initial = atomA.get()
+  const logCallsBefore = [...log.mock.calls]
 
-  // Update base atom D
   atomD.set(2)
 
-  // After update:
-  // D = 2
-  // C = D * 2 = 4
-  // B = C + D = 6
-  // A = B + C + D = 12
-  expect(atomA.get()).toBe(12)
+  const afterA = atomA.get()
 
-  // Should only trigger one update despite multiple dependency paths
-  expect(log).toHaveBeenCalledTimes(1)
-  expect(log).toHaveBeenCalledWith(12)
-
-  // Verify intermediate values
-  expect(atomB.get()).toBe(6)
-  expect(atomC.get()).toBe(4)
-  expect(atomD.get()).toBe(2)
+  yield* expect({
+    initial,
+    logCallsBefore,
+    afterA,
+    atomB: atomB.get(),
+    atomC: atomC.get(),
+    atomD: atomD.get(),
+    logCalls: log.mock.calls,
+  }).toEqual({
+    initial: 6,
+    logCallsBefore: [],
+    afterA: 12,
+    atomB: 6,
+    atomC: 4,
+    atomD: 2,
+    logCalls: [[12]],
+  })
 })
 
-it('supports custom equality functions through compare option', () => {
+it('supports custom equality functions through compare option', function*({ expect }) {
   const log = vi.fn()
 
   const coordAtom = createAtom(
@@ -498,52 +566,43 @@ it('supports custom equality functions through compare option', () => {
 
   coordAtom.subscribe(log)
 
-  // Initial value
-  expect(coordAtom.get()).toEqual({ x: 0, y: 0 })
-  expect(log).not.toHaveBeenCalled()
+  const initial = coordAtom.get()
 
-  // Setting same values shouldn't trigger update
   coordAtom.set({ x: 0, y: 0 })
-  expect(log).not.toHaveBeenCalled()
 
-  // Different x value should trigger update
   coordAtom.set({ x: 1, y: 0 })
-  expect(log).toHaveBeenCalledTimes(1)
-  expect(log).toHaveBeenCalledWith({ x: 1, y: 0 })
 
-  // Different y value should trigger update
   coordAtom.set({ x: 1, y: 2 })
-  expect(log).toHaveBeenCalledTimes(2)
-  expect(log).toHaveBeenLastCalledWith({ x: 1, y: 2 })
 
-  // Setting same values should not trigger update
   coordAtom.set({ x: 1, y: 2 })
-  expect(log).toHaveBeenCalledTimes(2)
+
+  yield* expect({ initial, logCalls: log.mock.calls }).toEqual({
+    initial: { x: 0, y: 0 },
+    logCalls: [[{ x: 1, y: 0 }], [{ x: 1, y: 2 }]],
+  })
 })
 
-it('uses Object.is as default equality function', () => {
+it('uses Object.is as default equality function', function*({ expect }) {
   const log = vi.fn()
   const objAtom = createAtom({ value: 0 })
 
   objAtom.subscribe(log)
 
-  // Initial value
-  expect(objAtom.get()).toEqual({ value: 0 })
-  expect(log).not.toHaveBeenCalled()
+  const initial = objAtom.get()
 
-  // Setting with same shape but new object should trigger update
   objAtom.set({ value: 0 })
-  expect(log).toHaveBeenCalledTimes(1)
 
-  // Setting with same object reference shouldn't trigger update
   const obj = { value: 1 }
   objAtom.set(obj)
-  expect(log).toHaveBeenCalledTimes(2)
   objAtom.set(obj)
-  expect(log).toHaveBeenCalledTimes(2)
+
+  yield* expect({ initial, logCalls: log.mock.calls }).toEqual({
+    initial: { value: 0 },
+    logCalls: [[{ value: 0 }], [obj]],
+  })
 })
 
-it('Atom-specific properties should not be exposed', () => {
+it('Atom-specific properties should not be exposed', function*({ expect }) {
   const atom = createAtom(0)
 
   // @ts-expect-error
@@ -591,31 +650,43 @@ it('Atom-specific properties should not be exposed', () => {
   store._deps
   // @ts-expect-error
   store._depsTail
+
+  yield* expect({
+    atom: atom.get(),
+    computed: computed.get(),
+    context: store.getSnapshot().context,
+  }).toEqual({ atom: 0, computed: 0, context: {} })
 })
 
-it('computed atoms can use their previous value in the getter', () => {
+it('computed atoms can use their previous value in the getter', function*({ expect }) {
   const count = createAtom(1)
   const accumulated = createAtom<number>((prev) => count.get() + (prev ?? 0))
 
-  expect(accumulated.get()).toBe(1) // 0 + 1 = 1
+  const initial = accumulated.get()
 
   count.set(2)
-  expect(accumulated.get()).toBe(3) // 1 + 2 = 3
+  const second = accumulated.get()
 
   count.set(3)
-  expect(accumulated.get()).toBe(6) // 3 + 3 = 6
+  const third = accumulated.get()
+
+  yield* expect({ initial, second, third }).toEqual({
+    initial: 1,
+    second: 3,
+    third: 6,
+  })
 })
 
 describe('reducer atoms', () => {
-  it('updates from current state and sent event', () => {
+  it('updates from current state and sent event', function*({ expect }) {
     const counter = createReducerAtom(0, (state, event: number) => Math.min(10, state + event))
 
     counter.send(13)
 
-    expect(counter.get()).toBe(10)
+    yield* expect(counter.get()).toBe(10)
   })
 
-  it('can receive arbitrary event values', () => {
+  it('can receive arbitrary event values', function*({ expect }) {
     const value = createReducerAtom(
       '',
       (state, event: string | number) => state + event,
@@ -624,10 +695,10 @@ describe('reducer atoms', () => {
     value.send('x')
     value.send(1)
 
-    expect(value.get()).toBe('x1')
+    yield* expect(value.get()).toBe('x1')
   })
 
-  it('notifies subscribers when the reducer changes state', () => {
+  it('notifies subscribers when the reducer changes state', function*({ expect }) {
     const counter = createReducerAtom(
       0,
       (state, event: number) => state + event,
@@ -639,26 +710,29 @@ describe('reducer atoms', () => {
     counter.send(0)
     counter.send(2)
 
-    expect(listener).toHaveBeenCalledTimes(2)
-    expect(listener).toHaveBeenNthCalledWith(1, 1)
-    expect(listener).toHaveBeenNthCalledWith(2, 3)
+    yield* expect({ calls: listener.mock.calls, value: counter.get() }).toEqual({
+      calls: [[1], [3]],
+      value: 3,
+    })
   })
 
-  it('can be used by derived atoms', () => {
+  it('can be used by derived atoms', function*({ expect }) {
     const counter = createReducerAtom(
       0,
       (state, event: number) => state + event,
     )
     const doubled = createAtom(() => counter.get() * 2)
 
-    expect(doubled.get()).toBe(0)
+    const initial = doubled.get()
 
     counter.send(2)
 
-    expect(doubled.get()).toBe(4)
+    const after = doubled.get()
+
+    yield* expect({ initial, after }).toEqual({ initial: 0, after: 4 })
   })
 
-  it('does not track atom reads inside the reducer', () => {
+  it('does not track atom reads inside the reducer', function*({ expect }) {
     const multiplier = createAtom(2)
     const counter = createReducerAtom(
       1,
@@ -670,15 +744,15 @@ describe('reducer atoms', () => {
     counter.send(3)
     multiplier.set(10)
 
-    expect(counter.get()).toBe(7)
-    expect(listener).toHaveBeenCalledTimes(1)
+    yield* expect({ counter: counter.get(), listenerCalls: listener.mock.calls })
+      .toEqual({ counter: 7, listenerCalls: [[7]] })
   })
 })
 
 describe('async atoms', () => {
   it.each(['done', 'error'] as const)(
     'should recompute after a dependency changes following %s settlement',
-    async (status) => {
+    function*(status, { expect }) {
       const count = createAtom(1)
       const error = new Error('initial failure')
       const atom = createAsyncAtom(async () => {
@@ -695,41 +769,81 @@ describe('async atoms', () => {
       const observer = vi.fn()
       const subscription = selected.subscribe(observer)
 
-      await Promise.resolve()
-      expect(atom.get()).toEqual(
-        status === 'done' ? { status, data: 2 } : { status, error },
-      )
+      yield* Effect.promise(() => Promise.resolve())
+      const afterFirstSettlement = atom.get()
       observer.mockClear()
 
       count.set(2)
-      expect(atom.get()).toEqual({ status: 'pending' })
-      await Promise.resolve()
+      const afterCountSet = atom.get()
 
-      expect(atom.get()).toEqual({ status: 'done', data: 4 })
-      expect(observer.mock.calls).toEqual([['pending'], [4]])
+      yield* Effect.promise(() => Promise.resolve())
+
+      const afterSecondSettlement = atom.get()
+      const observerCalls = observer.mock.calls
       subscription.unsubscribe()
+
+      yield* expect({
+        afterFirstSettlement,
+        afterCountSet,
+        afterSecondSettlement,
+        observerCalls,
+      }).toEqual({
+        afterFirstSettlement: status === 'done' ? { status, data: 2 } : { status, error },
+        afterCountSet: { status: 'pending' },
+        afterSecondSettlement: { status: 'done', data: 4 },
+        observerCalls: [['pending'], [4]],
+      })
     },
   )
 
-  it('should recompute lazily after a settled dependency changes', async () => {
+  it('should recompute lazily after a settled dependency changes', function*({ expect }) {
     const count = createAtom(1)
     const getter = vi.fn(async () => count.get() * 2)
     const atom = createAsyncAtom(getter)
 
-    expect(getter).not.toHaveBeenCalled()
-    expect(atom.get()).toEqual({ status: 'pending' })
-    await Promise.resolve()
-    expect(atom.get()).toEqual({ status: 'done', data: 2 })
+    const getterCallsBeforeFirstRead = [...getter.mock.calls]
+    const firstRead = atom.get()
+
+    yield* Effect.promise(() => Promise.resolve())
+    const afterFirstSettlement = atom.get()
+    const getterCallsAfterFirstSettlement = [...getter.mock.calls]
 
     count.set(2)
-    expect(getter).toHaveBeenCalledTimes(1)
-    expect(atom.get()).toEqual({ status: 'pending' })
-    await Promise.resolve()
-    expect(atom.get()).toEqual({ status: 'done', data: 4 })
-    expect(getter).toHaveBeenCalledTimes(2)
+    const afterCountSet = atom.get()
+    const getterCallsAfterCountSet = [...getter.mock.calls]
+
+    yield* Effect.promise(() => Promise.resolve())
+    const afterSecondSettlement = atom.get()
+    const getterCallsAtEnd = [...getter.mock.calls]
+
+    yield* expect({
+      getterCallsBeforeFirstRead,
+      firstRead,
+      afterFirstSettlement,
+      getterCallsAfterFirstSettlement,
+      afterCountSet,
+      getterCallsAfterCountSet,
+      afterSecondSettlement,
+      getterCallsAtEnd,
+    }).toEqual({
+      getterCallsBeforeFirstRead: [],
+      firstRead: { status: 'pending' },
+      afterFirstSettlement: { status: 'done', data: 2 },
+      getterCallsAfterFirstSettlement: [[expect.objectContaining({ signal: expect.any(AbortSignal) })]],
+      afterCountSet: { status: 'pending' },
+      getterCallsAfterCountSet: [
+        [expect.objectContaining({ signal: expect.any(AbortSignal) })],
+        [expect.objectContaining({ signal: expect.any(AbortSignal) })],
+      ],
+      afterSecondSettlement: { status: 'done', data: 4 },
+      getterCallsAtEnd: [
+        [expect.objectContaining({ signal: expect.any(AbortSignal) })],
+        [expect.objectContaining({ signal: expect.any(AbortSignal) })],
+      ],
+    })
   })
 
-  it('should retain dependencies when the async comparator suppresses a result', async () => {
+  it('should retain dependencies when the async comparator suppresses a result', function*({ expect }) {
     const count = createAtom(1)
     const atom = createAsyncAtom(async () => count.get() % 2, {
       compare: (previous, next) =>
@@ -741,50 +855,63 @@ describe('async atoms', () => {
     const observer = vi.fn()
     const subscription = atom.subscribe(observer)
 
-    await Promise.resolve()
-    expect(atom.get()).toEqual({ status: 'done', data: 1 })
+    yield* Effect.promise(() => Promise.resolve())
+    const afterFirstSettlement = atom.get()
     observer.mockClear()
 
     count.set(3)
-    await Promise.resolve()
-    expect(observer).not.toHaveBeenCalled()
+    yield* Effect.promise(() => Promise.resolve())
+    const observerCallsAfterSuppressed = [...observer.mock.calls]
 
     count.set(4)
-    await Promise.resolve()
-    expect(atom.get()).toEqual({ status: 'done', data: 0 })
-    expect(observer).toHaveBeenCalledExactlyOnceWith({
-      status: 'done',
-      data: 0,
-    })
+    yield* Effect.promise(() => Promise.resolve())
+    const finalState = atom.get()
+    const observerCallsAtEnd = [...observer.mock.calls]
     subscription.unsubscribe()
+
+    yield* expect({
+      afterFirstSettlement,
+      observerCallsAfterSuppressed,
+      finalState,
+      observerCallsAtEnd,
+    }).toEqual({
+      afterFirstSettlement: { status: 'done', data: 1 },
+      observerCallsAfterSuppressed: [],
+      finalState: { status: 'done', data: 0 },
+      observerCallsAtEnd: [[{ status: 'done', data: 0 }]],
+    })
   })
 
-  it('async atoms should work (fulfilled)', async () => {
+  it.live('async atoms should work (fulfilled)', function*({ expect }) {
     const atom = createAsyncAtom(async () => 'hello')
 
-    expect(atom.get()).toEqual({ status: 'pending' })
+    const initial = atom.get()
 
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    yield* Effect.promise(() => afterRealTime(0))
 
-    expect(atom.get()).toEqual({ status: 'done', data: 'hello' })
+    yield* expect({ initial, settled: atom.get() }).toEqual({
+      initial: { status: 'pending' },
+      settled: { status: 'done', data: 'hello' },
+    })
   })
 
-  it('async atoms should work (rejected)', async () => {
+  it.live('async atoms should work (rejected)', function*({ expect }) {
+    const error = new Error('test')
     const atom = createAsyncAtom(async () => {
-      throw new Error('test')
+      throw error
     })
 
-    expect(atom.get()).toEqual({ status: 'pending' })
+    const initial = atom.get()
 
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    yield* Effect.promise(() => afterRealTime(0))
 
-    expect(atom.get()).toEqual({
-      status: 'error',
-      error: expect.any(Error),
+    yield* expect({ initial, settled: atom.get() }).toEqual({
+      initial: { status: 'pending' },
+      settled: { status: 'error', error },
     })
   })
 
-  it('should only call getValue once for multiple concurrent reads', async () => {
+  it.live('should only call getValue once for multiple concurrent reads', function*({ expect }) {
     let getValueCallCount = 0
     const RESOLVED_VALUE = 'test-value'
 
@@ -793,87 +920,102 @@ describe('async atoms', () => {
       return RESOLVED_VALUE
     })
 
-    // Initial reads should show pending status
-    expect(myAsyncAtom.get()).toEqual({ status: 'pending' })
-    expect(myAsyncAtom.get()).toEqual({ status: 'pending' })
+    const firstRead = myAsyncAtom.get()
+    const secondRead = myAsyncAtom.get()
 
-    // Let the promise resolve
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    yield* Effect.promise(() => afterRealTime(0))
 
-    // Both reads should now show the resolved value
-    expect(myAsyncAtom.get()).toEqual({
-      status: 'done',
-      data: RESOLVED_VALUE,
+    const thirdRead = myAsyncAtom.get()
+    const fourthRead = myAsyncAtom.get()
+
+    const callCountAfterResolution = getValueCallCount
+
+    const fifthRead = myAsyncAtom.get()
+    const callCountAtEnd = getValueCallCount
+
+    yield* expect({
+      firstRead,
+      secondRead,
+      thirdRead,
+      fourthRead,
+      callCountAfterResolution,
+      fifthRead,
+      callCountAtEnd,
+    }).toEqual({
+      firstRead: { status: 'pending' },
+      secondRead: { status: 'pending' },
+      thirdRead: { status: 'done', data: RESOLVED_VALUE },
+      fourthRead: { status: 'done', data: RESOLVED_VALUE },
+      callCountAfterResolution: 1,
+      fifthRead: { status: 'done', data: RESOLVED_VALUE },
+      callCountAtEnd: 1,
     })
-    expect(myAsyncAtom.get()).toEqual({
-      status: 'done',
-      data: RESOLVED_VALUE,
-    })
-
-    // getValue should have only been called once
-    expect(getValueCallCount).toBe(1)
-
-    // Additional reads after resolution should still use cached value
-    expect(myAsyncAtom.get()).toEqual({
-      status: 'done',
-      data: RESOLVED_VALUE,
-    })
-    expect(getValueCallCount).toBe(1)
   })
 
-  it('should only call getValue once even when error occurs', async () => {
+  it.live('should only call getValue once even when error occurs', function*({ expect }) {
     let getValueCallCount = 0
     const ERROR_MESSAGE = 'test error'
+    const error = new Error(ERROR_MESSAGE)
 
     const myAsyncAtom = createAsyncAtom(async () => {
       getValueCallCount++
-      throw new Error(ERROR_MESSAGE)
+      throw error
     })
 
-    // Initial reads should show pending status
-    expect(myAsyncAtom.get()).toEqual({ status: 'pending' })
-    expect(myAsyncAtom.get()).toEqual({ status: 'pending' })
+    const firstRead = myAsyncAtom.get()
+    const secondRead = myAsyncAtom.get()
 
-    // Let the promise reject
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    yield* Effect.promise(() => afterRealTime(0))
 
-    // Both reads should now show the error
-    expect(myAsyncAtom.get()).toEqual({
-      status: 'error',
-      error: expect.any(Error),
+    const thirdRead = myAsyncAtom.get()
+    const fourthRead = myAsyncAtom.get()
+
+    const callCountAfterRejection = getValueCallCount
+
+    const fifthRead = myAsyncAtom.get()
+    const callCountAtEnd = getValueCallCount
+
+    yield* expect({
+      firstRead,
+      secondRead,
+      thirdRead,
+      fourthRead,
+      callCountAfterRejection,
+      fifthRead,
+      callCountAtEnd,
+    }).toEqual({
+      firstRead: { status: 'pending' },
+      secondRead: { status: 'pending' },
+      thirdRead: { status: 'error', error },
+      fourthRead: { status: 'error', error },
+      callCountAfterRejection: 1,
+      fifthRead: { status: 'error', error },
+      callCountAtEnd: 1,
     })
-    expect(myAsyncAtom.get()).toEqual({
-      status: 'error',
-      error: expect.any(Error),
-    })
-
-    // getValue should have only been called once
-    expect(getValueCallCount).toBe(1)
-
-    // Additional reads after rejection should still use cached error
-    expect(myAsyncAtom.get()).toEqual({
-      status: 'error',
-      error: expect.any(Error),
-    })
-    expect(getValueCallCount).toBe(1)
   })
 
-  it('async atoms should not have a .set() method', () => {
+  it('async atoms should not have a .set() method', function*({ expect }) {
     const atom = createAsyncAtom(async () => 'hello')
 
-    expect('set' in atom).toBe(false)
+    yield* expect({ hasSet: 'set' in atom }).toEqual({ hasSet: false })
   })
 
-  it('should pass an abort signal to async atoms', () => {
+  it('should pass an abort signal to async atoms', function*({ expect }) {
+    const signals: AbortSignal[] = []
     const atom = createAsyncAtom(async ({ signal }) => {
-      expect(signal).toBeInstanceOf(AbortSignal)
+      signals.push(signal)
       return 'hello'
     })
 
-    expect(atom.get()).toEqual({ status: 'pending' })
+    const initial = atom.get()
+
+    yield* expect({
+      initial,
+      signalIsAbortSignal: signals[0] instanceof AbortSignal,
+    }).toEqual({ initial: { status: 'pending' }, signalIsAbortSignal: true })
   })
 
-  it('should abort and ignore stale async atom results', async () => {
+  it.live('should abort and ignore stale async atom results', function*({ expect }) {
     const count = createAtom(1)
     const signals: AbortSignal[] = []
     const resolvers: Array<(value: number) => void> = []
@@ -881,49 +1023,63 @@ describe('async atoms', () => {
       const currentCount = count.get()
       signals.push(signal)
 
-      return new Promise<number>((resolve) => {
-        resolvers.push(resolve)
-      }).then(() => currentCount)
+      const { promise, resolve } = Promise.withResolvers<number>()
+      resolvers.push(resolve)
+      return promise.then(() => currentCount)
     })
 
-    expect(atom.get()).toEqual({ status: 'pending' })
+    const firstRead = atom.get()
 
     count.set(2)
-    expect(atom.get()).toEqual({ status: 'pending' })
+    const secondRead = atom.get()
     const firstSignal = signals[0]
     if (firstSignal === undefined) {
       throw new Error('expected a first signal')
     }
-    expect(firstSignal.aborted).toBe(true)
+    const firstSignalAborted = firstSignal.aborted
 
     const resolveFirst = resolvers[0]
     if (resolveFirst === undefined) {
       throw new Error('expected a first resolver')
     }
     resolveFirst(1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(atom.get()).toEqual({ status: 'pending' })
+    yield* Effect.promise(() => afterRealTime(0))
+    const afterFirstResolution = atom.get()
 
     const resolveSecond = resolvers[1]
     if (resolveSecond === undefined) {
       throw new Error('expected a second resolver')
     }
     resolveSecond(2)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(atom.get()).toEqual({ status: 'done', data: 2 })
+    yield* Effect.promise(() => afterRealTime(0))
+    const afterSecondResolution = atom.get()
+
+    yield* expect({
+      firstRead,
+      secondRead,
+      firstSignalAborted,
+      afterFirstResolution,
+      afterSecondResolution,
+    }).toEqual({
+      firstRead: { status: 'pending' },
+      secondRead: { status: 'pending' },
+      firstSignalAborted: true,
+      afterFirstResolution: { status: 'pending' },
+      afterSecondResolution: { status: 'done', data: 2 },
+    })
   })
 
-  it('should ignore stale async atom errors', async () => {
+  it.live('should ignore stale async atom errors', function*({ expect }) {
     const count = createAtom(1)
     const rejectors: Array<(error: unknown) => void> = []
     const resolvers: Array<(value: number) => void> = []
     const atom = createAsyncAtom(({ signal }) => {
       const currentCount = count.get()
 
-      return new Promise<number>((resolve, reject) => {
-        resolvers.push(resolve)
-        rejectors.push(reject)
-      }).then(() => {
+      const { promise, resolve, reject } = Promise.withResolvers<number>()
+      resolvers.push(resolve)
+      rejectors.push(reject)
+      return promise.then(() => {
         if (signal.aborted) {
           throw new Error('aborted')
         }
@@ -931,91 +1087,122 @@ describe('async atoms', () => {
       })
     })
 
-    expect(atom.get()).toEqual({ status: 'pending' })
+    const initial = atom.get()
 
     count.set(2)
-    expect(atom.get()).toEqual({ status: 'pending' })
+    const afterCountSet = atom.get()
 
     const rejectFirst = rejectors[0]
     if (rejectFirst === undefined) {
       throw new Error('expected a first rejector')
     }
     rejectFirst(new Error('stale'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(atom.get()).toEqual({ status: 'pending' })
+    yield* Effect.promise(() => afterRealTime(0))
+    const afterRejection = atom.get()
 
     const resolveSecond = resolvers[1]
     if (resolveSecond === undefined) {
       throw new Error('expected a second resolver')
     }
     resolveSecond(2)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(atom.get()).toEqual({ status: 'done', data: 2 })
+    yield* Effect.promise(() => afterRealTime(0))
+    const afterSecondResolution = atom.get()
+
+    yield* expect({
+      initial,
+      afterCountSet,
+      afterRejection,
+      afterSecondResolution,
+    }).toEqual({
+      initial: { status: 'pending' },
+      afterCountSet: { status: 'pending' },
+      afterRejection: { status: 'pending' },
+      afterSecondResolution: { status: 'done', data: 2 },
+    })
   })
 
-  it('should notify subscribers when async operation completes successfully', async () => {
+  it.live('should notify subscribers when async operation completes successfully', function*({ expect }) {
     const log = vi.fn()
     const atom = createAsyncAtom(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await afterRealTime(10)
       return 'test-value'
     })
 
     atom.subscribe(log)
 
-    expect(atom.get()).toEqual({ status: 'pending' })
-    expect(log).not.toHaveBeenCalled()
+    const initial = atom.get()
+    const callsBeforeSettlement = [...log.mock.calls]
 
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    yield* Effect.promise(() => afterRealTime(20))
 
-    expect(log).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith({ status: 'done', data: 'test-value' })
-    expect(atom.get()).toEqual({ status: 'done', data: 'test-value' })
+    const callsAtEnd = [...log.mock.calls]
+    const settled = atom.get()
+
+    yield* expect({ initial, callsBeforeSettlement, callsAtEnd, settled })
+      .toEqual({
+        initial: { status: 'pending' },
+        callsBeforeSettlement: [],
+        callsAtEnd: [[{ status: 'done', data: 'test-value' }]],
+        settled: { status: 'done', data: 'test-value' },
+      })
   })
 
-  it('should notify subscribers when async operation fails', async () => {
+  it.live('should notify subscribers when async operation fails', function*({ expect }) {
     const log = vi.fn()
     const error = new Error('test error')
     const atom = createAsyncAtom(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await afterRealTime(10)
       throw error
     })
 
     atom.subscribe(log)
 
-    expect(atom.get()).toEqual({ status: 'pending' })
-    expect(log).not.toHaveBeenCalled()
+    const initial = atom.get()
+    const callsBeforeSettlement = [...log.mock.calls]
 
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    yield* Effect.promise(() => afterRealTime(20))
 
-    expect(log).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith({ status: 'error', error })
-    expect(atom.get()).toEqual({ status: 'error', error })
+    const callsAtEnd = [...log.mock.calls]
+    const settled = atom.get()
+
+    yield* expect({ initial, callsBeforeSettlement, callsAtEnd, settled })
+      .toEqual({
+        initial: { status: 'pending' },
+        callsBeforeSettlement: [],
+        callsAtEnd: [[{ status: 'error', error }]],
+        settled: { status: 'error', error },
+      })
   })
 
-  it('should notify multiple subscribers when async operation completes', async () => {
+  it.live('should notify multiple subscribers when async operation completes', function*({ expect }) {
     const log1 = vi.fn()
     const log2 = vi.fn()
     const atom = createAsyncAtom(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await afterRealTime(10)
       return 'multi-test'
     })
 
     atom.subscribe(log1)
     atom.subscribe(log2)
 
-    expect(atom.get()).toEqual({ status: 'pending' })
-    expect(log1).not.toHaveBeenCalled()
-    expect(log2).not.toHaveBeenCalled()
+    const initial = atom.get()
+    const callsBeforeSettlement = [[...log1.mock.calls], [...log2.mock.calls]]
 
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    yield* Effect.promise(() => afterRealTime(20))
 
-    expect(log1).toHaveBeenCalledTimes(1)
-    expect(log1).toHaveBeenCalledWith({ status: 'done', data: 'multi-test' })
-    expect(log2).toHaveBeenCalledTimes(1)
-    expect(log2).toHaveBeenCalledWith({ status: 'done', data: 'multi-test' })
+    const callsAtEnd = [[...log1.mock.calls], [...log2.mock.calls]]
+
+    yield* expect({ initial, callsBeforeSettlement, callsAtEnd }).toEqual({
+      initial: { status: 'pending' },
+      callsBeforeSettlement: [[], []],
+      callsAtEnd: [
+        [[{ status: 'done', data: 'multi-test' }]],
+        [[{ status: 'done', data: 'multi-test' }]],
+      ],
+    })
   })
 
-  it('subscribe callback should not track dependencies from .get() calls', () => {
+  it('subscribe callback should not track dependencies from .get() calls', function*({ expect }) {
     const items = createAtom<number[]>([])
     const ids = createAtom(() => Array.from(items.get()).sort().join(','))
     const log = vi.fn()
@@ -1030,10 +1217,10 @@ describe('async atoms', () => {
     items.set([1, 2])
     items.set([1, 2])
 
-    expect(log).toHaveBeenCalledTimes(2)
+    yield* expect(log.mock.calls).toEqual([[], []])
   })
 
-  it('subscribe callback should not track deps on non-computed atoms', () => {
+  it('subscribe callback should not track deps on non-computed atoms', function*({ expect }) {
     const ids = createAtom('')
     const items = createAtom<number[]>([])
     items.subscribe((value) => ids.set(Array.from(value).sort().join(',')))
@@ -1049,6 +1236,6 @@ describe('async atoms', () => {
     items.set([1, 2])
     items.set([1, 2])
 
-    expect(log).toHaveBeenCalledTimes(2)
+    yield* expect(log.mock.calls).toEqual([[], []])
   })
 })

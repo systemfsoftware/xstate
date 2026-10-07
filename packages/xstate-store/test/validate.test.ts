@@ -1,4 +1,4 @@
-import { expect, it, vi } from 'vitest'
+import { it, vi } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createStore } from '../src/index.js'
 import { reset } from '../src/reset.js'
@@ -13,19 +13,26 @@ function getThrown(fn: () => void): unknown {
   return undefined
 }
 
-it('validates initial context when the extension is applied', () => {
-  expect(() =>
+function emitUnknown(enq: { emit: unknown }): void {
+  const emit = enq.emit as Record<string, () => void>
+  emit['unknown']!()
+}
+
+it('validates initial context when the extension is applied', function*({
+  expect,
+}) {
+  yield* expect(() =>
     createStore({
       schemas: {
         context: z.object({ count: z.number() }),
       },
-      context: { count: 'nope' } as any,
+      context: { count: 'nope' } as unknown as { count: number },
       on: {},
     }).with(validateSchemas())
   ).toThrow(StoreValidationError)
 })
 
-it('validates event payloads before transitions', () => {
+it('validates event payloads before transitions', function*({ expect }) {
   const store = createStore({
     schemas: {
       events: {
@@ -38,18 +45,27 @@ it('validates event payloads before transitions', () => {
     },
   }).with(validateSchemas())
 
-  expect(store.can.inc({ by: 'nope' } as any)).toBe(false)
-
-  expect(() => store.trigger.inc({ by: 'nope' } as any)).toThrow(
-    StoreValidationError,
-  )
-  expect(store.getSnapshot().context).toEqual({ count: 0 })
+  const canInvalid = store.can.inc({ by: 'nope' } as unknown as { by: number })
+  const invalidThrown = getThrown(() => store.trigger.inc({ by: 'nope' } as unknown as { by: number }))
+  const afterInvalid = store.getSnapshot().context
 
   store.trigger.inc({ by: 2 })
-  expect(store.getSnapshot().context).toEqual({ count: 2 })
+  const afterValid = store.getSnapshot().context
+
+  yield* expect({
+    canInvalid,
+    invalidThrown: invalidThrown instanceof StoreValidationError,
+    afterInvalid,
+    afterValid,
+  }).toEqual({
+    canInvalid: false,
+    invalidThrown: true,
+    afterInvalid: { count: 0 },
+    afterValid: { count: 2 },
+  })
 })
 
-it('validates final context after a macrostep', () => {
+it('validates final context after a macrostep', function*({ expect }) {
   const store = createStore({
     schemas: {
       events: {
@@ -59,15 +75,20 @@ it('validates final context after a macrostep', () => {
     },
     context: { count: 0 },
     on: {
-      break: () => ({ count: 'nope' }) as any,
+      break: () => ({ count: 'nope' }) as unknown as { count: number },
     },
   }).with(validateSchemas())
 
-  expect(store.can.break()).toBe(false)
-  expect(() => store.trigger.break()).toThrow(StoreValidationError)
+  const canBreak = store.can.break()
+  const breakThrown = getThrown(() => store.trigger.break())
+
+  yield* expect({
+    canBreak,
+    breakThrown: breakThrown instanceof StoreValidationError,
+  }).toEqual({ canBreak: false, breakThrown: true })
 })
 
-it('validates emitted payloads before running effects', () => {
+it('validates emitted payloads before running effects', function*({ expect }) {
   const effectSpy = vi.fn()
   const store = createStore({
     schemas: {
@@ -82,17 +103,23 @@ it('validates emitted payloads before running effects', () => {
     on: {
       send: (ctx, _, enq) => {
         enq.effect(effectSpy)
-        enq.emit.sent({ value: 'nope' } as any)
+        enq.emit.sent({ value: 'nope' } as unknown as { value: number })
         return ctx
       },
     },
   }).with(validateSchemas())
 
-  expect(() => store.trigger.send()).toThrow(StoreValidationError)
-  expect(effectSpy).not.toHaveBeenCalled()
+  const sendThrown = getThrown(() => store.trigger.send())
+
+  yield* expect({
+    sendThrown: sendThrown instanceof StoreValidationError,
+    effectCalls: effectSpy.mock.calls,
+  }).toEqual({ sendThrown: true, effectCalls: [] })
 })
 
-it('validates no-payload events and emitted events as empty objects', () => {
+it('validates no-payload events and emitted events as empty objects', function*({
+  expect,
+}) {
   const emittedSpy = vi.fn()
   const store = createStore({
     schemas: {
@@ -115,11 +142,18 @@ it('validates no-payload events and emitted events as empty objects', () => {
   store.on('reset', emittedSpy)
   store.trigger.reset()
 
-  expect(store.getSnapshot().context).toEqual({ count: 0 })
-  expect(emittedSpy).toHaveBeenCalledWith({ type: 'reset' })
+  yield* expect({
+    afterReset: store.getSnapshot().context,
+    emittedCalls: emittedSpy.mock.calls,
+  }).toEqual({
+    afterReset: { count: 0 },
+    emittedCalls: [[{ type: 'reset' }]],
+  })
 })
 
-it('throws for unknown events and emitted events by default', () => {
+it('throws for unknown events and emitted events by default', function*({
+  expect,
+}) {
   const store = createStore({
     schemas: {
       events: {
@@ -132,27 +166,30 @@ it('throws for unknown events and emitted events by default', () => {
     context: {},
     on: {
       send: (ctx, _, enq) => {
-        ;(enq.emit as any).unknown()
+        emitUnknown(enq)
         return ctx
       },
     },
   }).with(validateSchemas())
 
-  expect(getThrown(() => store.send({ type: 'unknown' } as any))).toMatchObject(
-    {
+  yield* expect({
+    unknownEvent: getThrown(() => store.send({ type: 'unknown' } as unknown as Parameters<typeof store.send>[0])),
+    unknownEmitted: getThrown(() => store.trigger.send()),
+  }).toMatchObject({
+    unknownEvent: {
       reason: 'unknownEvent',
       eventType: 'unknown',
       payload: {},
     },
-  )
-  expect(getThrown(() => store.trigger.send())).toMatchObject({
-    reason: 'unknownEmitted',
-    eventType: 'unknown',
-    payload: {},
+    unknownEmitted: {
+      reason: 'unknownEmitted',
+      eventType: 'unknown',
+      payload: {},
+    },
   })
 })
 
-it('returns false from can for validation errors', () => {
+it('returns false from can for validation errors', function*({ expect }) {
   const store = createStore({
     schemas: {
       events: {
@@ -165,10 +202,12 @@ it('returns false from can for validation errors', () => {
     },
   }).with(validateSchemas())
 
-  expect(store.can.inc({ by: 'nope' } as any)).toBe(false)
+  yield* expect({ can: store.can.inc({ by: 'nope' } as unknown as { by: number }) }).toEqual({
+    can: false,
+  })
 })
 
-it('exposes validation error details', () => {
+it('exposes validation error details', function*({ expect }) {
   const store = createStore({
     schemas: {
       events: {
@@ -181,8 +220,8 @@ it('exposes validation error details', () => {
     },
   }).with(validateSchemas())
 
-  expect(
-    getThrown(() => store.trigger.inc({ by: 'nope' } as any)),
+  yield* expect(
+    getThrown(() => store.trigger.inc({ by: 'nope' } as unknown as { by: number })),
   ).toMatchObject({
     name: 'StoreValidationError',
     reason: 'invalidEvent',
@@ -192,7 +231,7 @@ it('exposes validation error details', () => {
   })
 })
 
-it('throws for unknown emitted events by default', () => {
+it('throws for unknown emitted events by default', function*({ expect }) {
   const store = createStore({
     schemas: {
       events: {
@@ -205,20 +244,20 @@ it('throws for unknown emitted events by default', () => {
     context: {},
     on: {
       send: (ctx, _, enq) => {
-        ;(enq.emit as any).unknown()
+        emitUnknown(enq)
         return ctx
       },
     },
   }).with(validateSchemas())
 
-  expect(getThrown(() => store.trigger.send())).toMatchObject({
+  yield* expect(getThrown(() => store.trigger.send())).toMatchObject({
     reason: 'unknownEmitted',
     eventType: 'unknown',
     payload: {},
   })
 })
 
-it('throws for unknown events by default', () => {
+it('throws for unknown events by default', function*({ expect }) {
   const store = createStore({
     schemas: {
       events: {
@@ -229,16 +268,16 @@ it('throws for unknown events by default', () => {
     on: {},
   }).with(validateSchemas())
 
-  expect(getThrown(() => store.send({ type: 'unknown' } as any))).toMatchObject(
-    {
-      reason: 'unknownEvent',
-      eventType: 'unknown',
-      payload: {},
-    },
-  )
+  yield* expect(
+    getThrown(() => store.send({ type: 'unknown' } as unknown as Parameters<typeof store.send>[0])),
+  ).toMatchObject({
+    reason: 'unknownEvent',
+    eventType: 'unknown',
+    payload: {},
+  })
 })
 
-it('can ignore unknown events and emitted events', () => {
+it('can ignore unknown events and emitted events', function*({ expect }) {
   const emittedSpy = vi.fn()
   const store = createStore({
     schemas: {
@@ -252,7 +291,7 @@ it('can ignore unknown events and emitted events', () => {
     context: {},
     on: {
       send: (ctx, _, enq) => {
-        ;(enq.emit as any).unknown()
+        emitUnknown(enq)
         return ctx
       },
     },
@@ -264,13 +303,15 @@ it('can ignore unknown events and emitted events', () => {
   )
 
   store.on('*', emittedSpy)
-  store.send({ type: 'unknown' } as any)
+  store.send({ type: 'unknown' } as unknown as Parameters<typeof store.send>[0])
   store.trigger.send()
 
-  expect(emittedSpy).toHaveBeenCalledWith({ type: 'unknown' })
+  yield* expect(emittedSpy.mock.calls).toEqual([[{ type: 'unknown' }]])
 })
 
-it('allows extension-added event types without schemas', () => {
+it('allows extension-added event types without schemas', function*({
+  expect,
+}) {
   const store = createStore({
     schemas: {
       context: z.object({ count: z.number() }),
@@ -289,10 +330,10 @@ it('allows extension-added event types without schemas', () => {
   store.trigger.inc()
   store.trigger.reset()
 
-  expect(store.getSnapshot().context).toEqual({ count: 0 })
+  yield* expect(store.getSnapshot().context).toEqual({ count: 0 })
 })
 
-it('can opt out of individual validation areas', () => {
+it('can opt out of individual validation areas', function*({ expect }) {
   const store = createStore({
     schemas: {
       events: {
@@ -307,29 +348,39 @@ it('can opt out of individual validation areas', () => {
   }).with(validateSchemas({ context: false, events: false }))
 
   store.trigger.inc({ by: 1 })
-  expect(store.getSnapshot().context).toEqual({ count: 1 })
+
+  yield* expect(store.getSnapshot().context).toEqual({ count: 1 })
 })
 
-it('warns and no-ops in dev when there are no schemas', () => {
+it('warns and no-ops in dev when there are no schemas', function*({ expect }) {
   const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-  const store = createStore({
-    context: { count: 0 },
-    on: {
-      inc: (ctx) => ({ count: ctx.count + 1 }),
-    },
-  }).with(validateSchemas())
+  try {
+    const store = createStore({
+      context: { count: 0 },
+      on: {
+        inc: (ctx) => ({ count: ctx.count + 1 }),
+      },
+    }).with(validateSchemas())
 
-  expect(warnSpy).toHaveBeenCalledWith(
-    'The "validateSchemas" store extension was used, but the store has no schemas to validate.',
-  )
+    store.trigger.inc()
 
-  store.trigger.inc()
-  expect(store.getSnapshot().context).toEqual({ count: 1 })
-
-  warnSpy.mockRestore()
+    yield* expect({
+      warns: warnSpy.mock.calls,
+      afterInc: store.getSnapshot().context,
+    }).toEqual({
+      warns: [
+        [
+          'The "validateSchemas" store extension was used, but the store has no schemas to validate.',
+        ],
+      ],
+      afterInc: { count: 1 },
+    })
+  } finally {
+    warnSpy.mockRestore()
+  }
 })
 
-it('throws a validation error for async schemas', () => {
+it('throws a validation error for async schemas', function*({ expect }) {
   const store = createStore({
     schemas: {
       events: {
@@ -342,7 +393,7 @@ it('throws a validation error for async schemas', () => {
     },
   }).with(validateSchemas())
 
-  expect(getThrown(() => store.trigger.ping())).toMatchObject({
+  yield* expect(getThrown(() => store.trigger.ping())).toMatchObject({
     reason: 'asyncValidationUnsupported',
     eventType: 'ping',
   })

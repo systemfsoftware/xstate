@@ -1,15 +1,5 @@
 {
   "files": [
-    "packages/xstate-store/src/select.test.ts",
-    "packages/xstate-store/test/atom.test.ts",
-    "packages/xstate-store/test/broadcast.test.ts",
-    "packages/xstate-store/test/fromStore.test.ts",
-    "packages/xstate-store/test/persist.test.ts",
-    "packages/xstate-store/test/reset.test.ts",
-    "packages/xstate-store/test/store.test.ts",
-    "packages/xstate-store/test/types.test.tsx",
-    "packages/xstate-store/test/undo.test.ts",
-    "packages/xstate-store/test/validate.test.ts",
     "packages/xstate-test/test/advancedPropertyTest.test.ts",
     "packages/xstate-test/test/campaignAssertions.test.ts",
     "packages/xstate-test/test/docsExamples.test.ts",

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, it, vi } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import { createStore } from '../src/index.js'
 import {
@@ -12,199 +13,38 @@ import {
 } from '../src/persist.js'
 import { StoreValidationError, validateSchemas } from '../src/validate.js'
 
-// Mock localStorage
-describe('persistence lifecycle regressions', () => {
-  it.each([0, 100])(
-    'preserves an eligible snapshot when a nested event is filtered (throttle %i)',
-    async (throttle) => {
-      const storage = createMockStorage()
-      const store = createStore({
-        context: { value: 0 },
-        on: {
-          outer: () => ({ value: 1 }),
-          inner: () => ({ value: 2 }),
-        },
-      }).with(
-        persist({
-          name: 'filtered-nested',
-          storage,
-          throttle,
-          filter: (event) => event.type === 'outer',
-        }),
-      )
-      store.subscribe((snapshot) => {
-        if (snapshot.context.value === 1) store.trigger.inner()
-      })
-      store.trigger.outer()
-      expect(store.getSnapshot().context.value).toBe(2)
-      await flushStorage(store)
-      expect(
-        JSON.parse(storage.getItem('filtered-nested') as string).context.value,
-      ).toBe(1)
-    },
-  )
+function getThrown(fn: () => void): unknown {
+  try {
+    fn()
+  } catch (error) {
+    return error
+  }
+  return undefined
+}
 
-  it('orders new async writes after a queued clear', async () => {
-    const operations: string[] = []
-    const store = createStore({
-      context: { count: 0 },
-      on: { inc: (context) => ({ count: context.count + 1 }) },
-    }).with(
-      persist({
-        name: 'counter',
-        storage: {
-          getItem: () => null,
-          setItem: async (_key, value) => {
-            operations.push(`write ${JSON.parse(value).context.count}`)
-          },
-          removeItem: async () => {
-            operations.push('clear')
-          },
-        },
-      }),
-    )
-
-    store.trigger.inc()
-    const cleared = clearStorage(store)
-    store.trigger.inc()
-    await cleared
-    await flushStorage(store)
-    expect(operations).toEqual(['write 1', 'clear', 'write 2'])
-  })
-
-  it.each(['snapshot', 'event'] as const)(
-    'reports a rejected initial async read (%s)',
-    async (strategy) => {
-      const error = new Error('read failed')
-      const rejected = Promise.reject(error)
-      // Keep the unfixed implementation from leaking rejection into other tests.
-      void rejected.catch(() => {})
-      const onError = vi.fn()
-      createStore({ context: {}, on: {} }).with(
-        persist({
-          name: 'counter',
-          strategy,
-          onError,
-          storage: {
-            getItem: () => rejected,
-            setItem: vi.fn(),
-            removeItem: vi.fn(),
-          },
-        }),
-      )
-      await Promise.resolve()
-      expect(onError).toHaveBeenCalledExactlyOnceWith(error)
-    },
-  )
-
-  it('applies pick once when flushing a throttled update', () => {
-    const storage = createMockStorage()
-    const pick = vi.fn((context: { count: number }) => ({
-      count: context.count + 1,
-    }))
-    const store = createStore({
-      context: { count: 0 },
-      on: { inc: (context) => ({ count: context.count + 1 }) },
-    }).with(persist({ name: 'counter', storage, throttle: 100, pick }))
-
-    store.trigger.inc()
-    flushStorage(store)
-    expect(pick).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(storage.getItem('counter') as string).context).toEqual({
-      count: 2,
-    })
-  })
-
-  it.each(['snapshot', 'event'] as const)(
-    'preserves updates triggered by onDone during a throttled flush (%s)',
-    (strategy) => {
-      const storage = createMockStorage()
-      let firstWrite = true
-      const store = createStore({
-        context: { count: 0 },
-        on: { inc: (context) => ({ count: context.count + 1 }) },
-      }).with(
-        persist({
-          name: 'counter',
-          storage,
-          strategy,
-          throttle: 100,
-          onDone: () => {
-            if (firstWrite) {
-              firstWrite = false
-              store.trigger.inc()
-            }
-          },
-        }),
-      )
-
-      store.trigger.inc()
-      flushStorage(store)
-      flushStorage(store)
-      const saved = JSON.parse(storage.getItem('counter') as string)
-      expect(
-        strategy === 'event' ? saved.events.length : saved.context.count,
-      ).toBe(2)
-    },
-  )
-
-  it.each(['snapshot', 'event'] as const)(
-    'cancels buffered writes when storage is cleared (%s)',
-    (strategy) => {
-      vi.useFakeTimers()
-      try {
-        const storage = createMockStorage()
-        const store = createStore({
-          context: { count: 0 },
-          on: { inc: (context) => ({ count: context.count + 1 }) },
-        }).with(persist({ name: 'counter', strategy, storage, throttle: 100 }))
-
-        store.trigger.inc()
-        expect(clearStorage(store)).toBeUndefined()
-        vi.advanceTimersByTime(100)
-        flushStorage(store)
-        expect(storage.getItem('counter')).toBeNull()
-      } finally {
-        vi.useRealTimers()
+const eventually = (predicate: () => boolean) =>
+  Effect.promise(() => {
+    const { promise, resolve } = Promise.withResolvers<void>()
+    const startedAt = Date.now()
+    const tick = () => {
+      if (predicate() || Date.now() - startedAt > 2000) {
+        resolve()
+        return
       }
-    },
-  )
-
-  it('removes storage after an in-flight async write finishes', async () => {
-    let completeWrite!: () => void
-    let saved: string | null = null
-    const removeItem = vi.fn(() => {
-      saved = null
-    })
-    const store = createStore({
-      context: { count: 0 },
-      on: { inc: (context) => ({ count: context.count + 1 }) },
-    }).with(
-      persist({
-        name: 'counter',
-        storage: {
-          getItem: () => null,
-          setItem: (_key, value) =>
-            new Promise<void>((resolve) => {
-              completeWrite = () => {
-                saved = value
-                resolve()
-              }
-            }),
-          removeItem,
-        },
-      }),
-    )
-
-    store.trigger.inc()
-    const cleared = clearStorage(store)
-    expect(removeItem).not.toHaveBeenCalled()
-    completeWrite()
-    await cleared
-    expect(removeItem).toHaveBeenCalledExactlyOnceWith('counter')
-    expect(saved).toBeNull()
+      setTimeout(tick, 5)
+    }
+    tick()
+    return promise
   })
-})
+
+const realDelay = (ms: number) =>
+  Effect.promise(() => {
+    const { promise, resolve } = Promise.withResolvers<void>()
+    setTimeout(resolve, ms)
+    return promise
+  })
+
+const localStorageSlot = globalThis as unknown as { localStorage?: Storage }
 
 function createMockStorage(): StateStorage {
   const data: Record<string, string> = {}
@@ -232,8 +72,212 @@ function createAsyncMockStorage(): StateStorage {
   }
 }
 
-describe('persist', () => {
-  it('should persist context to storage after each event', () => {
+describe('persistence lifecycle regressions', (it) => {
+  it.each([0, 100])(
+    'preserves an eligible snapshot when a nested event is filtered (throttle %i)',
+    function*(throttle, { expect }) {
+      const storage = createMockStorage()
+      const store = createStore({
+        context: { value: 0 },
+        on: {
+          outer: () => ({ value: 1 }),
+          inner: () => ({ value: 2 }),
+        },
+      }).with(
+        persist({
+          name: 'filtered-nested',
+          storage,
+          throttle,
+          filter: (event) => event.type === 'outer',
+        }),
+      )
+      store.subscribe((snapshot) => {
+        if (snapshot.context.value === 1) store.trigger.inner()
+      })
+      store.trigger.outer()
+
+      yield* expect(store.getSnapshot().context.value).toBe(2)
+      yield* Effect.promise(() => Promise.resolve(flushStorage(store)))
+      yield* expect(
+        JSON.parse(storage.getItem('filtered-nested') as string).context.value,
+      ).toBe(1)
+    },
+  )
+
+  it('orders new async writes after a queued clear', function*({ expect }) {
+    const operations: string[] = []
+    const store = createStore({
+      context: { count: 0 },
+      on: { inc: (context) => ({ count: context.count + 1 }) },
+    }).with(
+      persist({
+        name: 'counter',
+        storage: {
+          getItem: () => null,
+          setItem: async (_key, value) => {
+            operations.push(`write ${JSON.parse(value).context.count}`)
+          },
+          removeItem: async () => {
+            operations.push('clear')
+          },
+        },
+      }),
+    )
+
+    store.trigger.inc()
+    const cleared = clearStorage(store)
+    store.trigger.inc()
+    yield* Effect.promise(() => Promise.resolve(cleared))
+    yield* Effect.promise(() => Promise.resolve(flushStorage(store)))
+    yield* expect(operations).toEqual(['write 1', 'clear', 'write 2'])
+  })
+
+  it.each(['snapshot', 'event'] as const)(
+    'reports a rejected initial async read (%s)',
+    function*(strategy, { expect }) {
+      const error = new Error('read failed')
+      const rejected = Promise.reject(error)
+      void rejected.catch(() => {})
+      const onError = vi.fn()
+      createStore({ context: {}, on: {} }).with(
+        persist({
+          name: 'counter',
+          strategy,
+          onError,
+          storage: {
+            getItem: () => rejected,
+            setItem: vi.fn(),
+            removeItem: vi.fn(),
+          },
+        }),
+      )
+      yield* Effect.promise(() => Promise.resolve())
+      yield* expect(onError.mock.calls).toEqual([[error]])
+    },
+  )
+
+  it('applies pick once when flushing a throttled update', function*({
+    expect,
+  }) {
+    const storage = createMockStorage()
+    const pick = vi.fn((context: { count: number }) => ({
+      count: context.count + 1,
+    }))
+    const store = createStore({
+      context: { count: 0 },
+      on: { inc: (context) => ({ count: context.count + 1 }) },
+    }).with(persist({ name: 'counter', storage, throttle: 100, pick }))
+
+    store.trigger.inc()
+    flushStorage(store)
+    yield* expect({
+      pickCalls: pick.mock.calls,
+      stored: JSON.parse(storage.getItem('counter') as string),
+    }).toEqual({
+      pickCalls: [[{ count: 1 }]],
+      stored: { context: { count: 2 }, version: 0 },
+    })
+  })
+
+  it.each(['snapshot', 'event'] as const)(
+    'preserves updates triggered by onDone during a throttled flush (%s)',
+    function*(strategy, { expect }) {
+      const storage = createMockStorage()
+      let firstWrite = true
+      const store = createStore({
+        context: { count: 0 },
+        on: { inc: (context) => ({ count: context.count + 1 }) },
+      }).with(
+        persist({
+          name: 'counter',
+          storage,
+          strategy,
+          throttle: 100,
+          onDone: () => {
+            if (firstWrite) {
+              firstWrite = false
+              store.trigger.inc()
+            }
+          },
+        }),
+      )
+
+      store.trigger.inc()
+      flushStorage(store)
+      flushStorage(store)
+      const saved = JSON.parse(storage.getItem('counter') as string)
+      yield* expect(
+        strategy === 'event' ? saved.events.length : saved.context.count,
+      ).toBe(2)
+    },
+  )
+
+  it.each(['snapshot', 'event'] as const)(
+    'cancels buffered writes when storage is cleared (%s)',
+    function*(strategy, { expect }) {
+      const storage = createMockStorage()
+      const store = createStore({
+        context: { count: 0 },
+        on: { inc: (context) => ({ count: context.count + 1 }) },
+      }).with(persist({ name: 'counter', strategy, storage, throttle: 100 }))
+
+      store.trigger.inc()
+      const clearResult = clearStorage(store)
+      flushStorage(store)
+      yield* expect({
+        clearResult,
+        stored: storage.getItem('counter'),
+      }).toEqual({ clearResult: undefined, stored: null })
+    },
+  )
+
+  it('removes storage after an in-flight async write finishes', function*({
+    expect,
+  }) {
+    let completeWrite: () => void = () => {
+      throw new Error('expected a write to start')
+    }
+    let saved: string | null = null
+    const removeItem = vi.fn((_name: string) => {
+      saved = null
+    })
+    const store = createStore({
+      context: { count: 0 },
+      on: { inc: (context) => ({ count: context.count + 1 }) },
+    }).with(
+      persist({
+        name: 'counter',
+        storage: {
+          getItem: () => null,
+          setItem: (_key, value) => {
+            const { promise, resolve } = Promise.withResolvers<void>()
+            completeWrite = () => {
+              saved = value
+              resolve()
+            }
+            return promise
+          },
+          removeItem,
+        },
+      }),
+    )
+
+    store.trigger.inc()
+    const cleared = clearStorage(store)
+    yield* expect(removeItem.mock.calls).toEqual([])
+    completeWrite()
+    yield* Effect.promise(() => Promise.resolve(cleared))
+    yield* expect({ removeCalls: removeItem.mock.calls, saved }).toEqual({
+      removeCalls: [['counter']],
+      saved: null,
+    })
+  })
+})
+
+describe('persist', (it) => {
+  it('should persist context to storage after each event', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -242,12 +286,13 @@ describe('persist', () => {
 
     store.trigger.inc()
 
-    const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.context).toEqual({ count: 1 })
-    expect(stored.version).toBe(0)
+    yield* expect(JSON.parse(storage.getItem('test') as string)).toEqual({
+      context: { count: 1 },
+      version: 0,
+    })
   })
 
-  it('should restore context from storage on creation', () => {
+  it('should restore context from storage on creation', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -262,30 +307,36 @@ describe('persist', () => {
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage }))
 
-    expect(store.getSnapshot().context.count).toBe(42)
+    yield* expect(store.getSnapshot().context.count).toBe(42)
   })
 
-  it('should set _persist.hydrated to true on sync hydration', () => {
+  it('should set _persist.hydrated to true on sync hydration', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage }))
 
-    expect(isHydrated(store)).toBe(true)
+    yield* expect({ hydrated: isHydrated(store) }).toEqual({ hydrated: true })
   })
 
-  it('should set _persist.hydrated to true when storage is empty', () => {
+  it('should set _persist.hydrated to true when storage is empty', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage }))
 
-    expect(isHydrated(store)).toBe(true)
+    yield* expect({ hydrated: isHydrated(store) }).toEqual({ hydrated: true })
   })
 
-  it('should preserve _persist metadata across transitions', () => {
+  it('should preserve _persist metadata across transitions', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -293,12 +344,12 @@ describe('persist', () => {
     }).with(persist({ name: 'test', storage }))
 
     store.trigger.inc()
-    expect(isHydrated(store)).toBe(true)
+    yield* expect({ hydrated: isHydrated(store) }).toEqual({ hydrated: true })
   })
 })
 
-describe('persist - pick', () => {
-  it('should only persist selected fields', () => {
+describe('persist - pick', (it) => {
+  it('should only persist selected fields', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0, secret: 'do-not-persist' },
@@ -315,12 +366,15 @@ describe('persist - pick', () => {
 
     store.trigger.inc()
 
-    const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.context).toEqual({ count: 1 })
-    expect(stored.context.secret).toBeUndefined()
+    yield* expect(JSON.parse(storage.getItem('test') as string)).toEqual({
+      context: { count: 1 },
+      version: 0,
+    })
   })
 
-  it('should merge picked data with full context on restore', () => {
+  it('should merge picked data with full context on restore', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -341,12 +395,14 @@ describe('persist - pick', () => {
       }),
     )
 
-    expect(store.getSnapshot().context).toEqual({ count: 42, name: 'Ada' })
+    yield* expect(store.getSnapshot().context).toEqual({ count: 42, name: 'Ada' })
   })
 })
 
-describe('persist - version + migrate', () => {
-  it('should migrate persisted state when version differs', () => {
+describe('persist - version + migrate', (it) => {
+  it('should migrate persisted state when version differs', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -373,11 +429,13 @@ describe('persist - version + migrate', () => {
       }),
     )
 
-    expect(store.getSnapshot().context.count).toBe(10)
-    expect(store.getSnapshot().context.label).toBe('migrated')
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      label: store.getSnapshot().context.label,
+    }).toEqual({ count: 10, label: 'migrated' })
   })
 
-  it('should migrate with string versions', () => {
+  it('should migrate with string versions', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -404,11 +462,13 @@ describe('persist - version + migrate', () => {
       }),
     )
 
-    expect(store.getSnapshot().context.count).toBe(10)
-    expect(store.getSnapshot().context.label).toBe('migrated')
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      label: store.getSnapshot().context.label,
+    }).toEqual({ count: 10, label: 'migrated' })
   })
 
-  it('should not migrate when version matches', () => {
+  it('should not migrate when version matches', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -418,7 +478,7 @@ describe('persist - version + migrate', () => {
       }),
     )
 
-    const migrateFn = vi.fn((ctx) => ctx)
+    const migrateFn = vi.fn((ctx: { count: number }) => ctx)
 
     const store = createStore({
       context: { count: 0 },
@@ -432,13 +492,15 @@ describe('persist - version + migrate', () => {
       }),
     )
 
-    expect(migrateFn).not.toHaveBeenCalled()
-    expect(store.getSnapshot().context.count).toBe(5)
+    yield* expect({
+      migrateCalls: migrateFn.mock.calls,
+      count: store.getSnapshot().context.count,
+    }).toEqual({ migrateCalls: [], count: 5 })
   })
 })
 
-describe('persist - merge', () => {
-  it('should use custom merge strategy', () => {
+describe('persist - merge', (it) => {
+  it('should use custom merge strategy', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -463,13 +525,15 @@ describe('persist - merge', () => {
       }),
     )
 
-    expect(store.getSnapshot().context.count).toBe(42)
-    expect(store.getSnapshot().context.items).toEqual(['b', 'c', 'a'])
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      items: store.getSnapshot().context.items,
+    }).toEqual({ count: 42, items: ['b', 'c', 'a'] })
   })
 })
 
-describe('persist - serialize / deserialize', () => {
-  it('should use custom serializer and deserializer', () => {
+describe('persist - serialize / deserialize', (it) => {
+  it('should use custom serializer and deserializer', function*({ expect }) {
     const storage = createMockStorage()
     const prefix = 'CUSTOM:'
 
@@ -487,9 +551,8 @@ describe('persist - serialize / deserialize', () => {
 
     store.trigger.inc()
 
-    expect((storage.getItem('test') as string).startsWith(prefix)).toBe(true)
+    const stored = storage.getItem('test')
 
-    // Verify roundtrip: create new store from same storage
     const store2 = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
@@ -502,40 +565,40 @@ describe('persist - serialize / deserialize', () => {
       }),
     )
 
-    expect(store2.getSnapshot().context.count).toBe(1)
+    yield* expect({
+      stored,
+      restored: store2.getSnapshot().context.count,
+    }).toEqual({
+      stored: 'CUSTOM:{"context":{"count":1},"version":0}',
+      restored: 1,
+    })
   })
 })
 
-describe('persist - throttle', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-  })
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('should batch writes with throttle', () => {
+describe('persist - throttle', (it) => {
+  it.live('should batch writes with throttle', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, throttle: 100 }))
 
-    store.trigger.inc() // count = 1
-    store.trigger.inc() // count = 2
-    store.trigger.inc() // count = 3
+    store.trigger.inc()
+    store.trigger.inc()
+    store.trigger.inc()
 
-    // Not yet written
-    expect(storage.getItem('test')).toBeNull()
+    yield* expect(storage.getItem('test')).toBeNull()
 
-    vi.advanceTimersByTime(100)
+    yield* eventually(() => storage.getItem('test') !== null)
 
-    // Only last value written
-    const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.context.count).toBe(3)
+    yield* expect(
+      JSON.parse(storage.getItem('test') as string).context.count,
+    ).toBe(3)
   })
 
-  it('should not write again if no events between throttle intervals', () => {
+  it.live('should not write again if no events between throttle intervals', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     const onDone = vi.fn()
     const store = createStore({
@@ -544,25 +607,19 @@ describe('persist - throttle', () => {
     }).with(persist({ name: 'test', storage, throttle: 100, onDone }))
 
     store.trigger.inc()
-    vi.advanceTimersByTime(100)
+    yield* eventually(() => onDone.mock.calls.length > 0)
 
-    expect(onDone).toHaveBeenCalledTimes(1)
+    yield* expect(onDone.mock.calls).toEqual([[{ count: 1 }]])
 
-    vi.advanceTimersByTime(100)
-    // No extra writes
-    expect(onDone).toHaveBeenCalledTimes(1)
+    yield* realDelay(150)
+    yield* expect(onDone.mock.calls).toEqual([[{ count: 1 }]])
   })
 })
 
-describe('persist - flushStorage', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-  })
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('should force immediate write of pending throttled context', () => {
+describe('persist - flushStorage', (it) => {
+  it('should force immediate write of pending throttled context', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -572,46 +629,56 @@ describe('persist - flushStorage', () => {
     store.trigger.inc()
     store.trigger.inc()
 
-    expect(storage.getItem('test')).toBeNull()
+    const before = storage.getItem('test')
 
     flushStorage(store)
 
-    const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.context.count).toBe(2)
+    yield* expect({
+      before,
+      after: JSON.parse(storage.getItem('test') as string),
+    }).toEqual({
+      before: null,
+      after: { context: { count: 2 }, version: 0 },
+    })
   })
 
-  it('should throw when store has no persist extension', () => {
+  it('should throw when store has no persist extension', function*({
+    expect,
+  }) {
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     })
 
-    expect(() => flushStorage(store)).toThrow(
+    yield* expect(() => flushStorage(store)).toThrow(
       'flushStorage: store does not have a persist extension',
     )
   })
 
-  it('should return a promise for async storage flushes', async () => {
+  it('should return a promise for async storage flushes', function*({
+    expect,
+  }) {
     const storage = createAsyncMockStorage()
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, throttle: 1000 }))
 
-    await rehydrateStore(store)
+    yield* Effect.promise(() => rehydrateStore(store))
 
     store.trigger.inc()
     store.trigger.inc()
 
-    await flushStorage(store)
+    yield* Effect.promise(() => Promise.resolve(flushStorage(store)))
 
-    const stored = JSON.parse((await storage.getItem('test')) as string)
-    expect(stored.context.count).toBe(2)
+    const raw = yield* Effect.promise(() => Promise.resolve(storage.getItem('test')))
+
+    yield* expect(JSON.parse(raw as string).context.count).toBe(2)
   })
 })
 
-describe('persist - onDone / onError', () => {
-  it('should call onDone after successful write', () => {
+describe('persist - onDone / onError', (it) => {
+  it('should call onDone after successful write', function*({ expect }) {
     const storage = createMockStorage()
     const onDone = vi.fn()
     const store = createStore({
@@ -621,10 +688,12 @@ describe('persist - onDone / onError', () => {
 
     store.trigger.inc()
 
-    expect(onDone).toHaveBeenCalledWith({ count: 1 })
+    yield* expect(onDone.mock.calls).toEqual([[{ count: 1 }]])
   })
 
-  it('should call onDone with picked context when pick is used', () => {
+  it('should call onDone with picked context when pick is used', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     const onDone = vi.fn()
     const store = createStore({
@@ -641,13 +710,10 @@ describe('persist - onDone / onError', () => {
 
     store.trigger.inc()
 
-    expect(onDone).toHaveBeenCalledWith({ count: 1 })
-    expect(onDone).not.toHaveBeenCalledWith(
-      expect.objectContaining({ secret: 'hidden' }),
-    )
+    yield* expect(onDone.mock.calls).toEqual([[{ count: 1 }]])
   })
 
-  it('should call onError on write failure', () => {
+  it('should call onError on write failure', function*({ expect }) {
     const error = new Error('quota exceeded')
     const failStorage: StateStorage = {
       getItem: () => null,
@@ -665,13 +731,16 @@ describe('persist - onDone / onError', () => {
 
     store.trigger.inc()
 
-    expect(onError).toHaveBeenCalledWith(error)
+    yield* expect(onError.mock.calls).toEqual([[error]])
   })
 
-  it('should call onError on read failure during hydration', () => {
+  it('should call onError on read failure during hydration', function*({
+    expect,
+  }) {
+    const readError = new Error('read failed')
     const failStorage: StateStorage = {
       getItem: () => {
-        throw new Error('read failed')
+        throw readError
       },
       setItem: () => {},
       removeItem: () => {},
@@ -683,12 +752,12 @@ describe('persist - onDone / onError', () => {
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage: failStorage, onError }))
 
-    expect(onError).toHaveBeenCalled()
+    yield* expect(onError.mock.calls).toEqual([[readError]])
   })
 })
 
-describe('persist - filter', () => {
-  it('should skip persisting when filter returns false', () => {
+describe('persist - filter', (it) => {
+  it('should skip persisting when filter returns false', function*({ expect }) {
     const storage = createMockStorage()
     const onDone = vi.fn()
     const store = createStore({
@@ -710,15 +779,19 @@ describe('persist - filter', () => {
     )
 
     store.trigger.mousemove({ x: 10, y: 20 })
-    expect(onDone).not.toHaveBeenCalled()
+    const afterFiltered = [...onDone.mock.calls]
 
     store.trigger.inc()
-    expect(onDone).toHaveBeenCalledTimes(1)
+
+    yield* expect({ afterFiltered, allCalls: onDone.mock.calls }).toEqual({
+      afterFiltered: [],
+      allCalls: [[{ count: 1, mouse: { x: 10, y: 20 } }]],
+    })
   })
 })
 
-describe('persist - skipHydration', () => {
-  it('should not hydrate when skipHydration is true', () => {
+describe('persist - skipHydration', (it) => {
+  it('should not hydrate when skipHydration is true', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -733,13 +806,15 @@ describe('persist - skipHydration', () => {
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, skipHydration: true }))
 
-    expect(store.getSnapshot().context.count).toBe(0)
-    expect(isHydrated(store)).toBe(false)
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }).toEqual({ count: 0, hydrated: false })
   })
 })
 
-describe('persist - rehydrateStore', () => {
-  it('should rehydrate from sync storage', async () => {
+describe('persist - rehydrateStore', (it) => {
+  it('should rehydrate from sync storage', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -754,15 +829,17 @@ describe('persist - rehydrateStore', () => {
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, skipHydration: true }))
 
-    expect(store.getSnapshot().context.count).toBe(0)
+    yield* expect(store.getSnapshot().context.count).toBe(0)
 
-    await rehydrateStore(store)
+    yield* Effect.promise(() => rehydrateStore(store))
 
-    expect(store.getSnapshot().context.count).toBe(99)
-    expect(isHydrated(store)).toBe(true)
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }).toEqual({ count: 99, hydrated: true })
   })
 
-  it('should rehydrate from async storage', async () => {
+  it('should rehydrate from async storage', function*({ expect }) {
     const storage = createAsyncMockStorage()
     storage.setItem(
       'test',
@@ -777,15 +854,17 @@ describe('persist - rehydrateStore', () => {
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, skipHydration: true }))
 
-    expect(store.getSnapshot().context.count).toBe(0)
+    yield* expect(store.getSnapshot().context.count).toBe(0)
 
-    await rehydrateStore(store)
+    yield* Effect.promise(() => rehydrateStore(store))
 
-    expect(store.getSnapshot().context.count).toBe(77)
-    expect(isHydrated(store)).toBe(true)
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }).toEqual({ count: 77, hydrated: true })
   })
 
-  it('should merge with events sent before rehydration', async () => {
+  it('should merge with events sent before rehydration', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -800,16 +879,14 @@ describe('persist - rehydrateStore', () => {
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, skipHydration: true }))
 
-    // Send events before rehydration
-    store.trigger.inc() // count = 1
+    store.trigger.inc()
 
-    await rehydrateStore(store)
+    yield* Effect.promise(() => rehydrateStore(store))
 
-    // Default merge: persisted overwrites current, so count = 10
-    expect(store.getSnapshot().context.count).toBe(10)
+    yield* expect(store.getSnapshot().context.count).toBe(10)
   })
 
-  it('should handle empty storage gracefully', async () => {
+  it('should handle empty storage gracefully', function*({ expect }) {
     const storage = createMockStorage()
 
     const store = createStore({
@@ -817,13 +894,15 @@ describe('persist - rehydrateStore', () => {
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, skipHydration: true }))
 
-    await rehydrateStore(store)
+    yield* Effect.promise(() => rehydrateStore(store))
 
-    expect(store.getSnapshot().context.count).toBe(0)
-    expect(isHydrated(store)).toBe(true)
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }).toEqual({ count: 0, hydrated: true })
   })
 
-  it('should apply migration during rehydration', async () => {
+  it('should apply migration during rehydration', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -851,26 +930,38 @@ describe('persist - rehydrateStore', () => {
       }),
     )
 
-    await rehydrateStore(store)
+    yield* Effect.promise(() => rehydrateStore(store))
 
-    expect(store.getSnapshot().context.count).toBe(5)
-    expect(store.getSnapshot().context.label).toBe('migrated')
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      label: store.getSnapshot().context.label,
+    }).toEqual({ count: 5, label: 'migrated' })
   })
 
-  it('should throw when store has no persist extension', async () => {
+  it('should throw when store has no persist extension', function*({
+    expect,
+  }) {
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     })
 
-    await expect(rehydrateStore(store)).rejects.toThrow(
-      'rehydrateStore: store does not have a persist extension',
+    const error = yield* Effect.flip(
+      Effect.tryPromise({
+        try: () => rehydrateStore(store),
+        catch: (cause) => cause as Error,
+      }),
     )
+
+    yield* expect({ name: error.name, message: error.message }).toEqual({
+      name: 'Error',
+      message: 'rehydrateStore: store does not have a persist extension',
+    })
   })
 })
 
-describe('persist - clearStorage', () => {
-  it('should remove persisted data from storage', () => {
+describe('persist - clearStorage', (it) => {
+  it('should remove persisted data from storage', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -878,24 +969,32 @@ describe('persist - clearStorage', () => {
     }).with(persist({ name: 'test', storage }))
 
     store.trigger.inc()
-    expect(storage.getItem('test')).not.toBeNull()
+    const before = JSON.parse(storage.getItem('test') as string)
 
     clearStorage(store)
-    expect(storage.getItem('test')).toBeNull()
+
+    yield* expect({ before, after: storage.getItem('test') }).toEqual({
+      before: { context: { count: 1 }, version: 0 },
+      after: null,
+    })
   })
 
-  it('should throw when store has no persist extension', () => {
+  it('should throw when store has no persist extension', function*({
+    expect,
+  }) {
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     })
 
-    expect(() => clearStorage(store)).toThrow(
+    yield* expect(() => clearStorage(store)).toThrow(
       'clearStorage: store does not have a persist extension',
     )
   })
 
-  it('should return a promise for async storage removals', async () => {
+  it('should return a promise for async storage removals', function*({
+    expect,
+  }) {
     const storage = createAsyncMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -903,50 +1002,76 @@ describe('persist - clearStorage', () => {
     }).with(persist({ name: 'test', storage }))
 
     store.trigger.inc()
-    await Promise.resolve()
+    yield* Effect.promise(() => Promise.resolve())
 
-    await clearStorage(store)
+    const cleared = clearStorage(store)
 
-    expect(await storage.getItem('test')).toBeNull()
+    yield* Effect.promise(() => Promise.resolve(cleared))
+
+    const raw = yield* Effect.promise(() => Promise.resolve(storage.getItem('test')))
+
+    yield* expect(raw).toBeNull()
   })
 })
 
-describe('persist - createJSONStorage', () => {
-  it('should return noop storage when getStorage throws', () => {
+describe('persist - createJSONStorage', (it) => {
+  it('should return noop storage when getStorage throws', function*({
+    expect,
+  }) {
     const storage = createJSONStorage(() => {
       throw new Error('no localStorage')
     })
 
-    expect(storage.getItem('test')).toBeNull()
-    expect(() => storage.setItem('test', 'value')).not.toThrow()
-    expect(() => storage.removeItem('test')).not.toThrow()
+    const results = {
+      get: storage.getItem('test'),
+      set: storage.setItem('test', 'value'),
+      remove: storage.removeItem('test'),
+    }
+
+    yield* expect(results).toEqual({
+      get: null,
+      set: undefined,
+      remove: undefined,
+    })
   })
 
-  it('should wrap a working storage adapter', () => {
+  it('should wrap a working storage adapter', function*({ expect }) {
     const mockStorage = createMockStorage()
     const storage = createJSONStorage(() => mockStorage)
 
     storage.setItem('foo', 'bar')
-    expect(storage.getItem('foo')).toBe('bar')
+    const afterSet = storage.getItem('foo')
 
     storage.removeItem('foo')
-    expect(storage.getItem('foo')).toBeNull()
+
+    yield* expect({ afterSet, afterRemove: storage.getItem('foo') }).toEqual({
+      afterSet: 'bar',
+      afterRemove: null,
+    })
   })
 
-  it('should preserve async storage semantics', async () => {
+  it('should preserve async storage semantics', function*({ expect }) {
     const mockStorage = createAsyncMockStorage()
     const storage = createJSONStorage(() => mockStorage)
 
-    await storage.setItem('foo', 'bar')
-    expect(await storage.getItem('foo')).toBe('bar')
+    yield* Effect.promise(() => Promise.resolve(storage.setItem('foo', 'bar')))
 
-    await storage.removeItem('foo')
-    expect(await storage.getItem('foo')).toBeNull()
+    const afterSet = yield* Effect.promise(() => Promise.resolve(storage.getItem('foo')))
+
+    yield* expect(afterSet).toBe('bar')
+
+    yield* Effect.promise(() => Promise.resolve(storage.removeItem('foo')))
+
+    const afterRemove = yield* Effect.promise(() => Promise.resolve(storage.getItem('foo')))
+
+    yield* expect(afterRemove).toBeNull()
   })
 })
 
-describe('persist - SSR-safe defaults', () => {
-  it('should not require localStorage when using default storage', () => {
+describe('persist - SSR-safe defaults', (it) => {
+  it('should not require localStorage when using default storage', function*({
+    expect,
+  }) {
     const originalDescriptor = Object.getOwnPropertyDescriptor(
       globalThis,
       'localStorage',
@@ -965,21 +1090,28 @@ describe('persist - SSR-safe defaults', () => {
         on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
       }).with(persist({ name: 'test' }))
 
-      expect(isHydrated(store)).toBe(true)
-      expect(() => store.trigger.inc()).not.toThrow()
+      const hydrated = isHydrated(store)
+      store.trigger.inc()
+
+      yield* expect({
+        hydrated,
+        afterInc: store.getSnapshot().context.count,
+      }).toEqual({ hydrated: true, afterInc: 1 })
     } finally {
       if (originalDescriptor) {
         Object.defineProperty(globalThis, 'localStorage', originalDescriptor)
       } else {
-        delete (globalThis as { localStorage?: Storage }).localStorage
+        delete localStorageSlot.localStorage
       }
     }
   })
 
-  it('should detect persist rehydrate event collisions in development', () => {
+  it('should detect persist rehydrate event collisions in development', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
 
-    expect(() =>
+    yield* expect(() =>
       createStore({
         context: { count: 0 },
         on: {
@@ -992,8 +1124,10 @@ describe('persist - SSR-safe defaults', () => {
   })
 })
 
-describe('persist - async storage auto-detection', () => {
-  it('should detect async storage and skip sync hydration', () => {
+describe('persist - async storage auto-detection', (it) => {
+  it('should detect async storage and skip sync hydration', function*({
+    expect,
+  }) {
     const storage = createAsyncMockStorage()
     storage.setItem(
       'test',
@@ -1008,15 +1142,15 @@ describe('persist - async storage auto-detection', () => {
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage }))
 
-    // Should NOT have hydrated (async storage detected)
-    expect(store.getSnapshot().context.count).toBe(0)
-    expect(isHydrated(store)).toBe(false)
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }).toEqual({ count: 0, hydrated: false })
   })
 })
 
-describe('persist - composability', () => {
-  it('should work with undoRedo extension', () => {
-    // Import would be needed in real code but this tests the pattern
+describe('persist - composability', (it) => {
+  it('should work with undoRedo extension', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -1027,18 +1161,21 @@ describe('persist - composability', () => {
     store.trigger.inc()
 
     const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.context.count).toBe(2)
-    expect(store.getSnapshot().context.count).toBe(2)
+    yield* expect({
+      stored: stored.context.count,
+      count: store.getSnapshot().context.count,
+    }).toEqual({ stored: 2, count: 2 })
   })
 
-  it('should persist and restore correctly across store instances', () => {
+  it('should persist and restore correctly across store instances', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     const config = {
       name: 'test' as const,
       storage,
     }
 
-    // Store 1: write
     const store1 = createStore({
       context: { count: 0, name: 'test' },
       on: {
@@ -1051,7 +1188,6 @@ describe('persist - composability', () => {
     store1.trigger.inc()
     store1.trigger.setName({ name: 'updated' })
 
-    // Store 2: read
     const store2 = createStore({
       context: { count: 0, name: 'test' },
       on: {
@@ -1060,13 +1196,15 @@ describe('persist - composability', () => {
       },
     }).with(persist(config))
 
-    expect(store2.getSnapshot().context.count).toBe(2)
-    expect(store2.getSnapshot().context.name).toBe('updated')
+    yield* expect({
+      count: store2.getSnapshot().context.count,
+      name: store2.getSnapshot().context.name,
+    }).toEqual({ count: 2, name: 'updated' })
   })
 })
 
-describe('persist - strategy: event', () => {
-  it('should persist events to storage', () => {
+describe('persist - strategy: event', (it) => {
+  it('should persist events to storage', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -1076,16 +1214,16 @@ describe('persist - strategy: event', () => {
     store.trigger.inc()
     store.trigger.inc()
 
-    const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.events).toHaveLength(2)
-    expect(stored.events[0].type).toBe('inc')
-    expect(stored.version).toBe(0)
+    yield* expect(JSON.parse(storage.getItem('test') as string)).toEqual({
+      events: [{ type: 'inc' }, { type: 'inc' }],
+      version: 0,
+      checkpoint: null,
+    })
   })
 
-  it('should restore state by replaying events', () => {
+  it('should restore state by replaying events', function*({ expect }) {
     const storage = createMockStorage()
 
-    // Store 1: produce events
     const store1 = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
@@ -1095,16 +1233,15 @@ describe('persist - strategy: event', () => {
     store1.trigger.inc()
     store1.trigger.inc()
 
-    // Store 2: restore from events
     const store2 = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, strategy: 'event' }))
 
-    expect(store2.getSnapshot().context.count).toBe(3)
+    yield* expect(store2.getSnapshot().context.count).toBe(3)
   })
 
-  it('should restore state with event payloads', () => {
+  it('should restore state with event payloads', function*({ expect }) {
     const storage = createMockStorage()
 
     const store1 = createStore({
@@ -1126,20 +1263,22 @@ describe('persist - strategy: event', () => {
       },
     }).with(persist({ name: 'test', storage, strategy: 'event' }))
 
-    expect(store2.getSnapshot().context.count).toBe(11)
+    yield* expect(store2.getSnapshot().context.count).toBe(11)
   })
 
-  it('should set _persist.hydrated to true on sync hydration', () => {
+  it('should set _persist.hydrated to true on sync hydration', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, strategy: 'event' }))
 
-    expect(isHydrated(store)).toBe(true)
+    yield* expect({ hydrated: isHydrated(store) }).toEqual({ hydrated: true })
   })
 
-  it('should respect maxEvents option', () => {
+  it('should respect maxEvents option', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -1148,15 +1287,12 @@ describe('persist - strategy: event', () => {
       persist({ name: 'test', storage, strategy: 'event', maxEvents: 2 }),
     )
 
-    store.trigger.inc() // 1
-    store.trigger.inc() // 2
-    store.trigger.inc() // 3
+    store.trigger.inc()
+    store.trigger.inc()
+    store.trigger.inc()
 
     const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.events).toHaveLength(2)
-    expect(stored.checkpoint).toEqual({ count: 1 })
 
-    // New store replays last 2 events from checkpoint, getting correct total
     const store2 = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
@@ -1164,10 +1300,19 @@ describe('persist - strategy: event', () => {
       persist({ name: 'test', storage, strategy: 'event', maxEvents: 2 }),
     )
 
-    expect(store2.getSnapshot().context.count).toBe(3)
+    yield* expect({ stored, restored: store2.getSnapshot().context.count }).toEqual(
+      {
+        stored: {
+          events: [{ type: 'inc' }, { type: 'inc' }],
+          version: 0,
+          checkpoint: { count: 1 },
+        },
+        restored: 3,
+      },
+    )
   })
 
-  it('should not hydrate when skipHydration is true', () => {
+  it('should not hydrate when skipHydration is true', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -1184,11 +1329,13 @@ describe('persist - strategy: event', () => {
       persist({ name: 'test', storage, strategy: 'event', skipHydration: true }),
     )
 
-    expect(store.getSnapshot().context.count).toBe(0)
-    expect(isHydrated(store)).toBe(false)
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }).toEqual({ count: 0, hydrated: false })
   })
 
-  it('should rehydrate from async storage', async () => {
+  it('should rehydrate from async storage', function*({ expect }) {
     const storage = createAsyncMockStorage()
     storage.setItem(
       'test',
@@ -1205,18 +1352,21 @@ describe('persist - strategy: event', () => {
       persist({ name: 'test', storage, strategy: 'event', skipHydration: true }),
     )
 
-    expect(store.getSnapshot().context.count).toBe(0)
+    yield* expect(store.getSnapshot().context.count).toBe(0)
 
-    await rehydrateStore(store)
+    yield* Effect.promise(() => rehydrateStore(store))
 
-    expect(store.getSnapshot().context.count).toBe(3)
-    expect(isHydrated(store)).toBe(true)
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }).toEqual({ count: 3, hydrated: true })
   })
 
-  it('should continue accumulating events after rehydration', () => {
+  it('should continue accumulating events after rehydration', function*({
+    expect,
+  }) {
     const storage = createMockStorage()
 
-    // Store 1
     const store1 = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
@@ -1225,22 +1375,28 @@ describe('persist - strategy: event', () => {
     store1.trigger.inc()
     store1.trigger.inc()
 
-    // Store 2: restore then continue
     const store2 = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, strategy: 'event' }))
 
-    expect(store2.getSnapshot().context.count).toBe(2)
+    const restored = store2.getSnapshot().context.count
 
     store2.trigger.inc()
 
     const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.events).toHaveLength(3)
-    expect(store2.getSnapshot().context.count).toBe(3)
+    yield* expect({
+      restored,
+      stored: stored.events,
+      count: store2.getSnapshot().context.count,
+    }).toEqual({
+      restored: 2,
+      stored: [{ type: 'inc' }, { type: 'inc' }, { type: 'inc' }],
+      count: 3,
+    })
   })
 
-  it('should migrate events when version differs', () => {
+  it('should migrate events when version differs', function*({ expect }) {
     const storage = createMockStorage()
     storage.setItem(
       'test',
@@ -1259,14 +1415,15 @@ describe('persist - strategy: event', () => {
         storage,
         strategy: 'event',
         version: 2,
-        migrate: (events, _version) => events.map((e: any) => e.type === 'increment' ? { ...e, type: 'inc' } : e),
+        migrate: (events, _version) =>
+          events.map((e: { type: string }) => e.type === 'increment' ? { ...e, type: 'inc' } : e),
       }),
     )
 
-    expect(store.getSnapshot().context.count).toBe(2)
+    yield* expect(store.getSnapshot().context.count).toBe(2)
   })
 
-  it('should work with clearStorage', () => {
+  it('should work with clearStorage', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -1274,27 +1431,40 @@ describe('persist - strategy: event', () => {
     }).with(persist({ name: 'test', storage, strategy: 'event' }))
 
     store.trigger.inc()
-    expect(storage.getItem('test')).not.toBeNull()
+    const before = JSON.parse(storage.getItem('test') as string)
 
     clearStorage(store)
-    expect(storage.getItem('test')).toBeNull()
+
+    yield* expect({ before, after: storage.getItem('test') }).toEqual({
+      before: {
+        events: [{ type: 'inc' }],
+        version: 0,
+        checkpoint: null,
+      },
+      after: null,
+    })
   })
 
-  it('should handle empty storage gracefully', () => {
+  it('should handle empty storage gracefully', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, strategy: 'event' }))
 
-    expect(store.getSnapshot().context.count).toBe(0)
-    expect(isHydrated(store)).toBe(true)
+    yield* expect({
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }).toEqual({ count: 0, hydrated: true })
   })
 
-  it('should call onError on read failure during hydration', () => {
+  it('should call onError on read failure during hydration', function*({
+    expect,
+  }) {
+    const readError = new Error('read failed')
     const failStorage: StateStorage = {
       getItem: () => {
-        throw new Error('read failed')
+        throw readError
       },
       setItem: () => {},
       removeItem: () => {},
@@ -1313,11 +1483,10 @@ describe('persist - strategy: event', () => {
       }),
     )
 
-    expect(onError).toHaveBeenCalled()
+    yield* expect(onError.mock.calls).toEqual([[readError]])
   })
 
-  it('should work with throttle', () => {
-    vi.useFakeTimers()
+  it.live('should work with throttle', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -1330,17 +1499,18 @@ describe('persist - strategy: event', () => {
     store.trigger.inc()
     store.trigger.inc()
 
-    expect(storage.getItem('test')).toBeNull()
+    yield* expect(storage.getItem('test')).toBeNull()
 
-    vi.advanceTimersByTime(100)
+    yield* eventually(() => storage.getItem('test') !== null)
 
-    const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.events).toHaveLength(3)
-    vi.useRealTimers()
+    yield* expect(JSON.parse(storage.getItem('test') as string)).toEqual({
+      events: [{ type: 'inc' }, { type: 'inc' }, { type: 'inc' }],
+      version: 0,
+      checkpoint: null,
+    })
   })
 
-  it('should work with flushStorage', () => {
-    vi.useFakeTimers()
+  it('should work with flushStorage', function*({ expect }) {
     const storage = createMockStorage()
     const store = createStore({
       context: { count: 0 },
@@ -1352,249 +1522,364 @@ describe('persist - strategy: event', () => {
     store.trigger.inc()
     store.trigger.inc()
 
-    expect(storage.getItem('test')).toBeNull()
+    const before = storage.getItem('test')
 
     flushStorage(store)
 
-    const stored = JSON.parse(storage.getItem('test') as string)
-    expect(stored.events).toHaveLength(2)
-    vi.useRealTimers()
+    yield* expect({
+      before,
+      after: JSON.parse(storage.getItem('test') as string),
+    }).toEqual({
+      before: null,
+      after: {
+        events: [{ type: 'inc' }, { type: 'inc' }],
+        version: 0,
+        checkpoint: null,
+      },
+    })
   })
 })
 
-describe.each(['snapshot', 'event'] as const)(
-  'persist committed %s writes',
-  (strategy) => {
-    it.each(
-      [
-        [0, 'effect'],
-        [100, 'effect'],
-        [0, 'subscriber'],
-        [100, 'subscriber'],
-      ] as const,
-    )(
-      'persists nested events in commit order (throttle %i, %s)',
-      async (throttle, nestedFrom) => {
-        const storage = createMockStorage()
-        const makeStore = () =>
-          createStore({
-            context: { value: 0 },
-            on: {
-              outer: (context, _event, enqueue) => {
-                if (nestedFrom === 'effect') {
-                  enqueue.effect(({ trigger }) => {
-                    const innerTrigger = trigger['inner']
-                    if (innerTrigger === undefined) {
-                      throw new Error('expected an inner trigger')
-                    }
-                    innerTrigger()
-                  })
+it.each(
+  [
+    ['snapshot', 0, 'effect'],
+    ['snapshot', 100, 'effect'],
+    ['snapshot', 0, 'subscriber'],
+    ['snapshot', 100, 'subscriber'],
+    ['event', 0, 'effect'],
+    ['event', 100, 'effect'],
+    ['event', 0, 'subscriber'],
+    ['event', 100, 'subscriber'],
+  ] as const,
+)(
+  'persist committed %s writes persists nested events in commit order (throttle %i, %s)',
+  function*([strategy, throttle, nestedFrom], { expect }) {
+    const storage = createMockStorage()
+    const makeStore = () =>
+      createStore({
+        context: { value: 0 },
+        on: {
+          outer: (context, _event, enqueue) => {
+            if (nestedFrom === 'effect') {
+              enqueue.effect(({ trigger }) => {
+                const innerTrigger = trigger['inner']
+                if (innerTrigger === undefined) {
+                  throw new Error('expected an inner trigger')
                 }
-                return { value: context.value * 10 + 1 }
-              },
-              inner: (context) => ({ value: context.value * 10 + 2 }),
-            },
-          }).with(
-            persist({
-              name: 'nested',
-              strategy,
-              storage,
-              throttle,
-              ...(strategy === 'event' ? { maxEvents: 1 } : {}),
-            }),
-          )
-        const store = makeStore()
-        const canOuter = store.can['outer']
-        if (canOuter === undefined) {
-          throw new Error('expected an outer can')
-        }
-        expect(canOuter()).toBe(true)
-        store.transition(store.getSnapshot(), { type: 'outer' })
-        await flushStorage(store)
-        expect(storage.getItem('nested')).toBeNull()
-
-        const subscription = store.subscribe((snapshot) => {
-          if (nestedFrom === 'subscriber' && snapshot.context.value === 1) {
-            const innerTrigger = store.trigger['inner']
-            if (innerTrigger === undefined) {
-              throw new Error('expected an inner trigger')
+                innerTrigger()
+              })
             }
-            innerTrigger()
-          }
-        })
-        const outerTrigger = store.trigger['outer']
-        if (outerTrigger === undefined) {
-          throw new Error('expected an outer trigger')
-        }
-        outerTrigger()
-        subscription.unsubscribe()
-        expect(store.getSnapshot().context.value).toBe(12)
-        await flushStorage(store)
-        const saved = JSON.parse(storage.getItem('nested') as string)
-        if (strategy === 'snapshot') {
-          expect(saved.context.value).toBe(12)
-        } else {
-          expect(saved.events).toEqual([{ type: 'inner' }])
-          expect(saved.checkpoint).toEqual({ value: 1 })
-        }
-        expect(makeStore().getSnapshot().context.value).toBe(12)
+            return { value: context.value * 10 + 1 }
+          },
+          inner: (context) => ({ value: context.value * 10 + 2 }),
+        },
+      }).with(
+        persist({
+          name: 'nested',
+          strategy,
+          storage,
+          throttle,
+          ...(strategy === 'event' ? { maxEvents: 1 } : {}),
+        }),
+      )
+    const store = makeStore()
+    const canOuter = store.can['outer']
+    if (canOuter === undefined) {
+      throw new Error('expected an outer can')
+    }
+    yield* expect({ canOuter: canOuter() }).toEqual({ canOuter: true })
 
-        await rehydrateStore(store)
+    store.transition(store.getSnapshot(), { type: 'outer' })
+    yield* Effect.promise(() => Promise.resolve(flushStorage(store)))
+
+    const notYetWritten = storage.getItem('nested')
+
+    const subscription = store.subscribe((snapshot) => {
+      if (nestedFrom === 'subscriber' && snapshot.context.value === 1) {
         const innerTrigger = store.trigger['inner']
         if (innerTrigger === undefined) {
           throw new Error('expected an inner trigger')
         }
         innerTrigger()
-        await flushStorage(store)
-        expect(makeStore().getSnapshot().context.value).toBe(122)
-      },
-    )
-
-    it.each(['can', 'transition', 'validation'] as const)(
-      'does not buffer %s evaluations',
-      async (evaluation) => {
-        vi.useFakeTimers()
-        try {
-          const storage = createMockStorage()
-          const base = createStore({
-            schemas: { context: z.object({ count: z.number().max(1) }) },
-            context: { count: 0 },
-            on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
-          }).with(
-            persist({
-              name: 'committed',
-              strategy,
-              storage,
-              throttle: 100,
-              ...(strategy === 'event' ? { maxEvents: 1 } : {}),
-            }),
-          )
-          const store = evaluation === 'validation' ? base.with(validateSchemas()) : base
-          store.trigger.inc()
-          if (evaluation === 'can') {
-            expect(store.can.inc()).toBe(true)
-          } else if (evaluation === 'transition') {
-            store.transition(store.getSnapshot(), { type: 'inc' })
-          } else {
-            expect(() => store.trigger.inc()).toThrow(StoreValidationError)
-          }
-          await vi.advanceTimersByTimeAsync(100)
-          expect(store.getSnapshot().context.count).toBe(1)
-          const saved = JSON.parse(storage.getItem('committed') as string)
-          if (strategy === 'snapshot') expect(saved.context.count).toBe(1)
-          else {
-            expect(saved.events).toEqual([{ type: 'inc' }])
-            expect(saved.checkpoint).toBeNull()
-          }
-        } finally {
-          vi.useRealTimers()
-        }
-      },
-    )
-
-    it('flushes throttled data after an already pending asynchronous write', async () => {
-      vi.useFakeTimers()
-      try {
-        const writes: Array<{ value: string; resolve: () => void }> = []
-        const storage: StateStorage = {
-          getItem: () => null,
-          removeItem: () => {},
-          setItem: (_name, value) => new Promise<void>((resolve) => writes.push({ value, resolve })),
-        }
-        const store = createStore({
-          context: { count: 0 },
-          on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
-        }).with(
-          persist({ name: 'throttled', storage, strategy, throttle: 100 }),
-        )
-        store.trigger.inc()
-        await vi.advanceTimersByTimeAsync(100)
-        store.trigger.inc()
-        const flushed = flushStorage(store)
-        expect(writes).toHaveLength(1)
-        const firstWrite = writes[0]
-        if (firstWrite === undefined) {
-          throw new Error('expected a first write')
-        }
-        firstWrite.resolve()
-        await vi.advanceTimersByTimeAsync(0)
-        expect(writes).toHaveLength(2)
-        const secondWrite = writes[1]
-        if (secondWrite === undefined) {
-          throw new Error('expected a second write')
-        }
-        const saved = JSON.parse(secondWrite.value)
-        if (strategy === 'snapshot') expect(saved.context.count).toBe(2)
-        else expect(saved.events).toHaveLength(2)
-        secondWrite.resolve()
-        await flushed
-        await vi.advanceTimersByTimeAsync(100)
-        expect(writes).toHaveLength(2)
-      } finally {
-        vi.useRealTimers()
       }
     })
+    const outerTrigger = store.trigger['outer']
+    if (outerTrigger === undefined) {
+      throw new Error('expected an outer trigger')
+    }
+    outerTrigger()
+    subscription.unsubscribe()
 
-    it.each([false, true])(
-      'orders asynchronous writes and recovers after failure: %s',
-      async (failFirst) => {
-        const writes: Array<{
-          value: string
-          resolve: () => void
-          reject: (error: unknown) => void
-        }> = []
-        let saved: string | null = null
-        const onDone = vi.fn()
-        const onError = vi.fn()
-        const storage: StateStorage = {
-          getItem: () => saved,
-          removeItem: () => {},
-          setItem: (_key, value) =>
-            new Promise<void>((resolve, reject) => {
-              writes.push({
-                value,
-                resolve: () => {
-                  saved = value
-                  resolve()
-                },
-                reject,
-              })
-            }),
-        }
-        const store = createStore({
-          context: { count: 0 },
-          on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
-        }).with(
-          persist({ name: 'ordered', strategy, storage, onDone, onError }),
-        )
-        store.trigger.inc()
-        store.trigger.inc()
-        // A fast second write cannot overtake the first: it has not started yet.
-        expect(writes).toHaveLength(1)
-        const flushed = flushStorage(store)
-        expect(flushed).toBeInstanceOf(Promise)
-        const completed = vi.fn()
-        void Promise.resolve(flushed).then(completed)
-        const firstWrite = writes[0]
-        if (firstWrite === undefined) {
-          throw new Error('expected a first write')
-        }
-        if (failFirst) firstWrite.reject(new Error('write failed'))
-        else firstWrite.resolve()
-        await vi.waitFor(() => expect(writes).toHaveLength(2))
-        expect(completed).not.toHaveBeenCalled()
-        const secondWrite = writes[1]
-        if (secondWrite === undefined) {
-          throw new Error('expected a second write')
-        }
-        secondWrite.resolve()
-        await flushed
-        const value = JSON.parse(saved!)
-        if (strategy === 'snapshot') expect(value.context.count).toBe(2)
-        else expect(value.events).toHaveLength(2)
-        expect(onError).toHaveBeenCalledTimes(failFirst ? 1 : 0)
-        expect(onDone).toHaveBeenCalledTimes(failFirst ? 1 : 2)
-      },
+    yield* expect({
+      notYetWritten,
+      value: store.getSnapshot().context.value,
+    }).toEqual({ notYetWritten: null, value: 12 })
+
+    yield* Effect.promise(() => Promise.resolve(flushStorage(store)))
+
+    const saved = JSON.parse(storage.getItem('nested') as string)
+    const replayed = makeStore().getSnapshot().context.value
+
+    yield* expect({
+      saved: strategy === 'snapshot' ? saved.context.value : saved,
+      replayed,
+    }).toEqual({
+      saved: strategy === 'snapshot'
+        ? 12
+        : {
+          events: [{ type: 'inner' }],
+          version: 0,
+          checkpoint: { value: 1 },
+        },
+      replayed: 12,
+    })
+
+    yield* Effect.promise(() => rehydrateStore(store))
+
+    const innerTrigger = store.trigger['inner']
+    if (innerTrigger === undefined) {
+      throw new Error('expected an inner trigger')
+    }
+    innerTrigger()
+    yield* Effect.promise(() => Promise.resolve(flushStorage(store)))
+
+    yield* expect(makeStore().getSnapshot().context.value).toBe(122)
+  },
+)
+
+it.live.each(
+  [
+    ['snapshot', 'can'],
+    ['snapshot', 'transition'],
+    ['snapshot', 'validation'],
+    ['event', 'can'],
+    ['event', 'transition'],
+    ['event', 'validation'],
+  ] as const,
+)(
+  'persist committed %s writes does not buffer %s evaluations',
+  function*([strategy, evaluation], { expect }) {
+    const storage = createMockStorage()
+    const base = createStore({
+      schemas: { context: z.object({ count: z.number().max(1) }) },
+      context: { count: 0 },
+      on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
+    }).with(
+      persist({
+        name: 'committed',
+        strategy,
+        storage,
+        throttle: 100,
+        ...(strategy === 'event' ? { maxEvents: 1 } : {}),
+      }),
     )
+    const store = evaluation === 'validation' ? base.with(validateSchemas()) : base
+
+    store.trigger.inc()
+    const canResult = evaluation === 'can' ? store.can.inc() : undefined
+    if (evaluation === 'transition') {
+      store.transition(store.getSnapshot(), { type: 'inc' })
+    }
+    const validationThrown = evaluation === 'validation'
+      ? getThrown(() => store.trigger.inc())
+      : undefined
+    const validationFailed = validationThrown instanceof StoreValidationError
+
+    yield* eventually(() => storage.getItem('committed') !== null)
+
+    const saved = JSON.parse(storage.getItem('committed') as string)
+
+    yield* expect({
+      canResult,
+      validationFailed,
+      count: store.getSnapshot().context.count,
+      saved,
+    }).toEqual({
+      canResult: evaluation === 'can' ? true : undefined,
+      validationFailed: evaluation === 'validation',
+      count: 1,
+      saved: strategy === 'snapshot'
+        ? { context: { count: 1 }, version: 0 }
+        : { events: [{ type: 'inc' }], version: 0, checkpoint: null },
+    })
+  },
+)
+
+it.live.each(['snapshot', 'event'] as const)(
+  'persist committed %s writes flushes throttled data after an already pending asynchronous write',
+  function*(strategy, { expect }) {
+    const writes: Array<{ value: string; resolve: () => void }> = []
+    const storage: StateStorage = {
+      getItem: () => null,
+      removeItem: () => {},
+      setItem: (_name, value) => {
+        const { promise, resolve } = Promise.withResolvers<void>()
+        writes.push({ value, resolve })
+        return promise
+      },
+    }
+    const store = createStore({
+      context: { count: 0 },
+      on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
+    }).with(persist({ name: 'throttled', storage, strategy, throttle: 100 }))
+
+    store.trigger.inc()
+    yield* eventually(() => writes.length >= 1)
+
+    store.trigger.inc()
+    const flushed = flushStorage(store)
+
+    const firstExpected = strategy === 'snapshot'
+      ? { context: { count: 1 }, version: 0 }
+      : { events: [{ type: 'inc' }], version: 0, checkpoint: null }
+
+    yield* expect(writes.map((write) => JSON.parse(write.value))).toEqual([
+      firstExpected,
+    ])
+
+    const firstWrite = writes[0]
+    if (firstWrite === undefined) {
+      throw new Error('expected a first write')
+    }
+    firstWrite.resolve()
+    yield* eventually(() => writes.length >= 2)
+
+    const secondWrite = writes[1]
+    if (secondWrite === undefined) {
+      throw new Error('expected a second write')
+    }
+
+    const secondExpected = strategy === 'snapshot'
+      ? { context: { count: 2 }, version: 0 }
+      : {
+        events: [{ type: 'inc' }, { type: 'inc' }],
+        version: 0,
+        checkpoint: null,
+      }
+
+    yield* expect({
+      count: writes.length,
+      second: JSON.parse(secondWrite.value),
+    }).toEqual({ count: 2, second: secondExpected })
+
+    secondWrite.resolve()
+    const flushedValue = yield* Effect.promise(() => Promise.resolve(flushed))
+    yield* realDelay(150)
+
+    yield* expect({
+      flushedValue,
+      writes: writes.map((write) => JSON.parse(write.value)),
+    }).toEqual({
+      flushedValue: undefined,
+      writes: [firstExpected, secondExpected],
+    })
+  },
+)
+
+it.live.each(
+  [
+    ['snapshot', false],
+    ['snapshot', true],
+    ['event', false],
+    ['event', true],
+  ] as const,
+)(
+  'persist committed %s writes orders asynchronous writes and recovers after failure: %s',
+  function*([strategy, failFirst], { expect }) {
+    const writes: Array<{
+      value: string
+      resolve: () => void
+      reject: (error: unknown) => void
+    }> = []
+    let saved: string | null = null
+    const onDone = vi.fn()
+    const onError = vi.fn()
+    const storage: StateStorage = {
+      getItem: () => saved,
+      removeItem: () => {},
+      setItem: (_key, value) => {
+        const { promise, resolve, reject } = Promise.withResolvers<void>()
+        writes.push({
+          value,
+          resolve: () => {
+            saved = value
+            resolve()
+          },
+          reject,
+        })
+        return promise
+      },
+    }
+    const store = createStore({
+      context: { count: 0 },
+      on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
+    }).with(
+      persist({ name: 'ordered', strategy, storage, onDone, onError }),
+    )
+
+    store.trigger.inc()
+    store.trigger.inc()
+    const flushed = flushStorage(store)
+    const completed = vi.fn()
+    void Promise.resolve(flushed).then(completed)
+
+    const firstWrite = writes[0]
+    if (firstWrite === undefined) {
+      throw new Error('expected a first write')
+    }
+    const firstExpected = strategy === 'snapshot'
+      ? { context: { count: 1 }, version: 0 }
+      : { events: [{ type: 'inc' }], version: 0, checkpoint: null }
+
+    yield* expect({
+      pending: writes.map((write) => JSON.parse(write.value)),
+      flushedIsPromise: flushed instanceof Promise,
+    }).toEqual({ pending: [firstExpected], flushedIsPromise: true })
+
+    const writtenError = new Error('write failed')
+    if (failFirst) {
+      firstWrite.reject(writtenError)
+    } else {
+      firstWrite.resolve()
+    }
+    yield* eventually(() => writes.length >= 2)
+
+    const secondWrite = writes[1]
+    if (secondWrite === undefined) {
+      throw new Error('expected a second write')
+    }
+    const secondExpected = strategy === 'snapshot'
+      ? { context: { count: 2 }, version: 0 }
+      : {
+        events: [{ type: 'inc' }, { type: 'inc' }],
+        version: 0,
+        checkpoint: null,
+      }
+
+    yield* expect({
+      completed: completed.mock.calls,
+      second: JSON.parse(secondWrite.value),
+    }).toEqual({ completed: [], second: secondExpected })
+
+    secondWrite.resolve()
+    const flushedValue = yield* Effect.promise(() => Promise.resolve(flushed))
+
+    const value = JSON.parse(saved!)
+    const firstCall = strategy === 'snapshot' ? [{ count: 1 }] : [[{ type: 'inc' }]]
+    const secondCall = strategy === 'snapshot'
+      ? [{ count: 2 }]
+      : [[{ type: 'inc' }, { type: 'inc' }]]
+
+    yield* expect({
+      value,
+      flushedValue,
+      onErrorCalls: onError.mock.calls,
+      onDoneCalls: onDone.mock.calls,
+    }).toEqual({
+      value: secondExpected,
+      flushedValue: undefined,
+      onErrorCalls: failFirst ? [[writtenError]] : [],
+      onDoneCalls: failFirst ? [secondCall] : [firstCall, secondCall],
+    })
   },
 )

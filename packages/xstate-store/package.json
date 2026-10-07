@@ -43,6 +43,7 @@
     "@systemfsoftware/vitest": "catalog:",
     "@systemfsoftware/xstate": "workspace:^",
     "@types/node": "catalog:",
+    "effect": "catalog:",
     "happy-dom": "20.14.5",
     "immer": "10.2.0",
     "react": "catalog:",

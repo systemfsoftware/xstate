@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it, vi } from '@systemfsoftware/vitest'
 import { createStore } from './index.js'
 
 interface TestContext {
@@ -13,7 +13,7 @@ interface TestContext {
 }
 
 describe('select', () => {
-  it('should get current value', () => {
+  it('should get current value', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -32,10 +32,10 @@ describe('select', () => {
     })
 
     const name = store.select((state) => state.user.name).get()
-    expect(name).toBe('John')
+    yield* expect(name).toBe('John')
   })
 
-  it('should subscribe to changes', () => {
+  it('should subscribe to changes', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -57,11 +57,10 @@ describe('select', () => {
     store.select((state) => state.user.name).subscribe(callback)
     store.send({ type: 'UPDATE_NAME', name: 'Jane' })
 
-    expect(callback).toHaveBeenCalledTimes(1)
-    expect(callback).toHaveBeenCalledWith('Jane')
+    yield* expect(callback.mock.calls).toEqual([['Jane']])
   })
 
-  it('should not notify if selected value has not changed', () => {
+  it('should not notify if selected value has not changed', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -83,10 +82,10 @@ describe('select', () => {
     store.select((state) => state.user.name).subscribe(callback)
     store.send({ type: 'UPDATE_THEME', theme: 'light' })
 
-    expect(callback).not.toHaveBeenCalled()
+    yield* expect(callback.mock.calls).toEqual([])
   })
 
-  it('should support custom equality function', () => {
+  it('should support custom equality function', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -114,13 +113,16 @@ describe('select', () => {
     store.select(selector, equalityFn).subscribe(callback)
 
     store.send({ type: 'UPDATE_THEME', theme: 'light' })
-    expect(callback).not.toHaveBeenCalled()
+    const callsAfterTheme = [...callback.mock.calls]
 
     store.send({ type: 'UPDATE_NAME', name: 'Jane' })
-    expect(callback).toHaveBeenCalledTimes(1)
+    yield* expect({ callsAfterTheme, callsAfterName: callback.mock.calls }).toEqual({
+      callsAfterTheme: [],
+      callsAfterName: [[{ name: 'Jane', theme: 'light' }]],
+    })
   })
 
-  it('should unsubscribe correctly', () => {
+  it('should unsubscribe correctly', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -145,10 +147,10 @@ describe('select', () => {
     subscription.unsubscribe()
     store.send({ type: 'UPDATE_NAME', name: 'Jane' })
 
-    expect(callback).not.toHaveBeenCalled()
+    yield* expect(callback.mock.calls).toEqual([])
   })
 
-  it('should handle updates with multiple subscribers', () => {
+  it('should handle updates with multiple subscribers', function*({ expect }) {
     interface PositionContext {
       position: {
         x: number
@@ -200,44 +202,27 @@ describe('select', () => {
       position: { x: 100, y: 200 },
     })
 
-    // Verify render callback received full position update
-    expect(renderCallback).toHaveBeenCalledTimes(1)
-    expect(renderCallback).toHaveBeenCalledWith({ x: 100, y: 200 })
-
-    // Verify logger callback received only x position
-    expect(loggerCallback).toHaveBeenCalledTimes(1)
-    expect(loggerCallback).toHaveBeenCalledWith(100)
-
     // Simulate another update
     store.trigger.positionUpdated({
       position: { x: 150, y: 300 },
     })
-
-    expect(renderCallback).toHaveBeenCalledTimes(2)
-    expect(renderCallback).toHaveBeenLastCalledWith({ x: 150, y: 300 })
-    expect(loggerCallback).toHaveBeenCalledTimes(2)
-    expect(loggerCallback).toHaveBeenLastCalledWith(150)
 
     // Simulate changing only the y position
     store.trigger.positionUpdated({
       position: { x: 150, y: 400 },
     })
 
-    expect(renderCallback).toHaveBeenCalledTimes(3)
-    expect(renderCallback).toHaveBeenLastCalledWith({ x: 150, y: 400 })
-
-    // loggerCallback should not have been called
-    expect(loggerCallback).toHaveBeenCalledTimes(2)
-
     // Simulate changing only the user
     store.trigger.userUpdated({
       user: { name: 'Jane', age: 25 },
     })
 
-    // renderCallback should not have been called
-    expect(renderCallback).toHaveBeenCalledTimes(3)
-
-    // loggerCallback should not have been called
-    expect(loggerCallback).toHaveBeenCalledTimes(2)
+    yield* expect({
+      render: renderCallback.mock.calls,
+      logger: loggerCallback.mock.calls,
+    }).toEqual({
+      render: [[{ x: 100, y: 200 }], [{ x: 150, y: 300 }], [{ x: 150, y: 400 }]],
+      logger: [[100], [150]],
+    })
   })
 })

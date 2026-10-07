@@ -1,11 +1,12 @@
+import { describe, it, vi } from '@systemfsoftware/vitest'
 import { createActor, executeEffects, initialTransition, transition } from '@systemfsoftware/xstate'
-import { describe, expect, it, vi } from 'vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import { fromStore } from '../src/index.js'
 import type { StoreEffectEnqueue } from '../src/index.js'
 
 describe('fromStore', () => {
-  it('creates an actor from store logic with input', () => {
+  it('creates an actor from store logic with input', function*({ expect }) {
     const storeLogic = fromStore({
       context: (count: number) => ({ count }),
       on: {
@@ -26,10 +27,10 @@ describe('fromStore', () => {
 
     actor.send({ type: 'inc', by: 8 })
 
-    expect(actor.getSnapshot().context.count).toEqual(50)
+    yield* expect(actor.getSnapshot().context.count).toEqual(50)
   })
 
-  it('emits events', () => {
+  it('emits events', function*({ expect }) {
     const spy = vi.fn()
 
     const storeLogic = fromStore({
@@ -60,35 +61,42 @@ describe('fromStore', () => {
 
     actor.send({ type: 'inc', by: 8 })
 
-    expect(actor.getSnapshot().context.count).toEqual(50)
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy).toHaveBeenCalledWith({ type: 'increased', upBy: 8 })
-  })
-
-  it('enq.getSnapshot() in a sync effect reflects the post-transition state (matches createStore)', () => {
-    let seen: number | undefined
-
-    const storeLogic = fromStore({
-      context: (_: void) => ({ count: 0 }),
-      on: {
-        inc: (ctx, _, enq) => {
-          enq.effect(
-            ({ getSnapshot }: StoreEffectEnqueue<{ count: number }>) => {
-              seen = getSnapshot().context.count
-            },
-          )
-          return { ...ctx, count: ctx.count + 1 }
-        },
-      },
+    yield* expect({
+      count: actor.getSnapshot().context.count,
+      calls: spy.mock.calls,
+    }).toEqual({
+      count: 50,
+      calls: [[{ type: 'increased', upBy: 8 }]],
     })
-
-    const actor = createActor(storeLogic).start()
-    actor.send({ type: 'inc' })
-
-    expect(seen).toEqual(1)
   })
 
-  it('enq.getSnapshot() in an async effect reflects the latest committed state', async () => {
+  it(
+    'enq.getSnapshot() in a sync effect reflects the post-transition state (matches createStore)',
+    function*({ expect }) {
+      let seen: number | undefined
+
+      const storeLogic = fromStore({
+        context: (_: void) => ({ count: 0 }),
+        on: {
+          inc: (ctx, _, enq) => {
+            enq.effect(
+              ({ getSnapshot }: StoreEffectEnqueue<{ count: number }>) => {
+                seen = getSnapshot().context.count
+              },
+            )
+            return { ...ctx, count: ctx.count + 1 }
+          },
+        },
+      })
+
+      const actor = createActor(storeLogic).start()
+      actor.send({ type: 'inc' })
+
+      yield* expect(seen).toEqual(1)
+    },
+  )
+
+  it.live('enq.getSnapshot() in an async effect reflects the latest committed state', function*({ expect }) {
     let seen: number | undefined
 
     const storeLogic = fromStore({
@@ -111,12 +119,12 @@ describe('fromStore', () => {
     actor.send({ type: 'start' }) // count -> 1
     actor.send({ type: 'bump' }) // count -> 11 before the async effect resumes
 
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 10)))
 
-    expect(seen).toEqual(11)
+    yield* expect(seen).toEqual(11)
   })
 
-  it('routes effect sends through a custom transition runtime', async () => {
+  it('routes effect sends through a custom transition runtime', function*({ expect }) {
     let effectCount: number | undefined
     const storeLogic = fromStore({
       context: { count: 0 },
@@ -137,17 +145,18 @@ describe('fromStore', () => {
     const [, effects] = transition(storeLogic, initial, { type: 'inc' })
     const sent: string[] = []
 
-    await executeEffects(effects, {
-      sendEvent: (_source, _target, event) => {
-        sent.push(event.type)
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        sendEvent: (_source, _target, event) => {
+          sent.push(event.type)
+        },
+      })
+    )
 
-    expect(sent).toEqual(['dec'])
-    expect(effectCount).toBe(1)
+    yield* expect({ sent, effectCount }).toEqual({ sent: ['dec'], effectCount: 1 })
   })
 
-  it('routes effect triggers through a custom transition runtime', async () => {
+  it('routes effect triggers through a custom transition runtime', function*({ expect }) {
     const storeLogic = fromStore({
       context: { count: 0 },
       on: {
@@ -164,12 +173,14 @@ describe('fromStore', () => {
     const [, effects] = transition(storeLogic, initial, { type: 'inc' })
     const sent: string[] = []
 
-    await executeEffects(effects, {
-      sendEvent: (_source, _target, event) => {
-        sent.push(event.type)
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        sendEvent: (_source, _target, event) => {
+          sent.push(event.type)
+        },
+      })
+    )
 
-    expect(sent).toEqual(['dec'])
+    yield* expect(sent).toEqual(['dec'])
   })
 })
