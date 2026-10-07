@@ -62,21 +62,54 @@
             inherit (importPnpmLock.legacyPackages.${system}) importPnpmLock;
             inherit nodejs pnpm;
           };
-          stryker-js = pkgs.callPackage ./nix/stryker-js.nix {
-            inherit mkPnpmStore sfs-deps nodejs pnpm;
-            src = stryker-js-effect;
+          # Every package this flake builds from source, keyed by instance name
+          # (the overlay directory under nix/). The source-deps directory and
+          # the lock apps are generated from this map, so a new instance is one
+          # entry here plus its overlay directory of manifest data.
+          from-source = {
+            stryker-js = pkgs.callPackage ./nix/from-source.nix {
+              inherit mkPnpmStore nodejs pnpm;
+              pname = "stryker-js";
+              src = stryker-js-effect;
+              overlay = ./nix/stryker-js;
+              deps = sfs-deps;
+              packed = [
+                { name = "@systemfsoftware/stryker-ignorer-interface"; dir = "packages/ignorers/interface"; }
+                { name = "@systemfsoftware/stryker-framework-interface"; dir = "packages/frameworks/interface"; }
+                { name = "@systemfsoftware/stryker-ignorer-kit"; dir = "packages/ignorers/kit"; }
+                { name = "@systemfsoftware/stryker-ignorer-effect-schema-declarations"; dir = "packages/ignorers/effect-schema-declarations"; }
+                { name = "@systemfsoftware/stryker-js-plugin-interface"; dir = "packages/stryker-js-plugin-interface"; }
+                { name = "@systemfsoftware/stryker-js-cli-contract"; dir = "packages/stryker-js-cli-contract"; }
+                { name = "@systemfsoftware/stryker-js-plugin-runtime"; dir = "packages/stryker-js-plugin-runtime"; }
+                { name = "@systemfsoftware/stryker-js-instrumenter"; dir = "packages/stryker-js-instrumenter"; }
+                { name = "@systemfsoftware/stryker-js-html-reporter"; dir = "packages/stryker-js-html-reporter"; }
+                { name = "@systemfsoftware/stryker-js-typescript-checker"; dir = "packages/stryker-js-typescript-checker"; }
+                { name = "@systemfsoftware/stryker-js-vitest-runner"; dir = "packages/stryker-js-vitest-runner"; }
+                { name = "@systemfsoftware/stryker-js"; dir = "packages/stryker-js"; }
+              ];
+              extraStoreFiles = { patches = "${stryker-js-effect}/patches"; };
+            };
           };
+          # One directory carries every tarball a workspace here installs: the
+          # systemfsoftware flake's workspace tarballs and the tarballs this
+          # flake builds from source. Every lockfile names them
+          # file:.sfs-deps/*.tgz, so one copy step, one store entry and one
+          # shellHook line carry the whole set.
+          source-deps = pkgs.runCommand "xstate-sfs-deps" { } ''
+            mkdir -p "$out"
+            cp -r ${sfs-deps}/. "$out"/
+            ${lib.concatMapStrings (instance: ''
+              cp -r ${instance.tarballs}/. "$out"/
+            '') (lib.attrValues from-source)}
+          '';
           # One tarball per public workspace package, plus workspace-tarballs
-          # (all of them and index.json). The lockfile names the systemfsoftware
-          # tarballs as file:.sfs-deps/*.tgz and the built Stryker tarballs as
-          # file:.stryker-deps/*.tgz, so the builder's source carries both
-          # beside the checkout. The sandbox installs from the hashless store
-          # below, so the builder's own whole-store pnpm-store stays out.
+          # (all of them and index.json), beside the .sfs-deps set every
+          # lockfile installs from. The sandbox installs from the hashless
+          # store below, so the builder's own whole-store pnpm-store stays out.
           workspace-source = pkgs.runCommand "xstate-workspace-source" { } ''
             cp -r ${self} "$out"
             chmod -R u+w "$out"
-            cp -r ${sfs-deps} "$out/.sfs-deps"
-            cp -r ${stryker-js.tarballs} "$out/.stryker-deps"
+            cp -r ${source-deps} "$out/.sfs-deps"
             # git carries no empty directory; the builder reads packages/ for the workspace glob.
             mkdir -p "$out/packages"
           '';
@@ -89,7 +122,7 @@
             # change moves this hash. A store that already holds the old output
             # reuses it silently; `nix build --rebuild` on xstate-pnpm-deps.drv
             # refetches and prints the new value.
-            hash = "sha256-pwb8LNSi0p5gH7rlvWKncoaY7njC63wWFlRaCYbLw1Q=";
+            hash = "sha256-hoF2oVu6R0O+R/417wog870kttZBVkMTISdXbCpgEqs=";
           }) [ "pnpm-store" ];
           unwrapped = pkgs.callPackage ./nix/comment-checker.nix {
             hashes = "${comment-checker}/nix/release-hashes.json";
@@ -101,17 +134,19 @@
           };
           sandbox = pkgs.callPackage "${sandbox-source}/default.nix" { };
           own = {
-            inherit sfs-deps sandbox;
-            stryker-tarballs = stryker-js.tarballs;
-            stryker-js-source = stryker-js.source;
+            inherit sfs-deps source-deps sandbox;
+            stryker-tarballs = from-source.stryker-js.tarballs;
+            stryker-js-source = from-source.stryker-js.source;
+            # The lock apps in `apps` are generated from this, so an instance
+            # listed in from-source needs no second entry there.
+            from-source-instances = lib.mapAttrs (_: instance: { inherit (instance) source; }) from-source;
             dprint = pkgs.callPackage ./nix/dprint.nix { dprintConfig = ./dprint.json; };
             pnpm-store = mkPnpmStore {
               pname = "xstate";
               lockFile = ./pnpm-lock.yaml;
               workspaceFile = ./pnpm-workspace.yaml;
               files = {
-                ".sfs-deps" = sfs-deps;
-                ".stryker-deps" = stryker-js.tarballs;
+                ".sfs-deps" = source-deps;
               };
             };
             sandbox-proofs = pkgs.callPackage "${sandbox-source}/proofs.nix" { inherit sandbox; };
@@ -145,9 +180,8 @@
             shellHook = ''
               root="$(git rev-parse --show-toplevel)"
               git config core.hooksPath .husky
-              rm -rf "$root/.sfs-deps" "$root/.stryker-deps"
-              cp -r --no-preserve=mode ${own.sfs-deps} "$root/.sfs-deps"
-              cp -r --no-preserve=mode ${own.stryker-tarballs} "$root/.stryker-deps"
+              rm -rf "$root/.sfs-deps"
+              cp -r --no-preserve=mode ${own.source-deps} "$root/.sfs-deps"
             '';
           };
         });
@@ -155,19 +189,23 @@
       apps = forEachSystem (pkgs:
         let
           own = self.packages.${pkgs.stdenv.hostPlatform.system};
-        in {
-          stryker-js-lock = {
+          # One lock app per from-source instance: the same regenerate script
+          # for all of them, parameterized by the instance name.
+          lockApp = name: instance: {
             type = "app";
             program = "${pkgs.writeShellApplication {
-              name = "stryker-js-lock";
+              name = "${name}-lock";
               runtimeInputs = [ own.sandbox pkgs.pnpm_12 pkgs.gawk pkgs.coreutils pkgs.bash ];
               text = ''
-                export STRYKER_JS_SOURCE=${own.stryker-js-source}
-                export STRYKER_JS_ASSERT=${./nix/stryker-js/assert-local-sfs.awk}
-                exec ${./nix/stryker-js/regenerate-lockfile.sh} "$@"
+                export FROM_SOURCE_INSTANCE=${name}
+                export FROM_SOURCE_SOURCE=${instance.source}
+                export FROM_SOURCE_ASSERT=${./nix/from-source/assert-local-sfs.awk}
+                exec ${./nix/from-source/regenerate-lockfile.sh} "$@"
               '';
-            }}/bin/stryker-js-lock";
+            }}/bin/${name}-lock";
           };
-        });
+        in
+        lib.mapAttrs' (name: instance: lib.nameValuePair "${name}-lock" (lockApp name instance))
+          own.from-source-instances);
     };
 }

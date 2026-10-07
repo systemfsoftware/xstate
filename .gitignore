@@ -11,5 +11,4 @@ reports/
 result
 result-*
 .sfs-deps
-.stryker-deps
 .cache/

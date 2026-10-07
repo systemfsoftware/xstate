@@ -2,9 +2,10 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-dest=${1:-nix/stryker-js/pnpm-lock.yaml}
-source_path=${STRYKER_JS_SOURCE:?set STRYKER_JS_SOURCE, or run nix run .#stryker-js-lock}
-assert_file=${STRYKER_JS_ASSERT:-$here/assert-local-sfs.awk}
+instance=${FROM_SOURCE_INSTANCE:?set FROM_SOURCE_INSTANCE, or run nix run .#<instance>-lock}
+dest=${1:-nix/$instance/pnpm-lock.yaml}
+source_path=${FROM_SOURCE_SOURCE:?set FROM_SOURCE_SOURCE, or run nix run .#<instance>-lock}
+assert_file=${FROM_SOURCE_ASSERT:-$here/assert-local-sfs.awk}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
