@@ -692,7 +692,7 @@ export const testPaths: {
           ? provideActors(
             baseLogic,
             Object.fromEntries(
-              outcomeSources.map((src) => [src, createOutcomeStub(src)]),
+              outcomeSources.map((src) => [src, createOutcomeStub(src, undefined)]),
             ),
           )
           : baseLogic
