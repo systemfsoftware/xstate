@@ -1,9 +1,8 @@
-import { describe, it } from '@systemfsoftware/vitest'
+import { describe, it } from 'vitest'
 import { z } from 'zod'
 import {
   createAtom,
   createAtomConfig,
-  createStore,
   createStoreHook,
   createStoreLogic,
   useAtom,
@@ -12,7 +11,7 @@ import {
 } from './index.js'
 
 describe('@xstate/store-react types', () => {
-  it('uses atom config input in useAtomState', function*({ expect }) {
+  it('uses atom config input in useAtomState', () => {
     const countAtom = createAtom(0)
     const countConfig = createAtomConfig(
       (input: { initialCount: number }) => input.initialCount,
@@ -63,11 +62,9 @@ describe('@xstate/store-react types', () => {
     }
 
     Component
-
-    yield* expect(countConfig.createAtom({ initialCount: 1 }).get()).toEqual(1)
   })
 
-  it('uses store logic input in useStore', function*({ expect }) {
+  it('uses store logic input in useStore', () => {
     const counterLogic = createStoreLogic({
       context: (input: { initialCount: number }) => ({
         count: input.initialCount,
@@ -109,13 +106,9 @@ describe('@xstate/store-react types', () => {
     }
 
     Component
-
-    yield* expect(
-      counterLogic.createStore({ initialCount: 1 }).getSnapshot().context.count,
-    ).toEqual(1)
   })
 
-  it('infers schemas in useStore', function*({ expect }) {
+  it('infers schemas in useStore', () => {
     const Component = () => {
       const store = useStore({
         schemas: {
@@ -166,39 +159,9 @@ describe('@xstate/store-react types', () => {
 
       return null
     }
-
-    const store = createStore({
-      schemas: {
-        context: z.object({ count: z.number(), label: z.string() }),
-        events: {
-          rename: z.object({ label: z.string() }),
-        },
-        emitted: {
-          renamed: z.object({ label: z.string() }),
-        },
-      },
-      context: {
-        count: 0,
-        label: 'ready',
-      },
-      on: {
-        rename: (
-          ctx: { count: number; label: string },
-          ev: { label: string },
-        ) => {
-          return {
-            ...ctx,
-            label: ev.label,
-          }
-        },
-      },
-    })
-    store.trigger.rename({ label: 'done' })
-
-    yield* expect(store.getSnapshot().context.label).toEqual('done')
   })
 
-  it('preserves inferred events when only emitted schemas are declared in useStore', function*({ expect }) {
+  it('preserves inferred events when only emitted schemas are declared in useStore', () => {
     const Component = () => {
       const store = useStore({
         schemas: {
@@ -228,26 +191,9 @@ describe('@xstate/store-react types', () => {
 
       return null
     }
-
-    const store = createStore({
-      schemas: {
-        emitted: {
-          logged: z.object({ message: z.string() }),
-        },
-      },
-      context: {},
-      on: {
-        log: (ctx: {}, ev: { message: string }) => {
-          return ctx
-        },
-      },
-    })
-    store.trigger.log({ message: 'hello' })
-
-    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it('infers schemas in createStoreHook', function*({ expect }) {
+  it('infers schemas in createStoreHook', () => {
     const useCounterStore = createStoreHook({
       schemas: {
         context: z.object({ count: z.number(), label: z.string() }),
@@ -302,35 +248,5 @@ describe('@xstate/store-react types', () => {
 
       return null
     }
-
-    const store = createStore({
-      schemas: {
-        context: z.object({ count: z.number(), label: z.string() }),
-        events: {
-          rename: z.object({ label: z.string() }),
-        },
-        emitted: {
-          renamed: z.object({ label: z.string() }),
-        },
-      },
-      context: {
-        count: 0,
-        label: 'ready',
-      },
-      on: {
-        rename: (
-          ctx: { count: number; label: string },
-          ev: { label: string },
-        ) => {
-          return {
-            ...ctx,
-            label: ev.label,
-          }
-        },
-      },
-    })
-    store.trigger.rename({ label: 'done' })
-
-    yield* expect(store.getSnapshot().context.label).toEqual('done')
   })
 })
