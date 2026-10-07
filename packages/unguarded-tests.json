@@ -1,12 +1,5 @@
 {
   "files": [
-    "packages/xstate-effect/src/actor.test.ts",
-    "packages/xstate-effect/src/atom.test.ts",
-    "packages/xstate-effect/src/index.test.ts",
-    "packages/xstate-effect/src/persistence.test.ts",
-    "packages/xstate-effect/src/requirements.types.test.ts",
-    "packages/xstate-effect/src/runtime.test.ts",
-    "packages/xstate-effect/src/state.test.ts",
     "packages/xstate-react/test/createActorContext.test.tsx",
     "packages/xstate-react/test/fastRefresh.production.test.tsx",
     "packages/xstate-react/test/fastRefresh.test.tsx",
