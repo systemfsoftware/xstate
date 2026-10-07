@@ -65,7 +65,7 @@
   outputs = { self, nixpkgs, comment-checker, pnpm-release-management, release-tools, systemfsoftware, stryker-js-effect, are-the-types-wrong-effect, systemfsoftware-effect-cell-types-7, importPnpmLock }:
     let
       lib = nixpkgs.lib;
-      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+      systems = [ "x86_64-linux" "aarch64-linux" ];
       forEachSystem = fn: lib.genAttrs systems (system: fn nixpkgs.legacyPackages.${system});
     in
     {
