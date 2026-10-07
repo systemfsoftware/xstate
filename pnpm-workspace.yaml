@@ -27,19 +27,19 @@ catalog:
   "@systemfsoftware/oxlint-plugin-effect-platform": file:.sfs-deps/oxlint-plugin-effect-platform-2.0.0.tgz
   "@systemfsoftware/oxlint-plugin-effect-schema": file:.sfs-deps/oxlint-plugin-effect-schema-6.0.0.tgz
   "@systemfsoftware/oxlint-plugin-test-discipline": file:.sfs-deps/oxlint-plugin-test-discipline-5.0.0.tgz
-  "@systemfsoftware/stryker-framework-interface": file:.stryker-deps/stryker-framework-interface-0.0.0.tgz
-  "@systemfsoftware/stryker-ignorer-effect-schema-declarations": file:.stryker-deps/stryker-ignorer-effect-schema-declarations-0.2.0.tgz
-  "@systemfsoftware/stryker-ignorer-interface": file:.stryker-deps/stryker-ignorer-interface-0.1.1.tgz
-  "@systemfsoftware/stryker-ignorer-kit": file:.stryker-deps/stryker-ignorer-kit-0.1.1.tgz
-  "@systemfsoftware/stryker-js": file:.stryker-deps/stryker-js-17.0.2.tgz
-  "@systemfsoftware/stryker-js-cli-contract": file:.stryker-deps/stryker-js-cli-contract-0.3.1.tgz
-  "@systemfsoftware/stryker-js-html-reporter": file:.stryker-deps/stryker-js-html-reporter-6.0.2.tgz
-  "@systemfsoftware/stryker-js-instrumenter": file:.stryker-deps/stryker-js-instrumenter-12.1.1.tgz
-  "@systemfsoftware/stryker-js-plugin-interface": file:.stryker-deps/stryker-js-plugin-interface-14.0.0.tgz
-  "@systemfsoftware/stryker-js-plugin-runtime": file:.stryker-deps/stryker-js-plugin-runtime-7.0.2.tgz
-  "@systemfsoftware/stryker-js-typescript-checker": file:.stryker-deps/stryker-js-typescript-checker-8.2.1.tgz
-  "@systemfsoftware/stryker-js-vitest-runner": file:.stryker-deps/stryker-js-vitest-runner-8.1.1.tgz
-  "@systemfsoftware/stryker-js-vm-runner": file:.stryker-deps/stryker-js-vitest-runner-8.1.1.tgz
+  "@systemfsoftware/stryker-framework-interface": file:.sfs-deps/stryker-framework-interface-0.0.0.tgz
+  "@systemfsoftware/stryker-ignorer-effect-schema-declarations": file:.sfs-deps/stryker-ignorer-effect-schema-declarations-0.2.0.tgz
+  "@systemfsoftware/stryker-ignorer-interface": file:.sfs-deps/stryker-ignorer-interface-0.1.1.tgz
+  "@systemfsoftware/stryker-ignorer-kit": file:.sfs-deps/stryker-ignorer-kit-0.1.1.tgz
+  "@systemfsoftware/stryker-js": file:.sfs-deps/stryker-js-17.0.2.tgz
+  "@systemfsoftware/stryker-js-cli-contract": file:.sfs-deps/stryker-js-cli-contract-0.3.1.tgz
+  "@systemfsoftware/stryker-js-html-reporter": file:.sfs-deps/stryker-js-html-reporter-6.0.2.tgz
+  "@systemfsoftware/stryker-js-instrumenter": file:.sfs-deps/stryker-js-instrumenter-12.1.1.tgz
+  "@systemfsoftware/stryker-js-plugin-interface": file:.sfs-deps/stryker-js-plugin-interface-14.0.0.tgz
+  "@systemfsoftware/stryker-js-plugin-runtime": file:.sfs-deps/stryker-js-plugin-runtime-7.0.2.tgz
+  "@systemfsoftware/stryker-js-typescript-checker": file:.sfs-deps/stryker-js-typescript-checker-8.2.1.tgz
+  "@systemfsoftware/stryker-js-vitest-runner": file:.sfs-deps/stryker-js-vitest-runner-8.1.1.tgz
+  "@systemfsoftware/stryker-js-vm-runner": file:.sfs-deps/stryker-js-vitest-runner-8.1.1.tgz
   "@systemfsoftware/trace-spec": file:.sfs-deps/trace-spec-1.0.1.tgz
   "@systemfsoftware/trace-taxonomy": file:.sfs-deps/trace-taxonomy-1.0.0.tgz
   "@systemfsoftware/tsconfig": file:.sfs-deps/tsconfig-2.0.1.tgz

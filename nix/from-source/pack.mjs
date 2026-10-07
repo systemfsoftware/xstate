@@ -10,7 +10,7 @@ if (!dir || !out) throw new Error('usage: pack.mjs <package-dir> <out-dir>')
 
 const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
 const unscoped = manifest.name.replace(/^@[^/]+\//, '')
-const staged = mkdtempSync(join(tmpdir(), 'stryker-pack-'))
+const staged = mkdtempSync(join(tmpdir(), 'from-source-pack-'))
 try {
   execFileSync('pnpm', ['pack', '--pack-destination', staged], { cwd: dir, stdio: 'inherit' })
   const files = readdirSync(staged)
