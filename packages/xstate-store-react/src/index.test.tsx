@@ -227,14 +227,18 @@ describe('@xstate/store-react', () => {
       }
 
       const { container, unmount } = render(<Counter />)
-      const view = within(container)
+      const onSubscribe: string[] = []
+      const afterClick: string[] = []
 
-      const onSubscribe = [...events]
+      try {
+        const view = within(container)
+        onSubscribe.push(...events)
 
-      fireEvent.click(view.getByTestId('count'))
-      const afterClick = [...events]
-
-      unmount()
+        fireEvent.click(view.getByTestId('count'))
+        afterClick.push(...events)
+      } finally {
+        unmount()
+      }
 
       yield* expect({
         onSubscribe,
@@ -590,11 +594,9 @@ it('honors a comparator when the selector is omitted', function*({ expect }) {
     act(() => atom.set({ count: 1, ignored: 1 }))
 
     yield* expect({
-      initialRenders,
       rendersAfterIgnoredChange,
       text: view.getByText('1').textContent,
     }).toEqual({
-      initialRenders,
       rendersAfterIgnoredChange: initialRenders,
       text: '1',
     })
