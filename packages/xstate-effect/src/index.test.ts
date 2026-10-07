@@ -621,10 +621,12 @@ describe('@xstate/effect', (it) => {
       }),
     )
 
-    yield* expect(errors).toSatisfy(
-      (all: readonly unknown[]) => all.length === 1 && all[0] instanceof Error && /Invalid output/.test(all[0].message),
-      'exactly one error saying the output is invalid',
-    )
+    const [first] = errors
+    yield* expect({
+      count: errors.length,
+      isError: first instanceof Error,
+      message: first instanceof Error ? first.message : undefined,
+    }).toEqual({ count: 1, isError: true, message: expect.stringMatching(/Invalid output/) })
   })
 
   it('runs setupEffect actions inside the host Effect context', function*({ expect }) {

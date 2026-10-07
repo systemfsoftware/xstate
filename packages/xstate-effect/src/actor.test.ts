@@ -455,9 +455,9 @@ describe('inspect', (it) => {
       }),
     )
 
-    yield* expect(events[0]).toMatchObject({
-      type: '@xstate.transition',
-      event: { type: 'INCREMENT' },
+    yield* expect({ types: events.map((event) => event.type), first: events[0] }).toMatchObject({
+      types: ['@xstate.transition'],
+      first: { event: { type: 'INCREMENT' } },
     })
   })
 })
