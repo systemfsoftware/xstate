@@ -87,8 +87,12 @@ in
         pnpm --filter ${lib.escapeShellArg p.name} run build
       '') (built ++ packed)}
       mkdir -p "$out"
+      # pnpm pack composes CHANGELOG.md from the registry's published history
+      # and ignores offline, so with network access (nix on Darwin builds
+      # unsandboxed) the bytes would follow the registry. A closed port makes
+      # the tarball depend on the pinned source alone, as a sandboxed build.
       ${lib.concatMapStrings (p: ''
-        node ${helpers}/pack.mjs ${lib.escapeShellArg p.dir} "$out"
+        pnpm_config_registry=http://127.0.0.1:9/ node ${helpers}/pack.mjs ${lib.escapeShellArg p.dir} "$out"
       '') packed}
       popd
       runHook postBuild
