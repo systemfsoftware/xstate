@@ -1,6 +1,6 @@
+import { describe, expectTypeOf, it } from '@systemfsoftware/vitest'
 import { type AnyActorRef, createMachine, type SnapshotFrom, types } from '@systemfsoftware/xstate'
-import { Cause, Clock, Duration, Effect, Exit, Fiber, Scope, Stream } from 'effect'
-import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
+import { Cause, Clock, Deferred, Duration, Effect, Fiber, Stream } from 'effect'
 import {
   ActorFailedError,
   ActorStoppedError,
@@ -15,43 +15,17 @@ import {
   waitFor,
 } from './index.js'
 
-/**
- * Polls until `predicate` holds. The actor processes events on its own fiber,
- * so tests wait for the condition they assert on.
- */
-const until = async (predicate: () => boolean, timeoutMs = 1000) => {
-  const deadline = (await Effect.runPromise(Clock.currentTimeMillis)) + timeoutMs
-  while (!predicate()) {
-    if ((await Effect.runPromise(Clock.currentTimeMillis)) > deadline) {
-      throw new Error('Timed out waiting for condition')
+const until = (predicate: () => boolean, timeoutMs = 1000) =>
+  Effect.gen(function*() {
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
+    while (!predicate()) {
+      if ((yield* Clock.currentTimeMillis) > deadline) {
+        return yield* Effect.die(new Error('Timed out waiting for condition'))
+      }
+      yield* Effect.sleep(1)
     }
-    await Effect.runPromise(Effect.sleep(1))
-  }
-}
+  })
 
-let scopes: Scope.Closeable[] = []
-
-afterEach(async () => {
-  const pending = scopes
-  scopes = []
-  for (const scope of pending) {
-    await Effect.runPromise(Scope.close(scope, Exit.void))
-  }
-})
-
-/** Runs a scoped Effect in a scope that stays open until the test ends. */
-const runScoped = async <A, E>(
-  effect: Effect.Effect<A, E, Scope.Scope>,
-): Promise<A> => {
-  const scope = await Effect.runPromise(Scope.make())
-  scopes.push(scope)
-  return Effect.runPromise(Scope.provide(effect, scope))
-}
-
-/**
- * Runs `drive` right after the API under test subscribes to the actor, so
- * tests never race the Effect scheduler with a timer.
- */
 const afterSubscribe = (actor: AnyActorRef, drive: () => void): void => {
   const actorSubscribe = actor.subscribe.bind(actor)
   let driven = false
@@ -101,7 +75,6 @@ const counterMachine = createMachine({
 type CounterSnapshot = SnapshotFrom<typeof counterMachine>
 type DoneCounterSnapshot = CounterSnapshot & { status: 'done' }
 
-/** A type-predicate predicate, so `waitFor` narrows what it resolves with. */
 const isDone = (snapshot: CounterSnapshot): snapshot is DoneCounterSnapshot => snapshot.status === 'done'
 
 const emitterMachine = createMachine({
@@ -117,9 +90,9 @@ const emitterMachine = createMachine({
   },
 })
 
-describe('send', () => {
-  it('sends an event to the actor', async () => {
-    await runScoped(
+describe('send', (it) => {
+  it('sends an event to the actor', function*({ expect }) {
+    const context = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
 
@@ -127,26 +100,30 @@ describe('send', () => {
         yield* send(actor, { type: 'INCREMENT' })
         yield* waitFor(actor, (state) => state.context.count === 2)
 
-        expect(actor.getSnapshot().context).toEqual({ count: 2 })
+        return actor.getSnapshot().context
       }),
     )
+
+    yield* expect(context).toEqual({ count: 2 })
   })
 
-  it('accepts the data-last form', async () => {
-    await runScoped(
+  it('accepts the data-last form', function*({ expect }) {
+    const context = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
 
         yield* send({ type: 'INCREMENT' } as const)(actor)
         yield* waitFor(actor, (state) => state.context.count === 1)
 
-        expect(actor.getSnapshot().context).toEqual({ count: 1 })
+        return actor.getSnapshot().context
       }),
     )
+
+    yield* expect(context).toEqual({ count: 1 })
   })
 
-  it('rejects events the actor cannot receive', async () => {
-    await runScoped(
+  it('rejects events the actor cannot receive', function*({ expect }) {
+    const context = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
 
@@ -155,14 +132,17 @@ describe('send', () => {
           send(actor, { type: 'UNKNOWN' })
 
         void sendUnknownEvent
+        return actor.getSnapshot().context
       }),
     )
+
+    yield* expect(context).toEqual({ count: 0 })
   })
 })
 
-describe('snapshots', () => {
-  it('emits the current snapshot, then every change, and ends on completion', async () => {
-    const collected = await runScoped(
+describe('snapshots', (it) => {
+  it('emits the current snapshot, then every change, and ends on completion', function*({ expect }) {
+    const collected = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
         afterSubscribe(actor, () => {
@@ -174,21 +154,21 @@ describe('snapshots', () => {
       }),
     )
 
-    expect(collected.map((snapshot) => snapshot.context.count)).toEqual([
-      0,
-      1,
-      1,
-    ])
-    expect(collected.map((snapshot) => snapshot.status)).toEqual([
-      'active',
-      'active',
-      'done',
+    yield* expect(
+      [...collected].map((snapshot) => ({
+        count: snapshot.context.count,
+        status: snapshot.status,
+      })),
+    ).toEqual([
+      { count: 0, status: 'active' },
+      { count: 1, status: 'active' },
+      { count: 1, status: 'done' },
     ])
   })
 
-  it('emits the error snapshot and ends when the actor errors', async () => {
+  it('emits the error snapshot and ends when the actor errors', function*({ expect }) {
     const failure = { code: 'BOOM' as const }
-    const collected = await runScoped(
+    const collected = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* Effect.fail(failure).pipe(
           Effect.delay(10),
@@ -200,20 +180,20 @@ describe('snapshots', () => {
       }),
     )
 
-    expect(collected.map((snapshot) => snapshot.status)).toEqual([
-      'active',
-      'error',
+    yield* expect(
+      [...collected].map((snapshot) => ({
+        status: snapshot.status,
+        error: snapshot.error,
+      })),
+    ).toEqual([
+      { status: 'active', error: undefined },
+      { status: 'error', error: failure },
     ])
-    const errored = collected[1]
-    if (errored === undefined) {
-      throw new Error('expected a second snapshot')
-    }
-    expect(errored.error).toEqual(failure)
   })
 
-  it('unsubscribes from the actor when the stream is interrupted', async () => {
-    let unsubscribed = 0
-    const collected = await runScoped(
+  it('unsubscribes from the actor when the stream is interrupted', function*({ expect }) {
+    const unsubscribeCalls: string[] = []
+    const collected = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
         const actorSubscribe = actor.subscribe.bind(actor)
@@ -225,7 +205,7 @@ describe('snapshots', () => {
           })
           return {
             unsubscribe: () => {
-              unsubscribed++
+              unsubscribeCalls.push('unsubscribe')
               subscription.unsubscribe()
             },
           }
@@ -235,21 +215,23 @@ describe('snapshots', () => {
       }),
     )
 
-    expect(collected.map((snapshot) => snapshot.context.count)).toEqual([0, 1])
-    expect(unsubscribed).toBe(1)
+    yield* expect({
+      counts: [...collected].map((snapshot) => snapshot.context.count),
+      unsubscribeCalls,
+    }).toEqual({ counts: [0, 1], unsubscribeCalls: ['unsubscribe'] })
   })
 })
 
-describe('emitted', () => {
-  it('streams emitted events and ends when the actor stops', async () => {
+describe('emitted', (it) => {
+  it('streams emitted events and ends when the actor stops', function*({ expect }) {
     const collected: unknown[] = []
-    await runScoped(
+    yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(emitterMachine)
-        let listening = false
+        const listening = yield* Deferred.make<void>()
         const actorOn = actor.on.bind(actor)
         actor.on = ((...args: Parameters<typeof actorOn>) => {
-          listening = true
+          Deferred.doneUnsafe(listening, Effect.void)
           return actorOn(...args)
         }) as typeof actor.on
 
@@ -259,36 +241,37 @@ describe('emitted', () => {
               collected.push(event)
             })),
         )
-        yield* Effect.promise(() => until(() => listening))
+        yield* Deferred.await(listening)
 
         actor.send({ type: 'PING' })
         actor.send({ type: 'PING' })
-        yield* Effect.promise(() => until(() => collected.length === 2))
+        yield* until(() => collected.length === 2)
 
         actor.stop()
         yield* Fiber.join(fiber)
       }),
     )
 
-    expect(collected).toEqual([{ type: 'pinged' }, { type: 'pinged' }])
+    yield* expect(collected).toEqual([{ type: 'pinged' }, { type: 'pinged' }])
   })
 })
 
-describe('waitFor', () => {
-  it('resolves immediately when the current snapshot matches', async () => {
-    const snapshot = await runScoped(
+describe('waitFor', (it) => {
+  it('resolves immediately when the current snapshot matches', function*({ expect }) {
+    const context = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
 
-        return yield* waitFor(actor, (state) => state.context.count === 0)
+        const snapshot = yield* waitFor(actor, (state) => state.context.count === 0)
+        return snapshot.context
       }),
     )
 
-    expect(snapshot.context).toEqual({ count: 0 })
+    yield* expect(context).toEqual({ count: 0 })
   })
 
-  it('resolves on the first later snapshot that matches', async () => {
-    const snapshot = await runScoped(
+  it('resolves on the first later snapshot that matches', function*({ expect }) {
+    const context = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
         afterSubscribe(actor, () => {
@@ -296,32 +279,34 @@ describe('waitFor', () => {
           actor.send({ type: 'INCREMENT' })
         })
 
-        return yield* waitFor(actor, (state) => state.context.count === 2)
+        const snapshot = yield* waitFor(actor, (state) => state.context.count === 2)
+        return snapshot.context
       }),
     )
 
-    expect(snapshot.context).toEqual({ count: 2 })
+    yield* expect(context).toEqual({ count: 2 })
   })
 
-  it('accepts the data-last form', async () => {
-    const snapshot = await runScoped(
+  it('accepts the data-last form', function*({ expect }) {
+    const context = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
         afterSubscribe(actor, () => {
           actor.send({ type: 'INCREMENT' })
         })
 
-        return yield* waitFor(
+        const snapshot = yield* waitFor(
           (state: CounterSnapshot) => state.context.count === 1,
         )(actor)
+        return snapshot.context
       }),
     )
 
-    expect(snapshot.context).toEqual({ count: 1 })
+    yield* expect(context).toEqual({ count: 1 })
   })
 
-  it('narrows the snapshot with a type-predicate predicate', async () => {
-    const snapshot = await runScoped(
+  it('narrows the snapshot with a type-predicate predicate', function*({ expect }) {
+    const snapshot = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
         afterSubscribe(actor, () => {
@@ -333,11 +318,11 @@ describe('waitFor', () => {
     )
 
     snapshot satisfies { status: 'done' }
-    expect(snapshot.output).toEqual({ count: 0 })
+    yield* expect(snapshot.output).toEqual({ count: 0 })
   })
 
-  it('fails with ActorStoppedError when the actor stops first', async () => {
-    const error = await runScoped(
+  it('fails with ActorStoppedError when the actor stops first', function*({ expect }) {
+    const error = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
         afterSubscribe(actor, () => {
@@ -350,12 +335,14 @@ describe('waitFor', () => {
       }),
     )
 
-    expect(error).toBeInstanceOf(ActorStoppedError)
-    expect(error.message).toMatch(/stopped before completing/)
+    yield* expect({ tag: error._tag, message: error.message }).toEqual({
+      tag: 'ActorStoppedError',
+      message: expect.stringMatching(/^Actor ".+" stopped before completing$/),
+    })
   })
 
-  it('fails with TimeoutError when the timeout elapses', async () => {
-    const error = await runScoped(
+  it('fails with TimeoutError when the timeout elapses', function*({ expect }) {
+    const error = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
 
@@ -367,13 +354,13 @@ describe('waitFor', () => {
       }),
     )
 
-    expect(Cause.isTimeoutError(error)).toBe(true)
+    yield* expect(error).toMatchObject({ _tag: 'TimeoutError' })
   })
 })
 
-describe('join', () => {
-  it('succeeds with the actor output when it is done', async () => {
-    const output = await runScoped(
+describe('join', (it) => {
+  it('succeeds with the actor output when it is done', function*({ expect }) {
+    const output = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
         afterSubscribe(actor, () => {
@@ -385,12 +372,12 @@ describe('join', () => {
       }),
     )
 
-    expect(output).toEqual({ count: 1 })
+    yield* expect(output).toEqual({ count: 1 })
   })
 
-  it('fails with ActorFailedError carrying the typed actor error', async () => {
+  it('fails with ActorFailedError carrying the typed actor error', function*({ expect }) {
     const failure = { code: 'X' as const }
-    const error = await runScoped(
+    const error = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* Effect.fail(failure).pipe(
           Effect.delay(10),
@@ -403,13 +390,13 @@ describe('join', () => {
     )
 
     error satisfies ActorFailedError<{ code: 'X' }> | ActorStoppedError
-    if (!(error instanceof ActorFailedError)) {
-      throw new Error('expected the failure to be an ActorFailedError')
-    }
-    expect(error.cause).toBe(failure)
+    yield* expect(error).toMatchObject({
+      _tag: '@systemfsoftware/xstate-effect/errors/ActorFailedError',
+      cause: failure,
+    })
   })
 
-  it('fails with ActorFailedError carrying the thrown value', async () => {
+  it('fails with ActorFailedError carrying the thrown value', function*({ expect }) {
     const failure = { code: 'MACHINE_FAILURE' }
     const machine = createMachine({
       on: {
@@ -418,7 +405,7 @@ describe('join', () => {
         },
       },
     })
-    const error = await runScoped(
+    const error = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(machine)
         const result = join(actor)
@@ -430,14 +417,14 @@ describe('join', () => {
       }),
     )
 
-    if (!(error instanceof ActorFailedError)) {
-      throw new Error('expected the failure to be an ActorFailedError')
-    }
-    expect(error.cause).toBe(failure)
+    yield* expect(error).toMatchObject({
+      _tag: '@systemfsoftware/xstate-effect/errors/ActorFailedError',
+      cause: failure,
+    })
   })
 
-  it('fails with ActorStoppedError when the actor is stopped', async () => {
-    const error = await runScoped(
+  it('fails with ActorStoppedError when the actor is stopped', function*({ expect }) {
+    const error = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
         afterSubscribe(actor, () => {
@@ -448,24 +435,38 @@ describe('join', () => {
       }),
     )
 
-    expect(error).toBeInstanceOf(ActorStoppedError)
+    yield* expect({ tag: error._tag, message: error.message }).toEqual({
+      tag: 'ActorStoppedError',
+      message: expect.stringMatching(/^Actor ".+" stopped before completing$/),
+    })
   })
 })
 
-describe('inspect', () => {
-  it('streams inspection events from the actor system', async () => {
-    const events = await runScoped(
+describe('inspect', (it) => {
+  it('streams inspection events from the actor system', function*({ expect }) {
+    const events = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(counterMachine)
         afterInspect(actor, () => {
           actor.send({ type: 'INCREMENT' })
+          actor.send({ type: 'INCREMENT' })
         })
 
-        return yield* Stream.runCollect(inspect(actor).pipe(Stream.take(1)))
+        return yield* Stream.runCollect(inspect(actor).pipe(Stream.take(2)))
       }),
     )
 
-    expect(events.map((event) => event.type)).toEqual(['@xstate.transition'])
-    expect(events[0]).toMatchObject({ event: { type: 'INCREMENT' } })
+    yield* expect(events.map((event) =>
+      event.type === '@xstate.transition'
+        ? {
+          type: event.type,
+          event: event.event.type,
+          context: 'context' in event.snapshot ? event.snapshot.context : undefined,
+        }
+        : { type: event.type }
+    )).toEqual([
+      { type: '@xstate.transition', event: 'INCREMENT', context: { count: 1 } },
+      { type: '@xstate.transition', event: 'INCREMENT', context: { count: 2 } },
+    ])
   })
 })
