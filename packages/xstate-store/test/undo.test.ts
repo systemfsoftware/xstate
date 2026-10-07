@@ -1,4 +1,4 @@
-import { describe, it, vi } from '@systemfsoftware/vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createStore } from '../src/index.js'
 import { flushStorage, isHydrated, persist } from '../src/persist.js'
@@ -9,8 +9,8 @@ it.each(['persist-first', 'undo-first'] as const)(
   function*(order, { expect }) {
     const storage = {
       getItem: () => null,
-      setItem: vi.fn(),
-      removeItem: vi.fn(),
+      setItem: () => {},
+      removeItem: () => {},
     }
     const base = createStore({
       context: { count: 0 },
@@ -51,7 +51,7 @@ it.each(['persist-first', 'undo-first'] as const)(
 )
 
 it('preserves live extension metadata through custom restore triggers', function*({ expect }) {
-  const writes = vi.fn()
+  const writeArgs: unknown[][] = []
   const store = createStore({
     context: { count: 0 },
     on: { inc: (context) => ({ count: context.count + 1 }) },
@@ -59,7 +59,13 @@ it('preserves live extension metadata through custom restore triggers', function
     .with(
       persist({
         name: 'counter',
-        storage: { getItem: () => null, setItem: writes, removeItem: vi.fn() },
+        storage: {
+          getItem: () => null,
+          setItem: (...args: unknown[]) => {
+            writeArgs.push(args)
+          },
+          removeItem: () => {},
+        },
       }),
     )
     .with(
@@ -73,13 +79,13 @@ it('preserves live extension metadata through custom restore triggers', function
     )
 
   store.trigger.inc()
-  writes.mockClear()
+  writeArgs.length = 0
   store.trigger.undo()
 
   yield* expect({
     hydrated: isHydrated(store),
     count: store.getSnapshot().context.count,
-    writes: writes.mock.calls,
+    writes: writeArgs,
   }).toEqual({
     hydrated: true,
     count: 1,
@@ -1169,7 +1175,19 @@ describe('undoRedo with snapshot strategy', () => {
   })
 
   it('should pass current, next, and direction to restore', function*({ expect }) {
-    const restore = vi.fn(({ next }) => next)
+    const restoreArgs: Array<{
+      current: { count: number }
+      next: { count: number }
+      direction: 'undo' | 'redo'
+    }> = []
+    const restore = (options: {
+      current: { count: number }
+      next: { count: number }
+      direction: 'undo' | 'redo'
+    }) => {
+      restoreArgs.push(options)
+      return options.next
+    }
     const store = createStore({
       context: { count: 0 },
       on: { inc: (context) => ({ count: context.count + 1 }) },
@@ -1179,14 +1197,26 @@ describe('undoRedo with snapshot strategy', () => {
     store.trigger.undo()
     store.trigger.redo()
 
-    yield* expect(restore.mock.calls.map(([args]) => args)).toEqual([
+    yield* expect(restoreArgs).toEqual([
       { current: { count: 1 }, next: { count: 0 }, direction: 'undo' },
       { current: { count: 0 }, next: { count: 1 }, direction: 'redo' },
     ])
   })
 
   it('should restore once for a transaction group', function*({ expect }) {
-    const restore = vi.fn(({ next }) => next)
+    const restoreArgs: Array<{
+      current: { count: number }
+      next: { count: number }
+      direction: 'undo' | 'redo'
+    }> = []
+    const restore = (options: {
+      current: { count: number }
+      next: { count: number }
+      direction: 'undo' | 'redo'
+    }) => {
+      restoreArgs.push(options)
+      return options.next
+    }
     const store = createStore({
       context: { count: 0 },
       on: { inc: (context) => ({ count: context.count + 1 }) },
@@ -1211,7 +1241,7 @@ describe('undoRedo with snapshot strategy', () => {
       afterFirstUndo,
       afterRedo,
       afterSecondUndo,
-      restoreCalls: restore.mock.calls.map(([args]) => args),
+      restoreCalls: restoreArgs,
     }).toEqual({
       afterFirstUndo: 0,
       afterRedo: 2,
@@ -1273,7 +1303,12 @@ describe('undoRedo with snapshot strategy', () => {
   })
 
   it('should apply triggered transitions and effects once without history', function*({ expect }) {
-    const effect = vi.fn()
+    const effectArgs: number[] = []
+    const effect = (enqueue: {
+      getSnapshot: () => { context: { count: number } }
+    }) => {
+      effectArgs.push(enqueue.getSnapshot().context.count)
+    }
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -1295,10 +1330,10 @@ describe('undoRedo with snapshot strategy', () => {
 
     store.trigger.inc()
     const canUndoBefore = store.can.undo()
-    const effectCallsBefore = [...effect.mock.calls]
+    const effectCallsBefore = [...effectArgs]
     store.trigger.undo()
     const count = store.getSnapshot().context.count
-    const effectCalls = effect.mock.calls.map(([enq]) => enq.getSnapshot().context.count)
+    const effectCalls = [...effectArgs]
     const canUndoAfter = store.can.undo()
 
     yield* expect({ canUndoBefore, effectCallsBefore, count, effectCalls, canUndoAfter })
@@ -1306,8 +1341,16 @@ describe('undoRedo with snapshot strategy', () => {
   })
 
   it('should not execute enqueued effects when checking can', function*({ expect }) {
-    const effect = vi.fn()
-    const emitted = vi.fn()
+    const effectArgs: number[] = []
+    const effect = (enqueue: {
+      getSnapshot: () => { context: { count: number } }
+    }) => {
+      effectArgs.push(enqueue.getSnapshot().context.count)
+    }
+    const emittedArgs: unknown[][] = []
+    const emitted = (...args: unknown[]) => {
+      emittedArgs.push(args)
+    }
     const store = createStore({
       schemas: { emitted: { restored: z.object({}) } },
       context: { count: 0 },
@@ -1326,12 +1369,12 @@ describe('undoRedo with snapshot strategy', () => {
 
     store.trigger.inc()
     const canUndo = store.can.undo()
-    const effectCallsBefore = [...effect.mock.calls]
-    const emittedCallsBefore = [...emitted.mock.calls]
+    const effectCallsBefore = [...effectArgs]
+    const emittedCallsBefore = [...emittedArgs]
     store.trigger.undo()
     const canRedo = store.can.redo()
-    const effectCalls = effect.mock.calls.map(([enq]) => enq.getSnapshot().context.count)
-    const emittedCalls = emitted.mock.calls
+    const effectCalls = [...effectArgs]
+    const emittedCalls = [...emittedArgs]
 
     yield* expect({
       canUndo,

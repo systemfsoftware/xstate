@@ -1,5 +1,5 @@
 import { createBrowserInspector } from '@statelyai/inspect'
-import { describe, it, vi } from '@systemfsoftware/vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { Effect } from 'effect'
 import { produce } from 'immer'
 import { z } from 'zod'
@@ -285,7 +285,10 @@ it.live('forwards store snapshots to @statelyai/inspect and unsubscribes', funct
     context: { count: 0 },
     on: { inc: (context) => ({ count: context.count + 1 }) },
   })
-  const send = vi.fn()
+  const sent: unknown[] = []
+  const send = (message: unknown) => {
+    sent.push(message)
+  }
   const inspector = createBrowserInspector({ autoStart: false, send })
   const subscription = store.inspect((event) => {
     inspector.snapshot(event.actorRef, event.snapshot, { event: event.event })
@@ -293,21 +296,20 @@ it.live('forwards store snapshots to @statelyai/inspect and unsubscribes', funct
 
   try {
     store.trigger.inc()
-    yield* Effect.promise(() =>
-      vi.waitFor(() => {
-        const forwarded = send.mock.calls.some((call) => {
-          const message = call[0]
-          return (
-            typeof message === 'object' && message !== null && 'type' in message &&
-            message.type === '@xstate.snapshot'
-          )
-        })
-        if (!forwarded) {
-          throw new Error('expected the inspector to forward a snapshot')
-        }
-      })
-    )
-    yield* expect(send.mock.calls.map((call) => call[0])).toEqual(
+    yield* Effect.promise(async () => {
+      const forwarded = () =>
+        sent.some((message) =>
+          typeof message === 'object' && message !== null && 'type' in message &&
+          message.type === '@xstate.snapshot'
+        )
+      const deadline = Date.now() + 1000
+      while (!forwarded() && Date.now() < deadline) {
+        const { promise, resolve } = Promise.withResolvers<void>()
+        requestAnimationFrame(() => resolve())
+        await promise
+      }
+    })
+    yield* expect(sent).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: '@xstate.snapshot',
@@ -317,14 +319,14 @@ it.live('forwards store snapshots to @statelyai/inspect and unsubscribes', funct
       ]),
     )
     subscription.unsubscribe()
-    const sentCount = send.mock.calls.length
+    const sentCount = sent.length
     store.trigger.inc()
     yield* Effect.promise(() => {
       const { promise, resolve } = Promise.withResolvers<void>()
       requestAnimationFrame(() => resolve())
       return promise
     })
-    yield* expect(send.mock.calls.length).toEqual(sentCount)
+    yield* expect(sent.length).toEqual(sentCount)
   } finally {
     subscription.unsubscribe()
     inspector.stop()
@@ -352,13 +354,15 @@ it('emitted events can be subscribed to', function*({ expect }) {
     },
   })
 
-  const spy = vi.fn()
+  const emitted: unknown[] = []
 
-  store.on('increased', spy)
+  store.on('increased', (event) => {
+    emitted.push(event)
+  })
 
   store.trigger.inc()
 
-  yield* expect(spy.mock.calls).toEqual([[{ type: 'increased', upBy: 1 }]])
+  yield* expect(emitted).toEqual([{ type: 'increased', upBy: 1 }])
 })
 
 it('emitted events can be unsubscribed to', function*({ expect }) {
@@ -383,18 +387,20 @@ it('emitted events can be unsubscribed to', function*({ expect }) {
     },
   })
 
-  const spy = vi.fn()
-  const sub = store.on('increased', spy)
+  const emitted: unknown[] = []
+  const sub = store.on('increased', (event) => {
+    emitted.push(event)
+  })
   store.trigger.inc()
 
-  const afterFirst = [...spy.mock.calls]
+  const afterFirst = [...emitted]
 
   sub.unsubscribe()
   store.trigger.inc()
 
-  yield* expect({ afterFirst, afterUnsubscribe: spy.mock.calls }).toEqual({
-    afterFirst: [[{ type: 'increased', upBy: 1 }]],
-    afterUnsubscribe: [[{ type: 'increased', upBy: 1 }]],
+  yield* expect({ afterFirst, afterUnsubscribe: emitted }).toEqual({
+    afterFirst: [{ type: 'increased', upBy: 1 }],
+    afterUnsubscribe: [{ type: 'increased', upBy: 1 }],
   })
 })
 
@@ -432,7 +438,7 @@ it('emitted events occur after the snapshot is updated', function*({ expect }) {
 })
 
 it('events can be emitted with no payload', function*({ expect }) {
-  const spy = vi.fn()
+  const emitted: unknown[] = []
 
   const store = createStore({
     schemas: {
@@ -460,11 +466,13 @@ it('events can be emitted with no payload', function*({ expect }) {
     },
   })
 
-  store.on('incremented', spy)
+  store.on('incremented', (event) => {
+    emitted.push(event)
+  })
 
   store.trigger.inc()
 
-  yield* expect(spy.mock.calls).toEqual([[{ type: 'incremented' }]])
+  yield* expect(emitted).toEqual([{ type: 'incremented' }])
 })
 
 it('events can be emitted with optional payloads (type check)', function*({ expect }) {
@@ -576,12 +584,14 @@ it('events can be enqueued from transitions', function*({ expect }) {
 })
 
 it('effect-only transitions should execute effects', function*({ expect }) {
-  const spy = vi.fn()
+  const effectRuns: string[] = []
   const store = createStore({
     context: { count: 0 },
     on: {
       justEffect: (ctx, _, enq) => {
-        enq.effect(spy)
+        enq.effect(() => {
+          effectRuns.push('effect')
+        })
       },
     },
   })
@@ -592,11 +602,11 @@ it('effect-only transitions should execute effects', function*({ expect }) {
   }
   justEffectTrigger()
 
-  yield* expect(spy.mock.calls.length).toEqual(1)
+  yield* expect(effectRuns).toEqual(['effect'])
 })
 
 it('emits-only transitions should emit events', function*({ expect }) {
-  const spy = vi.fn()
+  const emitted: unknown[] = []
   const store = createStore({
     context: { count: 0 },
     schemas: {
@@ -611,16 +621,18 @@ it('emits-only transitions should emit events', function*({ expect }) {
     },
   })
 
-  store.on('emitted', spy)
+  store.on('emitted', (event) => {
+    emitted.push(event)
+  })
 
   store.trigger.justEmit()
 
-  yield* expect(spy.mock.calls).toEqual([[{ type: 'emitted' }]])
+  yield* expect(emitted).toEqual([{ type: 'emitted' }])
 })
 
 it('checks whether events can transition', function*({ expect }) {
-  const effectSpy = vi.fn()
-  const emittedSpy = vi.fn()
+  const effectRuns: string[] = []
+  const emittedEvents: unknown[] = []
   const store = createStore({
     context: { count: 9 },
     schemas: {
@@ -646,7 +658,9 @@ it('checks whether events can transition', function*({ expect }) {
       },
       noop: (ctx) => ctx,
       effectOnly: (_, __, enq) => {
-        enq.effect(effectSpy)
+        enq.effect(() => {
+          effectRuns.push('effect')
+        })
       },
       emitOnly: (_, __, enq) => {
         enq.emit.emitted()
@@ -657,7 +671,9 @@ it('checks whether events can transition', function*({ expect }) {
     },
   })
 
-  store.on('emitted', emittedSpy)
+  store.on('emitted', (event) => {
+    emittedEvents.push(event)
+  })
 
   yield* expect({
     incrementBy1: store.can.increment({ by: 1 }),
@@ -668,8 +684,8 @@ it('checks whether events can transition', function*({ expect }) {
     triggerOnly: store.can.triggerOnly(),
     unavailable: store.can.unavailable(),
     context: store.getSnapshot().context,
-    effectCalls: effectSpy.mock.calls,
-    emittedCalls: emittedSpy.mock.calls,
+    effectCalls: effectRuns,
+    emittedCalls: emittedEvents,
   }).toEqual({
     incrementBy1: true,
     incrementBy2: false,
@@ -722,7 +738,7 @@ it('checks whether Immer transitions can transition without changing context', f
 })
 
 it('wildcard listener receives all emitted events', function*({ expect }) {
-  const spy = vi.fn()
+  const emitted: unknown[] = []
   const store = createStore({
     context: { count: 0 },
     schemas: {
@@ -743,19 +759,21 @@ it('wildcard listener receives all emitted events', function*({ expect }) {
     },
   })
 
-  store.on('*', spy)
+  store.on('*', (event) => {
+    emitted.push(event)
+  })
 
   store.trigger.inc()
   store.trigger.dec()
 
-  yield* expect(spy.mock.calls).toEqual([
-    [{ type: 'increased', upBy: 1 }],
-    [{ type: 'decreased', downBy: 1 }],
+  yield* expect(emitted).toEqual([
+    { type: 'increased', upBy: 1 },
+    { type: 'decreased', downBy: 1 },
   ])
 })
 
 it('wildcard listener can be unsubscribed', function*({ expect }) {
-  const spy = vi.fn()
+  const emitted: unknown[] = []
   const store = createStore({
     context: { count: 0 },
     schemas: {
@@ -771,16 +789,18 @@ it('wildcard listener can be unsubscribed', function*({ expect }) {
     },
   })
 
-  const sub = store.on('*', spy)
+  const sub = store.on('*', (event) => {
+    emitted.push(event)
+  })
   store.trigger.inc()
-  const afterFirst = [...spy.mock.calls]
+  const afterFirst = [...emitted]
 
   sub.unsubscribe()
   store.trigger.inc()
 
-  yield* expect({ afterFirst, afterUnsubscribe: spy.mock.calls }).toEqual({
-    afterFirst: [[{ type: 'increased', upBy: 1 }]],
-    afterUnsubscribe: [[{ type: 'increased', upBy: 1 }]],
+  yield* expect({ afterFirst, afterUnsubscribe: emitted }).toEqual({
+    afterFirst: [{ type: 'increased', upBy: 1 }],
+    afterUnsubscribe: [{ type: 'increased', upBy: 1 }],
   })
 })
 
@@ -1072,15 +1092,16 @@ describe('store.trigger', () => {
       },
     })
 
-    const sendSpy = vi.spyOn(store, 'send')
-
-    try {
-      store.trigger.increment({ by: 5 })
-
-      yield* expect(sendSpy.mock.calls).toEqual([[{ type: 'increment', by: 5 }]])
-    } finally {
-      sendSpy.mockRestore()
+    const sent: unknown[] = []
+    const originalSend = store.send
+    store.send = (event) => {
+      sent.push(event)
+      originalSend(event)
     }
+
+    store.trigger.increment({ by: 5 })
+
+    yield* expect(sent).toEqual([{ type: 'increment', by: 5 }])
   })
 
   it('should fail fast for unknown trigger names on config-based stores', function*({ expect }) {
@@ -1209,7 +1230,7 @@ it('works with typestates', function*({ expect }) {
 })
 
 it('the emit type is not overridden by the payload', function*({ expect }) {
-  const spy = vi.fn()
+  const emitted: unknown[] = []
   type Context = {
     drawer?: Drawer | null
   }
@@ -1241,15 +1262,14 @@ it('the emit type is not overridden by the payload', function*({ expect }) {
   })
 
   drawersBridgeStore.on('drawerOpened', (event) => {
-    // expect to be called here
-    spy(event)
+    emitted.push(event)
   })
 
   drawersBridgeStore.trigger.openDrawer({
     drawer: { id: 'a' },
   })
 
-  yield* expect(spy.mock.calls).toEqual([[{ type: 'drawerOpened', drawer: { id: 'a' } }]])
+  yield* expect(emitted).toEqual([{ type: 'drawerOpened', drawer: { id: 'a' } }])
 })
 
 describe('store.transition', () => {
@@ -1328,7 +1348,7 @@ describe('store.transition', () => {
   })
 
   it('resolves enqueued trigger events and collects effects in pure transitions', function*({ expect }) {
-    const spy = vi.fn()
+    const calls: string[] = []
     const store = createStore({
       context: { count: 0 },
       schemas: {
@@ -1339,17 +1359,23 @@ describe('store.transition', () => {
       },
       on: {
         inc: (ctx, _, enq) => {
-          enq.effect(() => spy('inc'))
+          enq.effect(() => {
+            calls.push('inc')
+          })
 
           return {
             count: ctx.count + 1,
           }
         },
         incTwice: (ctx, _, enq) => {
-          enq.effect(() => spy('before'))
+          enq.effect(() => {
+            calls.push('before')
+          })
           enq.trigger.inc()
           enq.trigger.inc()
-          enq.effect(() => spy('after'))
+          enq.effect(() => {
+            calls.push('after')
+          })
 
           return ctx
         },
@@ -1367,8 +1393,8 @@ describe('store.transition', () => {
         effect()
       }
     }
-    const firstRunCalls = spy.mock.calls.map((call) => call[0])
-    spy.mockClear()
+    const firstRunCalls = [...calls]
+    calls.length = 0
 
     store.trigger.incTwice()
 
@@ -1377,7 +1403,7 @@ describe('store.transition', () => {
       effectKinds,
       firstRunCalls,
       afterTriggerContext: store.getSnapshot().context,
-      secondRunCalls: spy.mock.calls.map((call) => call[0]),
+      secondRunCalls: [...calls],
     }).toEqual({
       context: { count: 2 },
       effectKinds: ['function', 'function', 'function', 'function'],
@@ -1440,13 +1466,17 @@ it('can select from a store', function*({ expect }) {
     },
   })
 
-  const countSpy = vi.fn()
-  const evenSpy = vi.fn()
+  const countCalls: number[] = []
+  const evenCalls: boolean[] = []
   const count = store.select((context) => context.count)
   const isEven = store.select((context) => context.count % 2 === 0)
 
-  count.subscribe(countSpy)
-  isEven.subscribe(evenSpy)
+  count.subscribe((value) => {
+    countCalls.push(value)
+  })
+  isEven.subscribe((value) => {
+    evenCalls.push(value)
+  })
 
   const initialCount = count.get()
   const initialEven = isEven.get()
@@ -1458,15 +1488,15 @@ it('can select from a store', function*({ expect }) {
     initialEven,
     afterCount: count.get(),
     afterEven: isEven.get(),
-    countCalls: countSpy.mock.calls,
-    evenCalls: evenSpy.mock.calls,
+    countCalls,
+    evenCalls,
   }).toEqual({
     initialCount: 0,
     initialEven: true,
     afterCount: 1,
     afterEven: false,
-    countCalls: [[1]],
-    evenCalls: [[false]],
+    countCalls: [1],
+    evenCalls: [false],
   })
 })
 
@@ -1541,13 +1571,15 @@ it('should not trigger update if the snapshot is the same', function*({ expect }
     },
   })
 
-  const spy = vi.fn()
-  store.subscribe(spy)
+  const notifications: unknown[] = []
+  store.subscribe((snapshot) => {
+    notifications.push(snapshot)
+  })
 
   store.trigger.doNothing()
   store.trigger.doNothing()
 
-  yield* expect(spy.mock.calls).toEqual([])
+  yield* expect(notifications).toEqual([])
 })
 
 it('should not trigger update if the snapshot is the same even if there are effects', function*({ expect }) {
@@ -1563,8 +1595,10 @@ it('should not trigger update if the snapshot is the same even if there are effe
     },
   })
 
-  const spy = vi.fn()
-  store.subscribe(spy)
+  const notifications: unknown[] = []
+  store.subscribe((snapshot) => {
+    notifications.push(snapshot)
+  })
 
   const doNothingTrigger = store.trigger['doNothing']
   if (doNothingTrigger === undefined) {
@@ -1573,7 +1607,7 @@ it('should not trigger update if the snapshot is the same even if there are effe
   doNothingTrigger()
   doNothingTrigger()
 
-  yield* expect(spy.mock.calls).toEqual([])
+  yield* expect(notifications).toEqual([])
 })
 
 describe('types', () => {
@@ -1735,11 +1769,13 @@ it('emitted events work with store extensions', function*({ expect }) {
     },
   }).with(reset())
 
-  const spy = vi.fn()
+  const emitted: unknown[] = []
 
-  store.on('increased', spy)
+  store.on('increased', (event) => {
+    emitted.push(event)
+  })
 
   store.trigger.inc()
 
-  yield* expect(spy.mock.calls).toEqual([[{ type: 'increased', upBy: 1 }]])
+  yield* expect(emitted).toEqual([{ type: 'increased', upBy: 1 }])
 })

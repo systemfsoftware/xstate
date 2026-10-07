@@ -1,4 +1,4 @@
-import { describe, it, vi } from '@systemfsoftware/vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { Effect } from 'effect'
 import { z } from 'zod'
 import { createStore } from '../src/index.js'
@@ -138,7 +138,10 @@ describe('persistence lifecycle regressions', (it) => {
       const error = new Error('read failed')
       const rejected = Promise.reject(error)
       void rejected.catch(() => {})
-      const onError = vi.fn()
+      const errors: Array<[unknown]> = []
+      const onError = (cause: unknown) => {
+        errors.push([cause])
+      }
       createStore({ context: {}, on: {} }).with(
         persist({
           name: 'counter',
@@ -146,13 +149,13 @@ describe('persistence lifecycle regressions', (it) => {
           onError,
           storage: {
             getItem: () => rejected,
-            setItem: vi.fn(),
-            removeItem: vi.fn(),
+            setItem: () => {},
+            removeItem: () => {},
           },
         }),
       )
       yield* Effect.promise(() => Promise.resolve())
-      yield* expect(onError.mock.calls).toEqual([[error]])
+      yield* expect(errors).toEqual([[error]])
     },
   )
 
@@ -160,9 +163,11 @@ describe('persistence lifecycle regressions', (it) => {
     expect,
   }) {
     const storage = createMockStorage()
-    const pick = vi.fn((context: { count: number }) => ({
-      count: context.count + 1,
-    }))
+    const pickCalls: Array<[unknown]> = []
+    const pick = (context: { count: number }) => {
+      pickCalls.push([context])
+      return { count: context.count + 1 }
+    }
     const store = createStore({
       context: { count: 0 },
       on: { inc: (context) => ({ count: context.count + 1 }) },
@@ -171,7 +176,7 @@ describe('persistence lifecycle regressions', (it) => {
     store.trigger.inc()
     flushStorage(store)
     yield* expect({
-      pickCalls: pick.mock.calls,
+      pickCalls,
       stored: JSON.parse(storage.getItem('counter') as string),
     }).toEqual({
       pickCalls: [[{ count: 1 }]],
@@ -238,9 +243,11 @@ describe('persistence lifecycle regressions', (it) => {
       throw new Error('expected a write to start')
     }
     let saved: string | null = null
-    const removeItem = vi.fn((_name: string) => {
+    const removeCalls: Array<[string]> = []
+    const removeItem = (name: string) => {
+      removeCalls.push([name])
       saved = null
-    })
+    }
     const store = createStore({
       context: { count: 0 },
       on: { inc: (context) => ({ count: context.count + 1 }) },
@@ -264,10 +271,10 @@ describe('persistence lifecycle regressions', (it) => {
 
     store.trigger.inc()
     const cleared = clearStorage(store)
-    yield* expect(removeItem.mock.calls).toEqual([])
+    yield* expect(removeCalls).toEqual([])
     completeWrite()
     yield* Effect.promise(() => Promise.resolve(cleared))
-    yield* expect({ removeCalls: removeItem.mock.calls, saved }).toEqual({
+    yield* expect({ removeCalls, saved }).toEqual({
       removeCalls: [['counter']],
       saved: null,
     })
@@ -478,7 +485,11 @@ describe('persist - version + migrate', (it) => {
       }),
     )
 
-    const migrateFn = vi.fn((ctx: { count: number }) => ctx)
+    const migrateCalls: Array<[unknown, unknown]> = []
+    const migrateFn = (ctx: { count: number }, version: string | number) => {
+      migrateCalls.push([ctx, version])
+      return ctx
+    }
 
     const store = createStore({
       context: { count: 0 },
@@ -493,7 +504,7 @@ describe('persist - version + migrate', (it) => {
     )
 
     yield* expect({
-      migrateCalls: migrateFn.mock.calls,
+      migrateCalls,
       count: store.getSnapshot().context.count,
     }).toEqual({ migrateCalls: [], count: 5 })
   })
@@ -600,19 +611,22 @@ describe('persist - throttle', (it) => {
     expect,
   }) {
     const storage = createMockStorage()
-    const onDone = vi.fn()
+    const onDoneCalls: Array<[unknown]> = []
+    const onDone = (data: unknown) => {
+      onDoneCalls.push([data])
+    }
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage, throttle: 100, onDone }))
 
     store.trigger.inc()
-    yield* eventually(() => onDone.mock.calls.length > 0)
+    yield* eventually(() => onDoneCalls.length > 0)
 
-    yield* expect(onDone.mock.calls).toEqual([[{ count: 1 }]])
+    yield* expect(onDoneCalls).toEqual([[{ count: 1 }]])
 
     yield* realDelay(150)
-    yield* expect(onDone.mock.calls).toEqual([[{ count: 1 }]])
+    yield* expect(onDoneCalls).toEqual([[{ count: 1 }]])
   })
 })
 
@@ -680,7 +694,10 @@ describe('persist - flushStorage', (it) => {
 describe('persist - onDone / onError', (it) => {
   it('should call onDone after successful write', function*({ expect }) {
     const storage = createMockStorage()
-    const onDone = vi.fn()
+    const onDoneCalls: Array<[unknown]> = []
+    const onDone = (data: unknown) => {
+      onDoneCalls.push([data])
+    }
     const store = createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
@@ -688,14 +705,17 @@ describe('persist - onDone / onError', (it) => {
 
     store.trigger.inc()
 
-    yield* expect(onDone.mock.calls).toEqual([[{ count: 1 }]])
+    yield* expect(onDoneCalls).toEqual([[{ count: 1 }]])
   })
 
   it('should call onDone with picked context when pick is used', function*({
     expect,
   }) {
     const storage = createMockStorage()
-    const onDone = vi.fn()
+    const onDoneCalls: Array<[unknown]> = []
+    const onDone = (data: unknown) => {
+      onDoneCalls.push([data])
+    }
     const store = createStore({
       context: { count: 0, secret: 'hidden' },
       on: { inc: (ctx) => ({ ...ctx, count: ctx.count + 1 }) },
@@ -710,7 +730,7 @@ describe('persist - onDone / onError', (it) => {
 
     store.trigger.inc()
 
-    yield* expect(onDone.mock.calls).toEqual([[{ count: 1 }]])
+    yield* expect(onDoneCalls).toEqual([[{ count: 1 }]])
   })
 
   it('should call onError on write failure', function*({ expect }) {
@@ -722,7 +742,10 @@ describe('persist - onDone / onError', (it) => {
       },
       removeItem: () => {},
     }
-    const onError = vi.fn()
+    const onErrorCalls: Array<[unknown]> = []
+    const onError = (cause: unknown) => {
+      onErrorCalls.push([cause])
+    }
 
     const store = createStore({
       context: { count: 0 },
@@ -731,7 +754,7 @@ describe('persist - onDone / onError', (it) => {
 
     store.trigger.inc()
 
-    yield* expect(onError.mock.calls).toEqual([[error]])
+    yield* expect(onErrorCalls).toEqual([[error]])
   })
 
   it('should call onError on read failure during hydration', function*({
@@ -745,21 +768,27 @@ describe('persist - onDone / onError', (it) => {
       setItem: () => {},
       removeItem: () => {},
     }
-    const onError = vi.fn()
+    const onErrorCalls: Array<[unknown]> = []
+    const onError = (cause: unknown) => {
+      onErrorCalls.push([cause])
+    }
 
     createStore({
       context: { count: 0 },
       on: { inc: (ctx) => ({ count: ctx.count + 1 }) },
     }).with(persist({ name: 'test', storage: failStorage, onError }))
 
-    yield* expect(onError.mock.calls).toEqual([[readError]])
+    yield* expect(onErrorCalls).toEqual([[readError]])
   })
 })
 
 describe('persist - filter', (it) => {
   it('should skip persisting when filter returns false', function*({ expect }) {
     const storage = createMockStorage()
-    const onDone = vi.fn()
+    const onDoneCalls: Array<[unknown]> = []
+    const onDone = (data: unknown) => {
+      onDoneCalls.push([data])
+    }
     const store = createStore({
       context: { count: 0, mouse: { x: 0, y: 0 } },
       on: {
@@ -779,11 +808,11 @@ describe('persist - filter', (it) => {
     )
 
     store.trigger.mousemove({ x: 10, y: 20 })
-    const afterFiltered = [...onDone.mock.calls]
+    const afterFiltered = [...onDoneCalls]
 
     store.trigger.inc()
 
-    yield* expect({ afterFiltered, allCalls: onDone.mock.calls }).toEqual({
+    yield* expect({ afterFiltered, allCalls: onDoneCalls }).toEqual({
       afterFiltered: [],
       allCalls: [[{ count: 1, mouse: { x: 10, y: 20 } }]],
     })
@@ -1469,7 +1498,10 @@ describe('persist - strategy: event', (it) => {
       setItem: () => {},
       removeItem: () => {},
     }
-    const onError = vi.fn()
+    const onErrorCalls: Array<[unknown]> = []
+    const onError = (cause: unknown) => {
+      onErrorCalls.push([cause])
+    }
 
     createStore({
       context: { count: 0 },
@@ -1483,7 +1515,7 @@ describe('persist - strategy: event', (it) => {
       }),
     )
 
-    yield* expect(onError.mock.calls).toEqual([[readError]])
+    yield* expect(onErrorCalls).toEqual([[readError]])
   })
 
   it.live('should work with throttle', function*({ expect }) {
@@ -1792,8 +1824,14 @@ it.live.each(
       reject: (error: unknown) => void
     }> = []
     let saved: string | null = null
-    const onDone = vi.fn()
-    const onError = vi.fn()
+    const onDoneCalls: Array<[unknown]> = []
+    const onDone = (data: unknown) => {
+      onDoneCalls.push([data])
+    }
+    const onErrorCalls: Array<[unknown]> = []
+    const onError = (cause: unknown) => {
+      onErrorCalls.push([cause])
+    }
     const storage: StateStorage = {
       getItem: () => saved,
       removeItem: () => {},
@@ -1820,7 +1858,10 @@ it.live.each(
     store.trigger.inc()
     store.trigger.inc()
     const flushed = flushStorage(store)
-    const completed = vi.fn()
+    const completedCalls: Array<[]> = []
+    const completed = () => {
+      completedCalls.push([])
+    }
     void Promise.resolve(flushed).then(completed)
 
     const firstWrite = writes[0]
@@ -1857,7 +1898,7 @@ it.live.each(
       }
 
     yield* expect({
-      completed: completed.mock.calls,
+      completed: completedCalls,
       second: JSON.parse(secondWrite.value),
     }).toEqual({ completed: [], second: secondExpected })
 
@@ -1873,8 +1914,8 @@ it.live.each(
     yield* expect({
       value,
       flushedValue,
-      onErrorCalls: onError.mock.calls,
-      onDoneCalls: onDone.mock.calls,
+      onErrorCalls,
+      onDoneCalls,
     }).toEqual({
       value: secondExpected,
       flushedValue: undefined,

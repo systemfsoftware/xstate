@@ -1,4 +1,4 @@
-import { describe, it, vi } from '@systemfsoftware/vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createStore } from './index.js'
 
 interface TestContext {
@@ -53,11 +53,13 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
-    store.select((state) => state.user.name).subscribe(callback)
+    const selected: string[] = []
+    store.select((state) => state.user.name).subscribe((value) => {
+      selected.push(value)
+    })
     store.send({ type: 'UPDATE_NAME', name: 'Jane' })
 
-    yield* expect(callback.mock.calls).toEqual([['Jane']])
+    yield* expect(selected).toEqual(['Jane'])
   })
 
   it('should not notify if selected value has not changed', function*({ expect }) {
@@ -78,11 +80,13 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
-    store.select((state) => state.user.name).subscribe(callback)
+    const selected: string[] = []
+    store.select((state) => state.user.name).subscribe((value) => {
+      selected.push(value)
+    })
     store.send({ type: 'UPDATE_THEME', theme: 'light' })
 
-    yield* expect(callback.mock.calls).toEqual([])
+    yield* expect(selected).toEqual([])
   })
 
   it('should support custom equality function', function*({ expect }) {
@@ -103,22 +107,24 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
+    const selected: Array<{ name: string; theme: string }> = []
     const selector = (context: TestContext) => ({
       name: context.user.name,
       theme: context.settings.theme,
     })
     const equalityFn = (a: { name: string }, b: { name: string }) => a.name === b.name // Only compare names
 
-    store.select(selector, equalityFn).subscribe(callback)
+    store.select(selector, equalityFn).subscribe((value) => {
+      selected.push(value)
+    })
 
     store.send({ type: 'UPDATE_THEME', theme: 'light' })
-    const callsAfterTheme = [...callback.mock.calls]
+    const callsAfterTheme = [...selected]
 
     store.send({ type: 'UPDATE_NAME', name: 'Jane' })
-    yield* expect({ callsAfterTheme, callsAfterName: callback.mock.calls }).toEqual({
+    yield* expect({ callsAfterTheme, callsAfterName: selected }).toEqual({
       callsAfterTheme: [],
-      callsAfterName: [[{ name: 'Jane', theme: 'light' }]],
+      callsAfterName: [{ name: 'Jane', theme: 'light' }],
     })
   })
 
@@ -140,14 +146,16 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
+    const selected: string[] = []
     const subscription = store
       .select((state) => state.user.name)
-      .subscribe(callback)
+      .subscribe((value) => {
+        selected.push(value)
+      })
     subscription.unsubscribe()
     store.send({ type: 'UPDATE_NAME', name: 'Jane' })
 
-    yield* expect(callback.mock.calls).toEqual([])
+    yield* expect(selected).toEqual([])
   })
 
   it('should handle updates with multiple subscribers', function*({ expect }) {
@@ -181,20 +189,18 @@ describe('select', () => {
       },
     })
 
-    // Mock DOM manipulation callback
-    const renderCallback = vi.fn()
+    const renderCalls: Array<{ x: number; y: number }> = []
     store
       .select((state) => state.position)
       .subscribe((position) => {
-        renderCallback(position)
+        renderCalls.push(position)
       })
 
-    // Mock logger callback for x position only
-    const loggerCallback = vi.fn()
+    const loggerCalls: number[] = []
     store
       .select((state) => state.position.x)
       .subscribe((x) => {
-        loggerCallback(x)
+        loggerCalls.push(x)
       })
 
     // Simulate position update
@@ -217,12 +223,9 @@ describe('select', () => {
       user: { name: 'Jane', age: 25 },
     })
 
-    yield* expect({
-      render: renderCallback.mock.calls,
-      logger: loggerCallback.mock.calls,
-    }).toEqual({
-      render: [[{ x: 100, y: 200 }], [{ x: 150, y: 300 }], [{ x: 150, y: 400 }]],
-      logger: [[100], [150]],
+    yield* expect({ render: renderCalls, logger: loggerCalls }).toEqual({
+      render: [{ x: 100, y: 200 }, { x: 150, y: 300 }, { x: 150, y: 400 }],
+      logger: [100, 150],
     })
   })
 })

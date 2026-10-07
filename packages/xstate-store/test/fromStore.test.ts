@@ -1,4 +1,4 @@
-import { describe, it, vi } from '@systemfsoftware/vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, executeEffects, initialTransition, transition } from '@systemfsoftware/xstate'
 import { Effect } from 'effect'
 import { z } from 'zod'
@@ -31,7 +31,7 @@ describe('fromStore', () => {
   })
 
   it('emits events', function*({ expect }) {
-    const spy = vi.fn()
+    const emitted: unknown[] = []
 
     const storeLogic = fromStore({
       context: (count: number) => ({ count }),
@@ -55,7 +55,9 @@ describe('fromStore', () => {
       input: 42,
     })
 
-    actor.on('increased', spy)
+    actor.on('increased', (event) => {
+      emitted.push(event)
+    })
 
     actor.start()
 
@@ -63,10 +65,10 @@ describe('fromStore', () => {
 
     yield* expect({
       count: actor.getSnapshot().context.count,
-      calls: spy.mock.calls,
+      calls: emitted,
     }).toEqual({
       count: 50,
-      calls: [[{ type: 'increased', upBy: 8 }]],
+      calls: [{ type: 'increased', upBy: 8 }],
     })
   })
 

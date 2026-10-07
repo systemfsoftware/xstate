@@ -1,4 +1,4 @@
-import { it, vi } from '@systemfsoftware/vitest'
+import { it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createStore } from '../src/index.js'
 import { reset } from '../src/reset.js'
@@ -89,7 +89,10 @@ it('validates final context after a macrostep', function*({ expect }) {
 })
 
 it('validates emitted payloads before running effects', function*({ expect }) {
-  const effectSpy = vi.fn()
+  const effectCalls: Array<[]> = []
+  const effectSpy = () => {
+    effectCalls.push([])
+  }
   const store = createStore({
     schemas: {
       events: {
@@ -113,14 +116,17 @@ it('validates emitted payloads before running effects', function*({ expect }) {
 
   yield* expect({
     sendThrown: sendThrown instanceof StoreValidationError,
-    effectCalls: effectSpy.mock.calls,
+    effectCalls,
   }).toEqual({ sendThrown: true, effectCalls: [] })
 })
 
 it('validates no-payload events and emitted events as empty objects', function*({
   expect,
 }) {
-  const emittedSpy = vi.fn()
+  const emittedCalls: Array<[unknown]> = []
+  const emittedSpy = (payload: unknown) => {
+    emittedCalls.push([payload])
+  }
   const store = createStore({
     schemas: {
       events: {
@@ -144,7 +150,7 @@ it('validates no-payload events and emitted events as empty objects', function*(
 
   yield* expect({
     afterReset: store.getSnapshot().context,
-    emittedCalls: emittedSpy.mock.calls,
+    emittedCalls,
   }).toEqual({
     afterReset: { count: 0 },
     emittedCalls: [[{ type: 'reset' }]],
@@ -278,7 +284,10 @@ it('throws for unknown events by default', function*({ expect }) {
 })
 
 it('can ignore unknown events and emitted events', function*({ expect }) {
-  const emittedSpy = vi.fn()
+  const emittedCalls: Array<[unknown]> = []
+  const emittedSpy = (payload: unknown) => {
+    emittedCalls.push([payload])
+  }
   const store = createStore({
     schemas: {
       events: {
@@ -306,7 +315,7 @@ it('can ignore unknown events and emitted events', function*({ expect }) {
   store.send({ type: 'unknown' } as unknown as Parameters<typeof store.send>[0])
   store.trigger.send()
 
-  yield* expect(emittedSpy.mock.calls).toEqual([[{ type: 'unknown' }]])
+  yield* expect(emittedCalls).toEqual([[{ type: 'unknown' }]])
 })
 
 it('allows extension-added event types without schemas', function*({
@@ -353,31 +362,28 @@ it('can opt out of individual validation areas', function*({ expect }) {
 })
 
 it('warns and no-ops in dev when there are no schemas', function*({ expect }) {
-  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-  try {
-    const store = createStore({
-      context: { count: 0 },
-      on: {
-        inc: (ctx) => ({ count: ctx.count + 1 }),
-      },
-    }).with(validateSchemas())
+  const warns: string[] = []
+  const store = createStore({
+    context: { count: 0 },
+    on: {
+      inc: (ctx) => ({ count: ctx.count + 1 }),
+    },
+    warn: (message) => {
+      warns.push(message)
+    },
+  }).with(validateSchemas())
 
-    store.trigger.inc()
+  store.trigger.inc()
 
-    yield* expect({
-      warns: warnSpy.mock.calls,
-      afterInc: store.getSnapshot().context,
-    }).toEqual({
-      warns: [
-        [
-          'The "validateSchemas" store extension was used, but the store has no schemas to validate.',
-        ],
-      ],
-      afterInc: { count: 1 },
-    })
-  } finally {
-    warnSpy.mockRestore()
-  }
+  yield* expect({
+    warns,
+    afterInc: store.getSnapshot().context,
+  }).toEqual({
+    warns: [
+      'The "validateSchemas" store extension was used, but the store has no schemas to validate.',
+    ],
+    afterInc: { count: 1 },
+  })
 })
 
 it('throws a validation error for async schemas', function*({ expect }) {

@@ -1,4 +1,4 @@
-import { describe, it, vi } from '@systemfsoftware/vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 
 import { Effect } from 'effect'
 
@@ -53,14 +53,17 @@ it('sets the value of the atom using a function', function*({ expect }) {
 it('does not subscribe a writable atom to reads inside its updater', function*({ expect }) {
   const source = createAtom(1)
   const target = createAtom(10)
-  const observer = vi.fn()
+  const observerArgs: unknown[][] = []
+  const observer = (...args: unknown[]) => {
+    observerArgs.push(args)
+  }
   const subscription = target.subscribe(observer)
 
   target.set((previous) => previous + source.get())
   source.set(2)
 
   const targetValue = target.get()
-  const observerCalls = observer.mock.calls
+  const observerCalls = [...observerArgs]
   subscription.unsubscribe()
 
   yield* expect({ target: targetValue, observerCalls }).toEqual({
@@ -76,9 +79,12 @@ it('drains notifications before rethrowing the first subscriber error', function
   const first = source.subscribe(() => {
     throw error
   })
-  const observer = vi.fn()
+  const observerArgs: unknown[][] = []
+  const observer = (...args: unknown[]) => {
+    observerArgs.push(args)
+  }
   const second = source.subscribe(observer)
-  const other = unrelated.subscribe(vi.fn<(value: number) => void>())
+  const other = unrelated.subscribe(() => {})
 
   const errors: unknown[] = []
   try {
@@ -86,17 +92,17 @@ it('drains notifications before rethrowing the first subscriber error', function
   } catch (thrown) {
     errors.push(thrown)
   }
-  const callsAfterFirst = [...observer.mock.calls]
+  const callsAfterFirst = [...observerArgs]
 
   unrelated.set(1)
-  const callsAfterUnrelated = [...observer.mock.calls]
+  const callsAfterUnrelated = [...observerArgs]
 
   try {
     source.set(2)
   } catch (thrown) {
     errors.push(thrown)
   }
-  const callsAfterSecond = [...observer.mock.calls]
+  const callsAfterSecond = [...observerArgs]
 
   first.unsubscribe()
   second.unsubscribe()
@@ -165,7 +171,10 @@ it('can set the value to undefined', function*({ expect }) {
 })
 
 it('can subscribe to atom changes', function*({ expect }) {
-  const log = vi.fn()
+  const logArgs: unknown[][] = []
+  const log = (...args: unknown[]) => {
+    logArgs.push(args)
+  }
   const atom = createAtom(0)
 
   atom.subscribe(log)
@@ -174,11 +183,14 @@ it('can subscribe to atom changes', function*({ expect }) {
 
   atom.set(2)
 
-  yield* expect(log.mock.calls).toEqual([[1], [2]])
+  yield* expect(logArgs).toEqual([[1], [2]])
 })
 
 it('can unsubscribe from atom changes', function*({ expect }) {
-  const log = vi.fn()
+  const logArgs: unknown[][] = []
+  const log = (...args: unknown[]) => {
+    logArgs.push(args)
+  }
   const atom = createAtom(0)
 
   const sub = atom.subscribe(log)
@@ -189,7 +201,7 @@ it('can unsubscribe from atom changes', function*({ expect }) {
 
   atom.set(2)
 
-  yield* expect({ calls: log.mock.calls, value: atom.get() }).toEqual({
+  yield* expect({ calls: logArgs, value: atom.get() }).toEqual({
     calls: [[1]],
     value: 2,
   })
@@ -261,7 +273,10 @@ it('works with a mix of atoms and stores', function*({ expect }) {
     },
   })
 
-  const log = vi.fn()
+  const logArgs: unknown[][] = []
+  const log = (...args: unknown[]) => {
+    logArgs.push(args)
+  }
 
   const combinedAtom = createAtom(
     () => store.get().context.name + ` ${countAtom.get()}`,
@@ -282,7 +297,7 @@ it('works with a mix of atoms and stores', function*({ expect }) {
     afterSend,
     count: countAtom.get(),
     combined: combinedAtom.get(),
-    logCalls: log.mock.calls,
+    logCalls: logArgs,
   }).toEqual({
     initial: 'David 0',
     afterSend: 'John 0',
@@ -492,7 +507,10 @@ it('conditionally read atoms are properly unsubscribed when no longer needed', f
 })
 
 it('handles diamond dependencies with single update', function*({ expect }) {
-  const log = vi.fn()
+  const logArgs: unknown[][] = []
+  const log = (...args: unknown[]) => {
+    logArgs.push(args)
+  }
   const sourceAtom = createAtom(1)
 
   const pathA = createAtom(() => sourceAtom.get() * 2)
@@ -505,18 +523,21 @@ it('handles diamond dependencies with single update', function*({ expect }) {
   })
 
   const initial = bottomAtom.get()
-  const logCallsBefore = [...log.mock.calls]
+  const logCallsBefore = [...logArgs]
 
   sourceAtom.set(2)
 
   const result = bottomAtom.get()
 
-  yield* expect({ initial, logCallsBefore, result, logCalls: log.mock.calls })
+  yield* expect({ initial, logCallsBefore, result, logCalls: logArgs })
     .toEqual({ initial: 5, logCallsBefore: [], result: 10, logCalls: [[10]] })
 })
 
 it('handles complex diamond dependencies correctly', function*({ expect }) {
-  const log = vi.fn()
+  const logArgs: unknown[][] = []
+  const log = (...args: unknown[]) => {
+    logArgs.push(args)
+  }
 
   const atomD = createAtom(1)
 
@@ -529,7 +550,7 @@ it('handles complex diamond dependencies correctly', function*({ expect }) {
   atomA.subscribe(log)
 
   const initial = atomA.get()
-  const logCallsBefore = [...log.mock.calls]
+  const logCallsBefore = [...logArgs]
 
   atomD.set(2)
 
@@ -542,7 +563,7 @@ it('handles complex diamond dependencies correctly', function*({ expect }) {
     atomB: atomB.get(),
     atomC: atomC.get(),
     atomD: atomD.get(),
-    logCalls: log.mock.calls,
+    logCalls: logArgs,
   }).toEqual({
     initial: 6,
     logCallsBefore: [],
@@ -555,7 +576,10 @@ it('handles complex diamond dependencies correctly', function*({ expect }) {
 })
 
 it('supports custom equality functions through compare option', function*({ expect }) {
-  const log = vi.fn()
+  const logArgs: unknown[][] = []
+  const log = (...args: unknown[]) => {
+    logArgs.push(args)
+  }
 
   const coordAtom = createAtom(
     { x: 0, y: 0 },
@@ -576,14 +600,17 @@ it('supports custom equality functions through compare option', function*({ expe
 
   coordAtom.set({ x: 1, y: 2 })
 
-  yield* expect({ initial, logCalls: log.mock.calls }).toEqual({
+  yield* expect({ initial, logCalls: logArgs }).toEqual({
     initial: { x: 0, y: 0 },
     logCalls: [[{ x: 1, y: 0 }], [{ x: 1, y: 2 }]],
   })
 })
 
 it('uses Object.is as default equality function', function*({ expect }) {
-  const log = vi.fn()
+  const logArgs: unknown[][] = []
+  const log = (...args: unknown[]) => {
+    logArgs.push(args)
+  }
   const objAtom = createAtom({ value: 0 })
 
   objAtom.subscribe(log)
@@ -596,7 +623,7 @@ it('uses Object.is as default equality function', function*({ expect }) {
   objAtom.set(obj)
   objAtom.set(obj)
 
-  yield* expect({ initial, logCalls: log.mock.calls }).toEqual({
+  yield* expect({ initial, logCalls: logArgs }).toEqual({
     initial: { value: 0 },
     logCalls: [[{ value: 0 }], [obj]],
   })
@@ -703,14 +730,17 @@ describe('reducer atoms', () => {
       0,
       (state, event: number) => state + event,
     )
-    const listener = vi.fn()
+    const listenerArgs: unknown[][] = []
+    const listener = (...args: unknown[]) => {
+      listenerArgs.push(args)
+    }
 
     counter.subscribe(listener)
     counter.send(1)
     counter.send(0)
     counter.send(2)
 
-    yield* expect({ calls: listener.mock.calls, value: counter.get() }).toEqual({
+    yield* expect({ calls: listenerArgs, value: counter.get() }).toEqual({
       calls: [[1], [3]],
       value: 3,
     })
@@ -738,13 +768,16 @@ describe('reducer atoms', () => {
       1,
       (state, event: number) => state + event * multiplier.get(),
     )
-    const listener = vi.fn()
+    const listenerArgs: unknown[][] = []
+    const listener = (...args: unknown[]) => {
+      listenerArgs.push(args)
+    }
 
     counter.subscribe(listener)
     counter.send(3)
     multiplier.set(10)
 
-    yield* expect({ counter: counter.get(), listenerCalls: listener.mock.calls })
+    yield* expect({ counter: counter.get(), listenerCalls: listenerArgs })
       .toEqual({ counter: 7, listenerCalls: [[7]] })
   })
 })
@@ -766,12 +799,15 @@ describe('async atoms', () => {
         const state = atom.get()
         return state.status === 'done' ? state.data : state.status
       })
-      const observer = vi.fn()
+      const observerArgs: unknown[][] = []
+      const observer = (...args: unknown[]) => {
+        observerArgs.push(args)
+      }
       const subscription = selected.subscribe(observer)
 
       yield* Effect.promise(() => Promise.resolve())
       const afterFirstSettlement = atom.get()
-      observer.mockClear()
+      observerArgs.length = 0
 
       count.set(2)
       const afterCountSet = atom.get()
@@ -779,7 +815,7 @@ describe('async atoms', () => {
       yield* Effect.promise(() => Promise.resolve())
 
       const afterSecondSettlement = atom.get()
-      const observerCalls = observer.mock.calls
+      const observerCalls = [...observerArgs]
       subscription.unsubscribe()
 
       yield* expect({
@@ -798,23 +834,27 @@ describe('async atoms', () => {
 
   it('should recompute lazily after a settled dependency changes', function*({ expect }) {
     const count = createAtom(1)
-    const getter = vi.fn(async () => count.get() * 2)
+    const getterArgs: unknown[][] = []
+    const getter = async (...args: unknown[]) => {
+      getterArgs.push(args)
+      return count.get() * 2
+    }
     const atom = createAsyncAtom(getter)
 
-    const getterCallsBeforeFirstRead = [...getter.mock.calls]
+    const getterCallsBeforeFirstRead = [...getterArgs]
     const firstRead = atom.get()
 
     yield* Effect.promise(() => Promise.resolve())
     const afterFirstSettlement = atom.get()
-    const getterCallsAfterFirstSettlement = [...getter.mock.calls]
+    const getterCallsAfterFirstSettlement = [...getterArgs]
 
     count.set(2)
     const afterCountSet = atom.get()
-    const getterCallsAfterCountSet = [...getter.mock.calls]
+    const getterCallsAfterCountSet = [...getterArgs]
 
     yield* Effect.promise(() => Promise.resolve())
     const afterSecondSettlement = atom.get()
-    const getterCallsAtEnd = [...getter.mock.calls]
+    const getterCallsAtEnd = [...getterArgs]
 
     yield* expect({
       getterCallsBeforeFirstRead,
@@ -852,21 +892,24 @@ describe('async atoms', () => {
           next.status === 'done' &&
           previous.data === next.data),
     })
-    const observer = vi.fn()
+    const observerArgs: unknown[][] = []
+    const observer = (...args: unknown[]) => {
+      observerArgs.push(args)
+    }
     const subscription = atom.subscribe(observer)
 
     yield* Effect.promise(() => Promise.resolve())
     const afterFirstSettlement = atom.get()
-    observer.mockClear()
+    observerArgs.length = 0
 
     count.set(3)
     yield* Effect.promise(() => Promise.resolve())
-    const observerCallsAfterSuppressed = [...observer.mock.calls]
+    const observerCallsAfterSuppressed = [...observerArgs]
 
     count.set(4)
     yield* Effect.promise(() => Promise.resolve())
     const finalState = atom.get()
-    const observerCallsAtEnd = [...observer.mock.calls]
+    const observerCallsAtEnd = [...observerArgs]
     subscription.unsubscribe()
 
     yield* expect({
@@ -1122,7 +1165,10 @@ describe('async atoms', () => {
   })
 
   it.live('should notify subscribers when async operation completes successfully', function*({ expect }) {
-    const log = vi.fn()
+    const logArgs: unknown[][] = []
+    const log = (...args: unknown[]) => {
+      logArgs.push(args)
+    }
     const atom = createAsyncAtom(async () => {
       await afterRealTime(10)
       return 'test-value'
@@ -1131,11 +1177,11 @@ describe('async atoms', () => {
     atom.subscribe(log)
 
     const initial = atom.get()
-    const callsBeforeSettlement = [...log.mock.calls]
+    const callsBeforeSettlement = [...logArgs]
 
     yield* Effect.promise(() => afterRealTime(20))
 
-    const callsAtEnd = [...log.mock.calls]
+    const callsAtEnd = [...logArgs]
     const settled = atom.get()
 
     yield* expect({ initial, callsBeforeSettlement, callsAtEnd, settled })
@@ -1148,7 +1194,10 @@ describe('async atoms', () => {
   })
 
   it.live('should notify subscribers when async operation fails', function*({ expect }) {
-    const log = vi.fn()
+    const logArgs: unknown[][] = []
+    const log = (...args: unknown[]) => {
+      logArgs.push(args)
+    }
     const error = new Error('test error')
     const atom = createAsyncAtom(async () => {
       await afterRealTime(10)
@@ -1158,11 +1207,11 @@ describe('async atoms', () => {
     atom.subscribe(log)
 
     const initial = atom.get()
-    const callsBeforeSettlement = [...log.mock.calls]
+    const callsBeforeSettlement = [...logArgs]
 
     yield* Effect.promise(() => afterRealTime(20))
 
-    const callsAtEnd = [...log.mock.calls]
+    const callsAtEnd = [...logArgs]
     const settled = atom.get()
 
     yield* expect({ initial, callsBeforeSettlement, callsAtEnd, settled })
@@ -1175,8 +1224,14 @@ describe('async atoms', () => {
   })
 
   it.live('should notify multiple subscribers when async operation completes', function*({ expect }) {
-    const log1 = vi.fn()
-    const log2 = vi.fn()
+    const log1Args: unknown[][] = []
+    const log1 = (...args: unknown[]) => {
+      log1Args.push(args)
+    }
+    const log2Args: unknown[][] = []
+    const log2 = (...args: unknown[]) => {
+      log2Args.push(args)
+    }
     const atom = createAsyncAtom(async () => {
       await afterRealTime(10)
       return 'multi-test'
@@ -1186,11 +1241,11 @@ describe('async atoms', () => {
     atom.subscribe(log2)
 
     const initial = atom.get()
-    const callsBeforeSettlement = [[...log1.mock.calls], [...log2.mock.calls]]
+    const callsBeforeSettlement = [[...log1Args], [...log2Args]]
 
     yield* Effect.promise(() => afterRealTime(20))
 
-    const callsAtEnd = [[...log1.mock.calls], [...log2.mock.calls]]
+    const callsAtEnd = [[...log1Args], [...log2Args]]
 
     yield* expect({ initial, callsBeforeSettlement, callsAtEnd }).toEqual({
       initial: { status: 'pending' },
@@ -1205,7 +1260,10 @@ describe('async atoms', () => {
   it('subscribe callback should not track dependencies from .get() calls', function*({ expect }) {
     const items = createAtom<number[]>([])
     const ids = createAtom(() => Array.from(items.get()).sort().join(','))
-    const log = vi.fn()
+    const logArgs: unknown[][] = []
+    const log = (...args: unknown[]) => {
+      logArgs.push(args)
+    }
 
     ids.subscribe(() => {
       void items.get()
@@ -1217,14 +1275,17 @@ describe('async atoms', () => {
     items.set([1, 2])
     items.set([1, 2])
 
-    yield* expect(log.mock.calls).toEqual([[], []])
+    yield* expect(logArgs).toEqual([[], []])
   })
 
   it('subscribe callback should not track deps on non-computed atoms', function*({ expect }) {
     const ids = createAtom('')
     const items = createAtom<number[]>([])
     items.subscribe((value) => ids.set(Array.from(value).sort().join(',')))
-    const log = vi.fn()
+    const logArgs: unknown[][] = []
+    const log = (...args: unknown[]) => {
+      logArgs.push(args)
+    }
 
     ids.subscribe(() => {
       void items.get()
@@ -1236,6 +1297,6 @@ describe('async atoms', () => {
     items.set([1, 2])
     items.set([1, 2])
 
-    yield* expect(log.mock.calls).toEqual([[], []])
+    yield* expect(logArgs).toEqual([[], []])
   })
 })
