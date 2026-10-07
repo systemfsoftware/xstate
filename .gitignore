@@ -12,4 +12,5 @@ packages/*/temp/
 result
 result-*
 .sfs-deps
+.stryker-deps
 .cache/

@@ -16,39 +16,62 @@ jobs:
   plan:
     name: plan · mutation shards
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     outputs:
-      packages: ${{ steps.shards.outputs.packages }}
+      matrix: ${{ steps.publish.outputs.matrix }}
+      has-shards: ${{ steps.publish.outputs.has-shards }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/dev-shell
-        with:
-          install: "false"
-      - name: Plan mutation shards
+      - name: Discover mutation projects
         uses: ./.github/actions/sandbox
+        with:
+          hosts: jsr.io
+          command: >-
+            deno run --config=scripts/deno.json --allow-read --allow-write
+            scripts/stryker-plan-gate.ts projects --out .cache/mutation-projects.txt
+      - id: projects
+        name: Publish the project list
+        run: echo "projects=$(cat .cache/mutation-projects.txt)" >> "$GITHUB_OUTPUT"
+      - name: Plan mutation shards
+        if: steps.projects.outputs.projects != ''
+        uses: ./.github/actions/sandbox
+        env:
+          MUTATION_PROJECTS: ${{ steps.projects.outputs.projects }}
         with:
           hosts: |
             jsr.io
             registry.npmjs.org
-          command: ./scripts/mutation-shards.ts --output .cache/mutation-shards.out --summary .cache/mutation-summary.md
-      - id: shards
+          pass-env: MUTATION_PROJECTS
+          command: ./node_modules/.bin/stryker plan --target-seconds 900 --projects "$MUTATION_PROJECTS" --out .cache/stryker-plan.json
+      - name: Gate the plan
+        uses: ./.github/actions/sandbox
+        with:
+          hosts: jsr.io
+          command: >-
+            deno run --config=scripts/deno.json --allow-read --allow-write
+            scripts/stryker-plan-gate.ts gate --plan .cache/stryker-plan.json --out .cache/mutation-plan.out
+      - id: publish
         name: Publish the plan
-        run: |
-          cat .cache/mutation-shards.out >> "$GITHUB_OUTPUT"
-          cat .cache/mutation-summary.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat .cache/mutation-plan.out >> "$GITHUB_OUTPUT"
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: stryker-plan
+          path: .cache/stryker-plan.json
+          if-no-files-found: ignore
 
   mutation:
-    name: mutation · ${{ matrix.package }}
+    name: mutation · shard ${{ matrix.shard }}
     needs: [plan]
-    if: needs.plan.outputs.packages != '[]'
+    if: needs.plan.outputs.has-shards == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 75
     strategy:
       fail-fast: false
-      matrix:
-        package: ${{ fromJSON(needs.plan.outputs.packages) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       CI: "true"
     steps:
@@ -56,23 +79,31 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/dev-shell
+      - name: Download the shard plan
+        uses: actions/download-artifact@v6
+        with:
+          name: stryker-plan
+          path: .cache
       - name: Stryker incremental cache
         uses: actions/cache@v6
         with:
           path: |
-            apps/*/reports/stryker-incremental.json
             packages/*/reports/stryker-incremental.json
-          key: stryker-${{ matrix.package }}-${{ github.sha }}
-          restore-keys: stryker-${{ matrix.package }}-
+            .cache/reports/shards/**/stryker-incremental.json
+          key: stryker-shard-${{ matrix.shard }}-${{ github.sha }}
+          restore-keys: stryker-shard-${{ matrix.shard }}-
       - name: Mutation at break 100
         uses: ./.github/actions/sandbox
+        env:
+          MUTATION_SHARD: ${{ matrix.shard }}
         with:
-          command: turbo run mutation --filter="${{ matrix.package }}"
+          pass-env: MUTATION_SHARD
+          command: ./node_modules/.bin/stryker run --plan .cache/stryker-plan.json --shard "$MUTATION_SHARD"
       - if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: mutation-report-${{ strategy.job-index }}
+          name: mutation-shard-${{ strategy.job-index }}
           path: |
-            apps/*/reports/mutation-report.*
+            .cache/reports/shards/**
             packages/*/reports/mutation-report.*
           if-no-files-found: ignore

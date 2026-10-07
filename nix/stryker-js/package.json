@@ -1,0 +1,6 @@
+{
+  "license": "Apache-2.0",
+  "name": "stryker-js-effect-build",
+  "private": true,
+  "type": "module"
+}
