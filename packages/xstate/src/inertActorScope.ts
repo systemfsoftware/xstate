@@ -126,6 +126,9 @@ const lazyInertActorScopePrototype = {
   get logger() {
     return materializeInertActorScope(this as AnyActorScope).logger
   },
+  get warn() {
+    return materializeInertActorScope(this as AnyActorScope).warn
+  },
   get sessionId() {
     return materializeInertActorScope(this as AnyActorScope).sessionId
   },

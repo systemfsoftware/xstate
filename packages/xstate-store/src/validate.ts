@@ -205,7 +205,8 @@ export function validateSchemas<
 
     if (!hasAnySchemas(schemas)) {
       if (isDevelopment) {
-        console.warn(
+        const warn = logic.warn ?? console.warn
+        warn(
           'The "validateSchemas" store extension was used, but the store has no schemas to validate.',
         )
       }

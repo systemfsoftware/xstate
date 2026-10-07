@@ -59,7 +59,7 @@ export function createListenerLogic<
       return actor.on(isPartialWildcard ? '*' : eventType, (emittedEvent) => {
         if (
           isPartialWildcard &&
-          !matchesEventDescriptor(emittedEvent.type, eventType)
+          !matchesEventDescriptor(emittedEvent.type, eventType, system._warn)
         ) {
           return
         }

@@ -12,6 +12,7 @@ import type {
   DeadLetterDetail,
   EventRejection,
   EventRejectionReason,
+  WallClock,
 } from './system.js'
 
 // this is needed to make JSDoc `@link` work properly
@@ -1928,11 +1929,14 @@ export interface ActorOptions<TLogic extends AnyActorLogic> {
    * @see {@link (SimulatedClock:class)}
    */
   clock?: Clock
+  wallClock?: WallClock
   /**
    * Specifies the logger to be used for `log(...)` actions. Defaults to the
    * native `console.log(...)` method.
    */
   logger?: (...args: any[]) => void
+  reportUnhandledError?: (error: unknown) => void
+  warn?: (message: string) => void
   parent?: AnyActor
   /** @internal */
   syncSnapshot?: boolean | undefined
@@ -2498,6 +2502,7 @@ export interface ActorScope<
   id: string
   sessionId: string
   logger: (...args: any[]) => void
+  warn: (message: string) => void
   defer: (fn: () => void) => void
   emit: (event: TEmitted) => void | PromiseLike<void>
   system: TSystem
@@ -2638,6 +2643,7 @@ export interface ActorLogic<
   getPersistedSnapshot: (
     snapshot: TSnapshot,
     options?: unknown,
+    warn?: (message: string) => void,
   ) => Snapshot<unknown>
   /**
    * Returns an event that the actor should transition with to recover from an
@@ -2666,7 +2672,7 @@ export interface AnyActorLogic {
   getInitialSnapshot(actorScope: any, input: any): any
   restoreSnapshot?(persistedState: Snapshot<unknown>, actorScope: any): any
   start?(snapshot: any, actorScope: any, options?: { restored: boolean }): void
-  getPersistedSnapshot(snapshot: any, options?: unknown): Snapshot<unknown>
+  getPersistedSnapshot(snapshot: any, options?: unknown, warn?: (message: string) => void): Snapshot<unknown>
   getExecutionErrorEvent?(snapshot: any, error: unknown): any
 }
 
