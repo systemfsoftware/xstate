@@ -92,6 +92,10 @@ const stagedFiles = (): readonly string[] =>
     .map((l: string) => l.trim())
     .filter((l: string) => l.length > 0)
 
+const SUBTREE_TRAILERS = [/^git-subtree-dir: \S+$/m, /^git-subtree-split: [0-9a-f]{40}$/m] as const
+const isSubtreeSquash = (commit: string) => SUBTREE_TRAILERS.every((trailer) => trailer.test(commit))
+const isSubtreeAdd = (commit: string) => /^Merge commit '[0-9a-f]{40}' as '[^']+'\s*$/.test(commit)
+
 const configuration: UserConfig = {
   extends: ['@commitlint/config-conventional'],
 
@@ -224,7 +228,7 @@ const configuration: UserConfig = {
   },
 
   defaultIgnores: true,
-  ignores: [(commit) => commit.startsWith("Squashed '") || commit.includes('git-subtree-dir:')],
+  ignores: [isSubtreeSquash, isSubtreeAdd],
   formatter: '@commitlint/format',
 }
 
