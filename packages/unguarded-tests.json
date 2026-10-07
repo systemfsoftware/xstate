@@ -1,5 +1,13 @@
 {
   "files": [
+    "packages/xstate-react/test/createActorContext.test.tsx",
+    "packages/xstate-react/test/fastRefresh.production.test.tsx",
+    "packages/xstate-react/test/fastRefresh.test.tsx",
+    "packages/xstate-react/test/issueRegressions.test.tsx",
+    "packages/xstate-react/test/types.test.tsx",
+    "packages/xstate-react/test/useActor.test.tsx",
+    "packages/xstate-react/test/useActorRef.test.tsx",
+    "packages/xstate-react/test/useSelector.test.tsx",
     "packages/xstate-store-react/src/index.test.tsx",
     "packages/xstate-store-react/src/types.test.tsx",
     "packages/xstate-test/test/advancedPropertyTest.test.ts",

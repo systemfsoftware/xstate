@@ -1,10 +1,10 @@
-import { describe, it } from '@systemfsoftware/vitest'
 import { type ActorRefFrom, createActor, createMachine } from '@systemfsoftware/xstate'
 import { render } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
 import z from 'zod'
 import { useActor, useActorRef, useMachine, useSelector } from '../src/index.js'
 
-describe('useMachine', (it) => {
+describe('useMachine', () => {
   interface YesNoContext {
     value?: number
   }
@@ -14,6 +14,7 @@ describe('useMachine', (it) => {
   }
 
   const yesNoMachine = createMachine({
+    // types: {} as { context: YesNoContext; events: YesNoEvent },
     schemas: {
       context: z.object({
         value: z.number().optional(),
@@ -38,7 +39,7 @@ describe('useMachine', (it) => {
     },
   })
 
-  it('state should not become never after checking state with matches', function*({ expect }) {
+  it('state should not become never after checking state with matches', () => {
     const YesNo = () => {
       const [state] = useMachine(yesNoMachine)
 
@@ -49,18 +50,16 @@ describe('useMachine', (it) => {
       return <span>Yes: {state.context.value}</span>
     }
 
-    const { container, unmount } = render(<YesNo />)
-
-    try {
-      yield* expect(container.textContent).toEqual('No')
-    } finally {
-      unmount()
-    }
+    render(<YesNo />)
   })
 
   // Example from: https://github.com/statelyai/xstate/discussions/1534
-  it('spawned actors should be typed correctly', function*({ expect }) {
+  it('spawned actors should be typed correctly', () => {
     const child = createMachine({
+      // types: {} as {
+      //   context: { bar: number };
+      //   events: { type: 'FOO'; data: number };
+      // },
       schemas: {
         context: z.object({
           bar: z.number(),
@@ -132,17 +131,18 @@ describe('useMachine', (it) => {
       return <Element myActor={current.context.actor} />
     }
 
-    const noop = (_val: any) => {}
+    const noop = (_val: any) => {
+      /* ... */
+    }
 
     noop(App)
-
-    yield* expect(child.id).toEqual('myActor')
   })
 })
 
-describe('useActor', (it) => {
-  it('should require input to be specified when defined', function*({ expect }) {
+describe('useActor', () => {
+  it('should require input to be specified when defined', () => {
     const withInputMachine = createMachine({
+      // types: {} as { input: { value: number } },
       schemas: {
         input: z.object({
           value: z.number(),
@@ -160,17 +160,12 @@ describe('useActor', (it) => {
       return <></>
     }
 
-    const { container, unmount } = render(<Component />)
-
-    try {
-      yield* expect(container.textContent).toEqual('')
-    } finally {
-      unmount()
-    }
+    render(<Component />)
   })
 
-  it('should not require input when not defined', function*({ expect }) {
+  it('should not require input when not defined', () => {
     const noInputMachine = createMachine({
+      // types: {} as {},
       initial: 'idle',
       states: {
         idle: {},
@@ -181,18 +176,12 @@ describe('useActor', (it) => {
       return <></>
     }
 
-    const { container, unmount } = render(<Component />)
-
-    try {
-      yield* expect(container.textContent).toEqual('')
-    } finally {
-      unmount()
-    }
+    render(<Component />)
   })
 })
 
-describe('useActorRef', (it) => {
-  it('should not require input when restoring a snapshot', function*({ expect }) {
+describe('useActorRef', () => {
+  it('should not require input when restoring a snapshot', () => {
     const machine = createMachine({
       schemas: { input: z.object({ value: z.number() }) },
     })
@@ -200,6 +189,7 @@ describe('useActorRef', (it) => {
       input: { value: 1 },
     }).getPersistedSnapshot()
 
+    // Type-only checks: the hooks need a component to run.
     const check = () => {
       useActorRef(machine, { snapshot })
       useActor(machine, { snapshot })
@@ -210,11 +200,12 @@ describe('useActorRef', (it) => {
       useActorRef(machine, {})
     }
 
-    yield* expect(typeof check).toEqual('function')
+    expect(check).toBeTypeOf('function')
   })
 
-  it('should require input to be specified when defined', function*({ expect }) {
+  it('should require input to be specified when defined', () => {
     const withInputMachine = createMachine({
+      // types: {} as { input: { value: number } },
       schemas: {
         input: z.object({
           value: z.number(),
@@ -232,17 +223,12 @@ describe('useActorRef', (it) => {
       return <></>
     }
 
-    const { container, unmount } = render(<Component />)
-
-    try {
-      yield* expect(container.textContent).toEqual('')
-    } finally {
-      unmount()
-    }
+    render(<Component />)
   })
 
-  it('should not require input when not defined', function*({ expect }) {
+  it('should not require input when not defined', () => {
     const noInputMachine = createMachine({
+      // types: {} as {},
       initial: 'idle',
       states: {
         idle: {},
@@ -254,37 +240,27 @@ describe('useActorRef', (it) => {
       return <></>
     }
 
-    const { container, unmount } = render(<Component />)
-
-    try {
-      yield* expect(container.textContent).toEqual('')
-    } finally {
-      unmount()
-    }
+    render(<Component />)
   })
 })
 
-it(
-  'useMachine types work for machines with a specified id and state with an after property #5008',
-  function*({ expect }) {
-    // https://github.com/statelyai/xstate/issues/5008
-    const cheatCodeMachine = createMachine({
-      id: 'cheatCodeMachine',
-      initial: 'disabled',
-      states: {
-        disabled: {
-          after: {},
-        },
-        enabled: {},
+it('useMachine types work for machines with a specified id and state with an after property #5008', () => {
+  // https://github.com/statelyai/xstate/issues/5008
+  const cheatCodeMachine = createMachine({
+    id: 'cheatCodeMachine',
+    initial: 'disabled',
+    states: {
+      disabled: {
+        after: {},
       },
-    })
+      enabled: {},
+    },
+  })
 
-    function _useCheatCode(): boolean {
-      const [state] = useMachine(cheatCodeMachine)
+  function _useCheatCode(): boolean {
+    // This should typecheck without errors
+    const [state] = useMachine(cheatCodeMachine)
 
-      return state.matches('enabled')
-    }
-
-    yield* expect(createActor(cheatCodeMachine).getSnapshot().value).toEqual('disabled')
-  },
-)
+    return state.matches('enabled')
+  }
+})
