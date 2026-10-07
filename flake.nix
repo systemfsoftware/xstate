@@ -38,6 +38,21 @@
       url = "github:systemfsoftware/stryker-js-effect/3db0c428530803e6b425a834a64b2764fd6ee41b";
       flake = false;
     };
+    # The attw CLI every package's `attw` script runs, built from source for
+    # the same reason, at the released 4.2.0 tag. flake = false: the input is
+    # the pinned tree, not an exported package set.
+    are-the-types-wrong-effect = {
+      url = "github:systemfsoftware/are-the-types-wrong-effect/d43a8020f7dc82a32de410823c6da5298c53a3b6";
+      flake = false;
+    };
+    # @systemfsoftware/effect-cell-types@v7.0.0's tag commit: the version
+    # attw 4.2.0's lockfile resolves, and the version its Workflow.make calls
+    # are written against. The workspace keeps the 12.0.0 the systemfsoftware
+    # input carries; only the attw install takes this one.
+    systemfsoftware-effect-cell-types-7 = {
+      url = "github:systemfsoftware/systemfsoftware/4cf0f77016f1827fc54ed00144cc85e00eb729a1";
+      flake = false;
+    };
     # The pnpm store is hashless: each tarball's lockfile integrity is its fetch hash, so a lockfile change needs no hash edit.
     importPnpmLock = {
       url = "github:Scrumplex/importPnpmLock.nix";
@@ -45,7 +60,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, comment-checker, pnpm-release-management, release-tools, systemfsoftware, stryker-js-effect, importPnpmLock }:
+  outputs = { self, nixpkgs, comment-checker, pnpm-release-management, release-tools, systemfsoftware, stryker-js-effect, are-the-types-wrong-effect, systemfsoftware-effect-cell-types-7, importPnpmLock }:
     let
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
@@ -89,7 +104,40 @@
               ];
               extraStoreFiles = { patches = "${stryker-js-effect}/patches"; };
             };
+            effect-cell-types = pkgs.callPackage ./nix/from-source.nix {
+              inherit mkPnpmStore nodejs pnpm;
+              pname = "effect-cell-types";
+              src = systemfsoftware-effect-cell-types-7;
+              overlay = ./nix/effect-cell-types;
+              deps = sfs-deps;
+              packed = [
+                { name = "@systemfsoftware/effect-cell-types"; dir = "packages/effect-cell-types"; }
+              ];
+            };
+            attw = pkgs.callPackage ./nix/from-source.nix {
+              inherit mkPnpmStore nodejs pnpm;
+              pname = "arethetypeswrong-cli";
+              src = are-the-types-wrong-effect;
+              overlay = ./nix/attw;
+              deps = attw-deps;
+              # The CLI bundles the engine into dist/main.mjs, so the engine is
+              # built but only the CLI is packed.
+              built = [
+                { name = "@systemfsoftware/arethetypeswrong"; dir = "packages/arethetypeswrong"; }
+              ];
+              packed = [
+                { name = "@systemfsoftware/arethetypeswrong-cli"; dir = "apps/arethetypeswrong-cli"; }
+              ];
+            };
           };
+          # The attw install takes effect-cell-types 7 beside the
+          # systemfsoftware set, and cannot take source-deps: that already
+          # carries the attw tarball this instance produces.
+          attw-deps = pkgs.runCommand "xstate-attw-deps" { } ''
+            mkdir -p "$out"
+            cp -r ${sfs-deps}/. "$out"/
+            cp -r ${from-source.effect-cell-types.tarballs}/. "$out"/
+          '';
           # One directory carries every tarball a workspace here installs: the
           # systemfsoftware flake's workspace tarballs and the tarballs this
           # flake builds from source. Every lockfile names them
@@ -122,7 +170,7 @@
             # change moves this hash. A store that already holds the old output
             # reuses it silently; `nix build --rebuild` on xstate-pnpm-deps.drv
             # refetches and prints the new value.
-            hash = "sha256-1apy6avKsUCIrcQSgpMaLULHEhE2rE9agY8C7efMRGM=";
+            hash = "sha256-u41XSNkIAgiNJ6aQGCdazFd8HzGqCqnA5nQZKsgUPNY=";
           }) [ "pnpm-store" ];
           unwrapped = pkgs.callPackage ./nix/comment-checker.nix {
             hashes = "${comment-checker}/nix/release-hashes.json";

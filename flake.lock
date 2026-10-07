@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "are-the-types-wrong-effect": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789533049,
+        "narHash": "sha256-UsnhLvTURM27VB3T/gxc6Oql/av0FYYI6nLv5UBKusw=",
+        "owner": "systemfsoftware",
+        "repo": "are-the-types-wrong-effect",
+        "rev": "d43a8020f7dc82a32de410823c6da5298c53a3b6",
+        "type": "github"
+      },
+      "original": {
+        "owner": "systemfsoftware",
+        "repo": "are-the-types-wrong-effect",
+        "rev": "d43a8020f7dc82a32de410823c6da5298c53a3b6",
+        "type": "github"
+      }
+    },
     "comment-checker": {
       "inputs": {
         "nixpkgs": [
@@ -213,13 +230,15 @@
     },
     "root": {
       "inputs": {
+        "are-the-types-wrong-effect": "are-the-types-wrong-effect",
         "comment-checker": "comment-checker",
         "importPnpmLock": "importPnpmLock",
         "nixpkgs": "nixpkgs",
         "pnpm-release-management": "pnpm-release-management",
         "release-tools": "release-tools",
         "stryker-js-effect": "stryker-js-effect",
-        "systemfsoftware": "systemfsoftware"
+        "systemfsoftware": "systemfsoftware",
+        "systemfsoftware-effect-cell-types-7": "systemfsoftware-effect-cell-types-7"
       }
     },
     "rust-overlay": {
@@ -349,6 +368,23 @@
         "owner": "systemfsoftware",
         "repo": "systemfsoftware",
         "rev": "217c80d5d52c17d03d4aeb83b580ef97ed986c85",
+        "type": "github"
+      }
+    },
+    "systemfsoftware-effect-cell-types-7": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789152418,
+        "narHash": "sha256-j6RoO74XnpW0zJX6CKdp6eW88WkptcqXWPFEXZsiELY=",
+        "owner": "systemfsoftware",
+        "repo": "systemfsoftware",
+        "rev": "4cf0f77016f1827fc54ed00144cc85e00eb729a1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "systemfsoftware",
+        "repo": "systemfsoftware",
+        "rev": "4cf0f77016f1827fc54ed00144cc85e00eb729a1",
         "type": "github"
       }
     },
