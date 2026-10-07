@@ -1,5 +1,5 @@
 import { it } from '@systemfsoftware/vitest'
-import { Effect } from 'effect'
+import { Data, Effect } from 'effect'
 import { execFile } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -13,6 +13,8 @@ const tsc = path.join(path.dirname(typescript), 'bin/tsc')
 const FIXTURES = ['narrowed-context', 'strict-targets', 'registered-child-parent', 'created-invoke'] as const
 
 const TSC_COMPILE_BUDGET_MS = 60_000
+const TSC_CHILD_BUDGET_MARGIN_MS = 5_000
+const TSC_CHILD_BUDGET_MS = TSC_COMPILE_BUDGET_MS - TSC_CHILD_BUDGET_MARGIN_MS
 
 const COMPILER_FLAGS = [
   '--ignoreConfig',
@@ -32,14 +34,74 @@ const COMPILER_FLAGS = [
 
 type Compiled = { readonly diagnostics: readonly string[] }
 
-const compile = (cwd: string, args: readonly string[]) =>
-  Effect.callback<Compiled>((resume) => {
-    execFile(process.execPath, [tsc, ...COMPILER_FLAGS, ...args], { cwd, maxBuffer: 64 * 1024 * 1024 }, (_, stdout) => {
-      resume(
-        Effect.succeed({ diagnostics: stdout.split('\n').filter((line) => /^\S.*\(\d+,\d+\): error TS/.test(line)) }),
-      )
+class ChildTimeout extends Data.TaggedError('ChildTimeout')<{
+  readonly pid: number
+  readonly budgetMs: number
+  readonly args: readonly string[]
+}> {
+  override get message(): string {
+    return `Child ${this.pid} timed out after ${this.budgetMs}ms and was killed: ${this.args.join(' ')}`
+  }
+}
+
+type BoundedSpawn = {
+  readonly command: string
+  readonly args: readonly string[]
+  readonly cwd: string
+  readonly budgetMs: number
+}
+
+const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const spawnBounded = ({ command, args, cwd, budgetMs }: BoundedSpawn) =>
+  Effect.callback<string, ChildTimeout>((resume) => {
+    const child = execFile(
+      command,
+      args,
+      { cwd, maxBuffer: 64 * 1024 * 1024, timeout: budgetMs, killSignal: 'SIGKILL' },
+      (error, stdout) => {
+        if (error?.signal !== 'SIGKILL') {
+          resume(Effect.succeed(stdout))
+          return
+        }
+        const pid = child.pid
+        if (pid === undefined) {
+          resume(Effect.die(new Error('A child killed for overrunning its budget reported no pid')))
+          return
+        }
+        if (isProcessAlive(pid)) {
+          resume(Effect.die(new Error(`Child ${pid} survived the kill that ended its ${budgetMs}ms budget`)))
+          return
+        }
+        resume(Effect.fail(new ChildTimeout({ pid, budgetMs, args })))
+      },
+    )
+    // An interrupted case must not leave the child running.
+    return Effect.sync(() => {
+      child.kill('SIGKILL')
     })
   })
+
+const diagnosticsIn = (stdout: string): readonly string[] =>
+  stdout.split('\n').filter((line) => /^\S.*\(\d+,\d+\): error TS/.test(line))
+
+const compile = (cwd: string, args: readonly string[]) =>
+  Effect.map(
+    spawnBounded({
+      command: process.execPath,
+      args: [tsc, ...COMPILER_FLAGS, ...args],
+      cwd,
+      budgetMs: TSC_CHILD_BUDGET_MS,
+    }),
+    (stdout): Compiled => ({ diagnostics: diagnosticsIn(stdout) }),
+  )
 
 const diagnosticsOf = (compiled: Compiled, file: string) =>
   compiled.diagnostics.filter((line) => line.startsWith(`${fixtureDir}/${file}.ts(`))
@@ -204,3 +266,32 @@ it('Should_CompileTheConsumer_When_ItSeesOnlyTheEmittedParentDeclaration', funct
     diagnostics: diagnosticsOf(compiled, 'registered-child-consumer'),
   }).toEqual({ seesSource: false, diagnostics: [] })
 }, TSC_COMPILE_BUDGET_MS)
+
+const HANGING_CHILD = "process.on('SIGTERM', () => {}); process.on('SIGINT', () => {}); setInterval(() => {}, 1_000)"
+
+const HANGING_CHILD_BUDGET_MS = 250
+const HANGING_CHILD_CASE_BUDGET_MS = 5_000
+
+it('Should_KillTheChildAndNameTheBudgetTimeout_When_TheChildOutlivesItsBudget', function*({ expect }) {
+  const failure = yield* Effect.flip(
+    spawnBounded({
+      command: process.execPath,
+      args: ['-e', HANGING_CHILD],
+      cwd: packageDir,
+      budgetMs: HANGING_CHILD_BUDGET_MS,
+    }),
+  )
+  yield* expect({
+    tag: failure._tag,
+    namesTheTimeout: failure.message.includes(`timed out after ${HANGING_CHILD_BUDGET_MS}ms`),
+    pidIsPositive: failure.pid > 0,
+    killedChildIsGone: !isProcessAlive(failure.pid),
+    livenessProbeSeesALivingProcess: isProcessAlive(process.pid),
+  }).toEqual({
+    tag: 'ChildTimeout',
+    namesTheTimeout: true,
+    pidIsPositive: true,
+    killedChildIsGone: true,
+    livenessProbeSeesALivingProcess: true,
+  })
+}, HANGING_CHILD_CASE_BUDGET_MS)
