@@ -1,3 +1,4 @@
+import { it } from '@systemfsoftware/vitest'
 import {
   type ActorFromLogic,
   type ActorRef,
@@ -12,23 +13,19 @@ import {
   type SnapshotFrom,
   types,
 } from '@systemfsoftware/xstate'
-import { act, fireEvent, screen } from '@testing-library/react'
+import { act, fireEvent, within } from '@testing-library/react'
+import { Effect } from 'effect'
 import * as React from 'react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { vi } from 'vitest'
 import z from 'zod'
 import { shallowEqual, useActorRef, useMachine, useSelector } from '../src/index.js'
 import { describeEachReactMode } from './utils.js'
 
 const originalConsoleError = console.error
 
-afterEach(() => {
-  console.error = originalConsoleError
-})
-
 describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
-  it('only rerenders for selected values', () => {
+  it('only rerenders for selected values', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { count: number; other: number } },
       schemas: {
         context: z.object({
           count: z.number(),
@@ -82,33 +79,37 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
-    const countButton = screen.getByTestId('count')
-    const otherButton = screen.getByTestId('other')
-    const incrementEl = screen.getByTestId('increment')
+    const { container, unmount } = render(<App />)
 
-    fireEvent.click(incrementEl)
+    try {
+      const countButton = within(container).getByTestId('count')
+      const otherButton = within(container).getByTestId('other')
+      const incrementEl = within(container).getByTestId('increment')
 
-    rerenders = 0
+      fireEvent.click(incrementEl)
 
-    fireEvent.click(otherButton)
-    fireEvent.click(otherButton)
-    fireEvent.click(otherButton)
-    fireEvent.click(otherButton)
+      rerenders = 0
 
-    expect(rerenders).toEqual(0)
+      fireEvent.click(otherButton)
+      fireEvent.click(otherButton)
+      fireEvent.click(otherButton)
+      fireEvent.click(otherButton)
 
-    fireEvent.click(incrementEl)
+      const rerendersAfterOther = rerenders
 
-    expect(countButton.textContent).toBe('2')
+      fireEvent.click(incrementEl)
+
+      yield* expect({ rerendersAfterOther, finalCount: countButton.textContent }).toEqual({
+        rerendersAfterOther: 0,
+        finalCount: '2',
+      })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should work with a custom comparison function', () => {
+  it('should work with a custom comparison function', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as {
-      //   context: { name: string };
-      //   events: { type: 'CHANGE'; value: string };
-      // },
       schemas: {
         context: z.object({
           name: z.string(),
@@ -126,9 +127,6 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
         active: {},
       },
       on: {
-        // CHANGE: {
-        //   actions: assign({ name: ({ event }) => event.value })
-        // }
         CHANGE: ({ event }: any) => ({
           context: {
             name: event.value,
@@ -162,30 +160,32 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
-    const nameEl = screen.getByTestId('name')
-    const sendUpperButton = screen.getByTestId('sendUpper')
-    const sendOtherButton = screen.getByTestId('sendOther')
+    const { container, unmount } = render(<App />)
 
-    expect(nameEl.textContent).toEqual('david')
+    try {
+      const nameEl = within(container).getByTestId('name')
+      const sendUpperButton = within(container).getByTestId('sendUpper')
+      const sendOtherButton = within(container).getByTestId('sendOther')
 
-    fireEvent.click(sendUpperButton)
+      const observed: Array<string | null> = [nameEl.textContent]
 
-    // unchanged due to comparison function
-    expect(nameEl.textContent).toEqual('david')
+      fireEvent.click(sendUpperButton)
+      observed.push(nameEl.textContent)
 
-    fireEvent.click(sendOtherButton)
+      fireEvent.click(sendOtherButton)
+      observed.push(nameEl.textContent)
 
-    expect(nameEl.textContent).toEqual('other')
+      fireEvent.click(sendUpperButton)
+      observed.push(nameEl.textContent)
 
-    fireEvent.click(sendUpperButton)
-
-    expect(nameEl.textContent).toEqual('DAVID')
+      yield* expect(observed).toEqual(['david', 'david', 'other', 'DAVID'])
+    } finally {
+      unmount()
+    }
   })
 
-  it('should work with the shallowEqual comparison function', () => {
+  it('should work with the shallowEqual comparison function', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { user: { name: string } } },
       schemas: {
         context: z.object({
           user: z.object({
@@ -249,36 +249,41 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
-    const nameEl = screen.getByTestId('name')
-    const changesEl = screen.getByTestId('changes')
-    const sendSameButton = screen.getByTestId('sendSame')
-    const sendOtherButton = screen.getByTestId('sendOther')
+    const { container, unmount } = render(<App />)
 
-    expect(nameEl.textContent).toEqual('david')
+    try {
+      const nameEl = within(container).getByTestId('name')
+      const changesEl = within(container).getByTestId('changes')
+      const sendSameButton = within(container).getByTestId('sendSame')
+      const sendOtherButton = within(container).getByTestId('sendOther')
 
-    // unchanged due to comparison function
-    fireEvent.click(sendSameButton)
-    expect(nameEl.textContent).toEqual('david')
-    expect(changesEl.textContent).toEqual('0')
+      const observed: Array<Array<string | null>> = [[nameEl.textContent]]
 
-    // changed
-    fireEvent.click(sendOtherButton)
-    expect(nameEl.textContent).toEqual('other')
-    expect(changesEl.textContent).toEqual('1')
+      fireEvent.click(sendSameButton)
+      observed.push([nameEl.textContent, changesEl.textContent])
 
-    // changed
-    fireEvent.click(sendSameButton)
-    expect(nameEl.textContent).toEqual('david')
-    expect(changesEl.textContent).toEqual('2')
+      fireEvent.click(sendOtherButton)
+      observed.push([nameEl.textContent, changesEl.textContent])
 
-    // unchanged due to comparison function
-    fireEvent.click(sendSameButton)
-    expect(nameEl.textContent).toEqual('david')
-    expect(changesEl.textContent).toEqual('2')
+      fireEvent.click(sendSameButton)
+      observed.push([nameEl.textContent, changesEl.textContent])
+
+      fireEvent.click(sendSameButton)
+      observed.push([nameEl.textContent, changesEl.textContent])
+
+      yield* expect(observed).toEqual([
+        ['david'],
+        ['david', '0'],
+        ['other', '1'],
+        ['david', '2'],
+        ['david', '2'],
+      ])
+    } finally {
+      unmount()
+    }
   })
 
-  it('should work with selecting values from initially invoked actors', () => {
+  it('should work with selecting values from initially invoked actors', function*({ expect }) {
     const childMachine = createMachine({
       id: 'childMachine',
       initial: 'active',
@@ -297,12 +302,14 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       },
     })
 
+    let childValue: unknown
+
     const ChildTest: React.FC<{
       actor: ActorRefFrom<typeof childMachine>
     }> = ({ actor }) => {
       const state = useSelector(actor, (s) => s)
 
-      expect(state.value).toEqual('active')
+      childValue = state.value
 
       return null
     }
@@ -316,12 +323,16 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       return <ChildTest actor={childActor} />
     }
 
-    render(<Test />)
+    const { unmount } = render(<Test />)
+
+    try {
+      yield* expect(childValue).toEqual('active')
+    } finally {
+      unmount()
+    }
   })
 
-  // v6: In strict mode, the stop/restart cycle doesn't restart spawned
-  // children, so the child actor won't process events
-  it('should work with selecting values from initially spawned actors', () => {
+  it('should work with selecting values from initially spawned actors', function*({ expect }) {
     const childMachine = createMachine({
       schemas: {
         context: z.object({
@@ -332,11 +343,6 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
         count: 0,
       },
       on: {
-        // UPDATE_COUNT: {
-        //   actions: assign({
-        //     count: ({ context }) => context.count + 1
-        //   })
-        // }
         UPDATE_COUNT: ({ context }) => ({
           context: {
             count: context.count + 1,
@@ -346,11 +352,6 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
     })
 
     const parentMachine = createMachine({
-      // types: {
-      //   context: {} as {
-      //     childActor: ActorRefFrom<typeof childMachine>;
-      //   }
-      // },
       schemas: {
         context: z.object({
           childActor: z.custom<ActorRefFrom<typeof childMachine>>(),
@@ -377,17 +378,23 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
+    const { container, unmount } = render(<App />)
 
-    const buttonEl = screen.getByTestId('button')
-    const countEl = screen.getByTestId('count')
+    try {
+      const buttonEl = within(container).getByTestId('button')
+      const countEl = within(container).getByTestId('count')
 
-    expect(countEl.textContent).toEqual('0')
-    fireEvent.click(buttonEl)
-    expect(countEl.textContent).toEqual('1')
+      const observed: Array<string | null> = [countEl.textContent]
+      fireEvent.click(buttonEl)
+      observed.push(countEl.textContent)
+
+      yield* expect(observed).toEqual(['0', '1'])
+    } finally {
+      unmount()
+    }
   })
 
-  it('can call trigger on a spawned actor passed to a child component', () => {
+  it('can call trigger on a spawned actor passed to a child component', function*({ expect }) {
     const todoMachine = setup({
       schemas: {
         context: types<{
@@ -469,19 +476,28 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<Parent />)
+    const { container, unmount } = render(<Parent />)
 
-    expect(screen.getByTestId('label').textContent).toBe('Draft')
-    expect(screen.getByTestId('done').textContent).toBe('false')
+    try {
+      const labels: Array<string | null> = [within(container).getByTestId('label').textContent]
+      const dones: Array<string | null> = [within(container).getByTestId('done').textContent]
 
-    fireEvent.click(screen.getByTestId('rename'))
-    expect(screen.getByTestId('label').textContent).toBe('Buy milk')
+      fireEvent.click(within(container).getByTestId('rename'))
+      labels.push(within(container).getByTestId('label').textContent)
 
-    fireEvent.click(screen.getByTestId('toggle'))
-    expect(screen.getByTestId('done').textContent).toBe('true')
+      fireEvent.click(within(container).getByTestId('toggle'))
+      dones.push(within(container).getByTestId('done').textContent)
+
+      yield* expect({ labels, dones }).toEqual({
+        labels: ['Draft', 'Buy milk'],
+        dones: ['false', 'true'],
+      })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should immediately render snapshot of initially spawned custom actor', () => {
+  it('should immediately render snapshot of initially spawned custom actor', function*({ expect }) {
     const createCustomActor = (latestValue: string) =>
       createActor(
         createLogic({
@@ -491,11 +507,6 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       )
 
     const parentMachine = createMachine({
-      // types: {
-      //   context: {} as {
-      //     childActor: ReturnType<typeof createCustomActor>;
-      //   }
-      // },
       schemas: {
         context: z.object({
           childActor: z.custom<ReturnType<typeof createCustomActor>>(),
@@ -517,13 +528,17 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       return <>{value.context}</>
     }
 
-    const { container } = render(<App />)
-    expect(container.textContent).toEqual('foo')
+    const { container, unmount } = render(<App />)
+
+    try {
+      yield* expect(container.textContent).toEqual('foo')
+    } finally {
+      unmount()
+    }
   })
 
-  it('should rerender with a new value when the selector changes', () => {
+  it('should rerender with a new value when the selector changes', function*({ expect }) {
     const childMachine = createMachine({
-      // types: {} as { context: { count: number } },
       schemas: {
         context: z.object({
           count: z.number(),
@@ -542,11 +557,6 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
     })
 
     const parentMachine = createMachine({
-      // types: {
-      //   context: {} as {
-      //     childActor: ActorRefFrom<typeof childMachine>;
-      //   }
-      // },
       schemas: {
         context: z.object({
           childActor: z.custom<ActorRefFrom<typeof childMachine>>(),
@@ -568,17 +578,21 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       return <div data-testid='value'>{value}</div>
     }
 
-    const { container, rerender } = render(<App prop='first' />)
+    const { container, rerender, unmount } = render(<App prop='first' />)
 
-    expect(container.textContent).toEqual('first 0')
+    try {
+      const observed: Array<string | null> = [container.textContent]
 
-    rerender(<App prop='second' />)
-    expect(container.textContent).toEqual('second 0')
+      rerender(<App prop='second' />)
+      observed.push(container.textContent)
+
+      yield* expect(observed).toEqual(['first 0', 'second 0'])
+    } finally {
+      unmount()
+    }
   })
 
-  // v6: In strict mode, the stop/restart cycle doesn't restart spawned
-  // children, so the child actor won't process events
-  it('should use a fresh selector for subscription updates after selector change', () => {
+  it('should use a fresh selector for subscription updates after selector change', function*({ expect }) {
     const childMachine = createMachine({
       schemas: {
         context: z.object({
@@ -598,11 +612,6 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
     })
 
     const parentMachine = createMachine({
-      // types: {
-      //   context: {} as {
-      //     childActor: ActorRefFrom<typeof childMachine>;
-      //   }
-      // },
       schemas: {
         context: z.object({
           childActor: z.custom<ActorRefFrom<typeof childMachine>>(),
@@ -634,20 +643,25 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    const { rerender } = render(<App prop='first' />)
+    const { container, rerender, unmount } = render(<App prop='first' />)
 
-    const buttonEl = screen.getByRole('button')
-    const valueEl = screen.getByTestId('value')
+    try {
+      const buttonEl = within(container).getByRole('button')
+      const valueEl = within(container).getByTestId('value')
 
-    expect(valueEl.textContent).toEqual('first 0')
+      const observed: Array<string | null> = [valueEl.textContent]
 
-    rerender(<App prop='second' />)
-    fireEvent.click(buttonEl)
+      rerender(<App prop='second' />)
+      fireEvent.click(buttonEl)
+      observed.push(valueEl.textContent)
 
-    expect(valueEl.textContent).toEqual('second 1')
+      yield* expect(observed).toEqual(['first 0', 'second 1'])
+    } finally {
+      unmount()
+    }
   })
 
-  it("should render snapshot value when actor doesn't emit anything", () => {
+  it("should render snapshot value when actor doesn't emit anything", function*({ expect }) {
     const createCustomLogic = (latestValue: string) =>
       createLogic({
         context: latestValue,
@@ -655,11 +669,6 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       })
 
     const parentMachine = createMachine({
-      // types: {
-      //   context: {} as {
-      //     childActor: ActorRefFrom<typeof createCustomLogic>;
-      //   }
-      // },
       schemas: {
         context: z.object({
           childActor: z.custom<ActorRefFrom<ReturnType<typeof createCustomLogic>>>(),
@@ -681,11 +690,16 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       return <>{value.context}</>
     }
 
-    const { container } = render(<App />)
-    expect(container.textContent).toEqual('foo')
+    const { container, unmount } = render(<App />)
+
+    try {
+      yield* expect(container.textContent).toEqual('foo')
+    } finally {
+      unmount()
+    }
   })
 
-  it('should render snapshot state when actor changes', () => {
+  it('should render snapshot state when actor changes', function*({ expect }) {
     const createCustomActor = (latestValue: string) =>
       createActor(
         createLogic({
@@ -708,53 +722,71 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       return <>{value.context}</>
     }
 
-    const { container, rerender } = render(<App prop='first' />)
-    expect(container.textContent).toEqual('foo')
+    const { container, rerender, unmount } = render(<App prop='first' />)
 
-    rerender(<App prop='second' />)
-    expect(container.textContent).toEqual('bar')
-  })
+    try {
+      const observed: Array<string | null> = [container.textContent]
 
-  it("should keep rendering a new selected value after selector change when the actor doesn't emit", async () => {
-    const actor = createActor(
-      createLogic({
-        context: undefined,
-        run: () => undefined,
-      }),
-    )
-    actor.subscribe = () => ({ unsubscribe: () => {} })
+      rerender(<App prop='second' />)
+      observed.push(container.textContent)
 
-    const App = ({ selector }: { selector: any }) => {
-      const [, forceRerender] = React.useState(0)
-      const value = useSelector(actor, selector)
-
-      return (
-        <>
-          {value as number}
-          <button
-            type='button'
-            onClick={() => forceRerender((s) => s + 1)}
-          >
-          </button>
-        </>
-      )
+      yield* expect(observed).toEqual(['foo', 'bar'])
+    } finally {
+      unmount()
     }
-
-    const { container, rerender } = render(<App selector={() => 'foo'} />)
-    expect(container.textContent).toEqual('foo')
-
-    rerender(<App selector={() => 'bar'} />)
-    expect(container.textContent).toEqual('bar')
-
-    fireEvent.click(await screen.findByRole('button'))
-    expect(container.textContent).toEqual('bar')
   })
 
-  it('should only rerender once when the selected value changes', () => {
+  it(
+    "should keep rendering a new selected value after selector change when the actor doesn't emit",
+    function*({ expect }) {
+      const actor = createActor(
+        createLogic({
+          context: undefined,
+          run: () => undefined,
+        }),
+      )
+      actor.subscribe = () => ({ unsubscribe: () => {} })
+
+      const App = ({ selector }: { selector: any }) => {
+        const [, forceRerender] = React.useState(0)
+        const value = useSelector(actor, selector)
+
+        return (
+          <>
+            {value as number}
+            <button
+              type='button'
+              onClick={() => forceRerender((s) => s + 1)}
+            >
+            </button>
+          </>
+        )
+      }
+
+      const { container, rerender, unmount } = render(<App selector={() => 'foo'} />)
+
+      try {
+        const observed: Array<string | null> = [container.textContent]
+
+        rerender(<App selector={() => 'bar'} />)
+        observed.push(container.textContent)
+
+        yield* expect(observed).toEqual(['foo', 'bar'])
+
+        const button = yield* Effect.promise(() => within(container).findByRole('button'))
+        fireEvent.click(button)
+
+        yield* expect(container.textContent).toEqual('bar')
+      } finally {
+        unmount()
+      }
+    },
+  )
+
+  it('should only rerender once when the selected value changes', function*({ expect }) {
     const selector = (state: any) => state.context.foo
 
     const machine = createMachine({
-      // types: {} as { context: { foo: number }; events: { type: 'INC' } },
       schemas: {
         context: z.object({
           foo: z.number(),
@@ -767,11 +799,6 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
         foo: 0,
       },
       on: {
-        // INC: {
-        //   actions: assign({
-        //     foo: ({ context }) => ++context.foo
-        //   })
-        // }
         INC: ({ context }) => ({
           context: {
             foo: context.foo + 1,
@@ -791,18 +818,21 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    render(<App />)
+    const { unmount } = render(<App />)
 
-    // reset
-    renders = 0
-    act(() => {
-      service.send({ type: 'INC' })
-    })
+    try {
+      renders = 0
+      act(() => {
+        service.send({ type: 'INC' })
+      })
 
-    expect(renders).toBe(suiteKey === 'strict' ? 2 : 1)
+      yield* expect(renders).toEqual(suiteKey === 'strict' ? 2 : 1)
+    } finally {
+      unmount()
+    }
   })
 
-  it('should compute a stable snapshot internally when selecting from uninitialized service', () => {
+  it('should compute a stable snapshot internally when selecting from uninitialized service', function*({ expect }) {
     const child = createMachine({})
     const machine = createMachine({
       invoke: {
@@ -822,17 +852,25 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    console.error = vi.fn()
-    render(<App />)
+    const errorSpy = vi.fn()
+    console.error = errorSpy
 
-    const [snapshot1] = snapshots
-    expect(snapshots.every((s) => s === snapshot1))
-    expect(console.error).toHaveBeenCalledTimes(0)
+    const { unmount } = render(<App />)
+
+    try {
+      const [snapshot1] = snapshots
+
+      yield* expect({
+        allSame: snapshots.every((s) => s === snapshot1),
+        errorCalls: errorSpy.mock.calls,
+      }).toEqual({ allSame: true, errorCalls: [] })
+    } finally {
+      unmount()
+      console.error = originalConsoleError
+    }
   })
 
-  // v6: In strict mode, the stop/restart cycle doesn't restart spawned
-  // children, so the child actor won't process events
-  it('should work with initially deferred actors spawned in lazy context', () => {
+  it('should work with initially deferred actors spawned in lazy context', function*({ expect }) {
     const childMachine = createMachine({
       initial: 'one',
       states: {
@@ -880,18 +918,23 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
+    const { container, unmount } = render(<App />)
 
-    const elState = screen.getByTestId('child-state')
-    const elSend = screen.getByTestId('child-send')
+    try {
+      const elState = within(container).getByTestId('child-state')
+      const elSend = within(container).getByTestId('child-send')
 
-    expect(elState.textContent).toEqual('one')
-    fireEvent.click(elSend)
+      const observed: Array<string | null> = [elState.textContent]
+      fireEvent.click(elSend)
+      observed.push(elState.textContent)
 
-    expect(elState.textContent).toEqual('two')
+      yield* expect(observed).toEqual(['one', 'two'])
+    } finally {
+      unmount()
+    }
   })
 
-  it('should not log any spurious errors when used with a not-started actor', () => {
+  it('should not log any spurious errors when used with a not-started actor', function*({ expect }) {
     const spy = vi.fn()
     console.error = spy
 
@@ -902,12 +945,17 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    render(<App />)
+    const { unmount } = render(<App />)
 
-    expect(spy).not.toHaveBeenCalled()
+    try {
+      yield* expect(spy.mock.calls).toEqual([])
+    } finally {
+      unmount()
+      console.error = originalConsoleError
+    }
   })
 
-  it('should work with an optional actor', () => {
+  it('should work with an optional actor', function*({ expect }) {
     const Child = (props: {
       actor:
         | ActorRef<LogicSnapshot<{ count: number }, undefined, unknown>, any>
@@ -946,21 +994,24 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
+    const { container, unmount } = render(<App />)
 
-    const button = screen.getByTestId('button')
-    const stateEl = screen.getByTestId('state')
+    try {
+      const button = within(container).getByTestId('button')
+      const stateEl = within(container).getByTestId('state')
 
-    expect(stateEl.textContent).toBe('undefined')
+      const observed: Array<string | null> = [stateEl.textContent]
 
-    fireEvent.click(button)
+      fireEvent.click(button)
+      observed.push(stateEl.textContent)
 
-    expect(stateEl.textContent).toBe('42')
+      yield* expect(observed).toEqual(['undefined', '42'])
+    } finally {
+      unmount()
+    }
   })
 
-  // v6: In strict mode, the stop/restart cycle doesn't restart invoked
-  // children (promise actors), so the error never propagates
-  it('should throw an error to an error boundary when the actor reaches an error state', async () => {
+  it('should throw an error to an error boundary when the actor reaches an error state', function*({ expect }) {
     const errorMessage = 'test_useSelector_error'
 
     const machine = createMachine({
@@ -1000,13 +1051,19 @@ describeEachReactMode('useSelector (%s)', ({ suiteKey, render }) => {
 
     console.error = vi.fn()
 
-    render(
+    const { container, unmount } = render(
       <ErrorBoundary>
         <App />
       </ErrorBoundary>,
     )
 
-    await screen.findByTestId('error')
-    expect(screen.getByTestId('error').textContent).toBe(errorMessage)
+    try {
+      const errorElement = yield* Effect.promise(() => within(container).findByTestId('error'))
+
+      yield* expect(errorElement.textContent).toEqual(errorMessage)
+    } finally {
+      unmount()
+      console.error = originalConsoleError
+    }
   })
 })

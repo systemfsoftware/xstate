@@ -1,15 +1,11 @@
-import { describe, expect, it } from 'vitest'
-/**
- * Regression tests for open @xstate/react issues that are fixed in v6. Each
- * test reproduces the issue as originally reported with v6 APIs.
- */
+import { describe } from '@systemfsoftware/vitest'
 import { createActor, createCallbackLogic, createMachine, setup, types } from '@systemfsoftware/xstate'
-import { render, screen } from '@testing-library/react'
+import { render, within } from '@testing-library/react'
 import * as React from 'react'
 import { useMachine } from '../src/index.js'
 
-describe('lifecycle', () => {
-  it('#5272 an invoked callback starts once under StrictMode', () => {
+describe('lifecycle', (it) => {
+  it('#5272 an invoked callback starts once under StrictMode', function*({ expect }) {
     let starts = 0
     let cleanups = 0
     const appMachine = createMachine({
@@ -28,17 +24,19 @@ describe('lifecycle', () => {
       return null
     }
 
-    render(
+    const { unmount } = render(
       <React.StrictMode>
         <App />
       </React.StrictMode>,
     )
-
-    expect(starts).toBe(1)
-    expect(cleanups).toBe(0)
+    try {
+      yield* expect({ starts, cleanups }).toEqual({ starts: 1, cleanups: 0 })
+    } finally {
+      unmount()
+    }
   })
 
-  it('#5074 system.get resolves a sibling invoked actor under StrictMode', () => {
+  it('#5074 system.get resolves a sibling invoked actor under StrictMode', function*({ expect }) {
     const results: string[] = []
     const feedbackMachine = createMachine({})
     const rootMachine = setup({
@@ -57,17 +55,19 @@ describe('lifecycle', () => {
       return null
     }
 
-    render(
+    const { unmount } = render(
       <React.StrictMode>
         <App />
       </React.StrictMode>,
     )
-
-    expect(results.length).toBeGreaterThan(0)
-    expect(results).not.toContain('missing')
+    try {
+      yield* expect(results).toEqual(['ok'])
+    } finally {
+      unmount()
+    }
   })
 
-  it('#3270 an event sent from a callback ref survives the StrictMode remount', () => {
+  it('#3270 an event sent from a callback ref survives the StrictMode remount', function*({ expect }) {
     const counterMachine = createMachine({
       schemas: {
         events: { INCREMENT: types<{}>() },
@@ -93,19 +93,21 @@ describe('lifecycle', () => {
       return <div ref={ref}>count: {current.context.count}</div>
     }
 
-    render(
+    const { container, unmount } = render(
       <React.StrictMode>
         <Counter />
       </React.StrictMode>,
     )
-
-    // React 19 invokes the callback ref twice under StrictMode
-    expect(screen.getByText(/count:/).textContent).toBe('count: 2')
+    try {
+      yield* expect(within(container).getByText(/count:/).textContent).toBe('count: 2')
+    } finally {
+      unmount()
+    }
   })
 })
 
-describe('types', () => {
-  it('#5480 useMachine accepts persisted and live snapshots', () => {
+describe('types', (it) => {
+  it('#5480 useMachine accepts persisted and live snapshots', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: { a: { on: { NEXT: { target: 'b' } } }, b: {} },
@@ -123,8 +125,11 @@ describe('types', () => {
       return <div data-testid='values'>{[a.value, b.value, c.value].join(',')}</div>
     }
 
-    render(<App />)
-
-    expect(screen.getByTestId('values').textContent).toBe('b,b,b')
+    const { container, unmount } = render(<App />)
+    try {
+      yield* expect(within(container).getByTestId('values').textContent).toBe('b,b,b')
+    } finally {
+      unmount()
+    }
   })
 })

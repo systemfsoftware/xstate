@@ -1,17 +1,15 @@
+import { it } from '@systemfsoftware/vitest'
 import { type ActorRefFrom, createAsyncLogic, createLogic, createMachine } from '@systemfsoftware/xstate'
-import { fireEvent, screen, waitFor as testWaitFor } from '@testing-library/react'
+import { fireEvent, waitFor as testWaitFor, within } from '@testing-library/react'
+import { Effect } from 'effect'
 import * as React from 'react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { vi } from 'vitest'
 import { z } from 'zod'
 import { useActorRef, useMachine, useSelector } from '../src/index.js'
 import { describeEachReactMode } from './utils.js'
 
-afterEach(() => {
-  vi.restoreAllMocks()
-})
-
 describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
-  it('rebinds a stable observer before a replacement actor starts', () => {
+  it('rebinds a stable observer before a replacement actor starts', function*({ expect }) {
     const first = createMachine({ on: { PING: {} } })
     const second = createMachine({ on: { PING: {} } })
     const observer = vi.fn()
@@ -20,18 +18,31 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       ref = useActorRef(machine, undefined, observer)
       return null
     }
-    const { rerender } = render(<App machine={first} />)
-    const original = ref!
-    observer.mockClear()
-    rerender(<App key='second' machine={second} />)
-    expect(ref!).not.toBe(original)
-    expect(observer).toHaveBeenCalledExactlyOnceWith(ref!.getSnapshot())
-    observer.mockClear()
-    ref!.send({ type: 'PING' })
-    expect(observer).toHaveBeenCalledExactlyOnceWith(ref!.getSnapshot())
+    const { unmount, rerender } = render(<App machine={first} />)
+
+    try {
+      const original = ref!
+      observer.mockClear()
+      rerender(<App key='second' machine={second} />)
+
+      const rerenderCalls = observer.mock.calls.map((call) => [...call])
+      const rerenderSnapshot = ref!.getSnapshot()
+      const replaced = ref! !== original
+
+      observer.mockClear()
+      ref!.send({ type: 'PING' })
+
+      yield* expect({
+        replaced,
+        rerenderCalls,
+        pingCalls: observer.mock.calls.map((call) => [...call]),
+      }).toEqual({ replaced: true, rerenderCalls: [[rerenderSnapshot]], pingCalls: [[ref!.getSnapshot()]] })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should accept events from effects when mounted in strict mode', () => {
+  it('should accept events from effects when mounted in strict mode', function*({ expect }) {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let received = 0
     const machine = createMachine({
@@ -55,15 +66,24 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    render(<App />)
+    const { unmount } = render(<App />)
 
-    expect(warnSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('was not delivered (stopped)'),
-    )
-    expect(received).toBe(suiteKey === 'strict' ? 2 : 1)
+    try {
+      const warnedStopped = warnSpy.mock.calls.some(
+        (call) => typeof call[0] === 'string' && call[0].includes('was not delivered (stopped)'),
+      )
+
+      yield* expect({ warnedStopped, received }).toEqual({
+        warnedStopped: false,
+        received: suiteKey === 'strict' ? 2 : 1,
+      })
+    } finally {
+      unmount()
+      vi.restoreAllMocks()
+    }
   })
 
-  it('should still warn when sending to an actor after unmount', async () => {
+  it('should still warn when sending to an actor after unmount', function*({ expect }) {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const machine = createMachine({})
     let actorRef: ActorRefFrom<typeof machine>
@@ -74,17 +94,25 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
     }
 
     const { unmount } = render(<App />)
-    unmount()
-    await new Promise<void>((resolve) => queueMicrotask(resolve))
 
-    actorRef!.send({ type: 'INC' })
+    try {
+      unmount()
+      yield* Effect.promise(() => new Promise<void>((resolve) => queueMicrotask(resolve)))
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('was not delivered (stopped)'),
-    )
+      actorRef!.send({ type: 'INC' })
+
+      const warnedStopped = warnSpy.mock.calls.some(
+        (call) => typeof call[0] === 'string' && call[0].includes('was not delivered (stopped)'),
+      )
+
+      yield* expect({ warnedStopped }).toEqual({ warnedStopped: true })
+    } finally {
+      unmount()
+      vi.restoreAllMocks()
+    }
   })
 
-  it('observer should be called with next state', () => {
+  it('observer should be called with next state', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     const machine = createMachine({
       initial: 'inactive',
@@ -98,11 +126,14 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       },
     })
 
+    let observedValue: unknown
+
     const App = () => {
       const actorRef = useActorRef(machine)
 
       React.useEffect(() => {
         actorRef.subscribe((state) => {
+          observedValue = state.value
           if (state.matches('active')) {
             resolve()
           }
@@ -120,14 +151,19 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
-    const button = screen.getByTestId('button')
+    const { container, unmount } = render(<App />)
 
-    fireEvent.click(button)
-    return promise
+    try {
+      fireEvent.click(within(container).getByTestId('button'))
+      yield* Effect.promise(() => promise)
+
+      yield* expect(observedValue).toEqual('active')
+    } finally {
+      unmount()
+    }
   })
 
-  it('actions created by a layout effect should access the latest closure values', () => {
+  it('actions created by a layout effect should access the latest closure values', function*({ expect }) {
     const actual: number[] = []
 
     const machine = createMachine({
@@ -138,9 +174,6 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       states: {
         foo: {
           on: {
-            // EXEC_ACTION: {
-            //   actions: 'recordProp'
-            // }
             EXEC_ACTION: ({ actions }, enq) => enq(actions.recordProp),
           },
         },
@@ -163,17 +196,23 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    const { rerender } = render(<App value={1} />)
+    const { rerender, unmount } = render(<App value={1} />)
 
-    expect(actual).toEqual(suiteKey === 'strict' ? [1, 1] : [1])
+    try {
+      const observed: number[][] = [actual.slice()]
 
-    actual.length = 0
-    rerender(<App value={42} />)
+      actual.length = 0
+      rerender(<App value={42} />)
 
-    expect(actual).toEqual([42])
+      observed.push(actual.slice())
+
+      yield* expect(observed).toEqual([suiteKey === 'strict' ? [1, 1] : [1], [42]])
+    } finally {
+      unmount()
+    }
   })
 
-  it('should rerender OK when only the provided machine sources have changed', () => {
+  it('should rerender OK when only the provided machine sources have changed', function*({ expect }) {
     const machine = createMachine({
       initial: 'foo',
       schemas: {
@@ -188,10 +227,6 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       states: {
         foo: {
           on: {
-            // CHECK: {
-            //   target: 'bar',
-            //   guard: 'hasOverflown'
-            // }
             CHECK: ({ guards }) => {
               if (guards.hasOverflown()) {
                 return {
@@ -230,16 +265,18 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
+    const { container, unmount } = render(<App />)
 
-    fireEvent.click(screen.getByRole('button'))
+    try {
+      fireEvent.click(within(container).getByRole('button'))
 
-    expect(screen.getByText('2')).toBeTruthy()
+      yield* expect(within(container).getByText('2').textContent).toEqual('2')
+    } finally {
+      unmount()
+    }
   })
 
-  // v6: In strict mode, the stop/restart cycle doesn't restart spawned children
-  // because StateMachine.start() no longer auto-starts children
-  it('should change state when started', async () => {
+  it('should change state when started', function*({ expect }) {
     const childMachine = createMachine({
       initial: 'waiting',
       states: {
@@ -286,19 +323,25 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
+    const { container, unmount } = render(<App />)
 
-    const button = screen.getByTestId('button')
-    const childState = screen.getByTestId('child-state')
+    try {
+      const button = within(container).getByTestId('button')
+      const childState = within(container).getByTestId('child-state')
 
-    expect(childState.textContent).toBe('waiting')
+      const observed: Array<string | null> = [childState.textContent]
 
-    fireEvent.click(button)
+      fireEvent.click(button)
 
-    expect(childState.textContent).toBe('received')
+      observed.push(childState.textContent)
+
+      yield* expect(observed).toEqual(['waiting', 'received'])
+    } finally {
+      unmount()
+    }
   })
 
-  it('should change state when started (useMachine)', async () => {
+  it('should change state when started (useMachine)', function*({ expect }) {
     const childMachine = createMachine({
       initial: 'waiting',
       states: {
@@ -312,11 +355,6 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
     })
 
     const parentMachine = createMachine({
-      // types: {} as {
-      //   context: {
-      //     childRef: ActorRefFrom<typeof childMachine>;
-      //   };
-      // },
       schemas: {
         context: z.object({
           childRef: z.custom<ActorRefFrom<typeof childMachine>>(),
@@ -326,9 +364,6 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
         childRef: spawn(childMachine),
       }),
       on: {
-        // SEND_TO_CHILD: {
-        //   actions: sendTo(({ context }) => context.childRef, { type: 'EVENT' })
-        // }
         SEND_TO_CHILD: ({ context }, enq) => {
           enq.sendTo(context.childRef, { type: 'EVENT' })
         },
@@ -352,19 +387,25 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
+    const { container, unmount } = render(<App />)
 
-    const button = screen.getByTestId('button')
-    const childState = screen.getByTestId('child-state')
+    try {
+      const button = within(container).getByTestId('button')
+      const childState = within(container).getByTestId('child-state')
 
-    expect(childState.textContent).toBe('waiting')
+      const observed: Array<string | null> = [childState.textContent]
 
-    fireEvent.click(button)
+      fireEvent.click(button)
 
-    expect(childState.textContent).toBe('received')
+      observed.push(childState.textContent)
+
+      yield* expect(observed).toEqual(['waiting', 'received'])
+    } finally {
+      unmount()
+    }
   })
 
-  it('should work with custom logic', () => {
+  it('should work with custom logic', function*({ expect }) {
     const someLogic = createLogic({
       context: 0,
       run: ({ context, event }) => {
@@ -386,18 +427,24 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
+    const { container, unmount } = render(<App />)
 
-    const count = screen.getByTestId('count')
+    try {
+      const count = within(container).getByTestId('count')
 
-    expect(count.textContent).toBe('0')
+      const observed: Array<string | null> = [count.textContent]
 
-    fireEvent.click(count)
+      fireEvent.click(count)
 
-    expect(count.textContent).toBe('1')
+      observed.push(count.textContent)
+
+      yield* expect(observed).toEqual(['0', '1'])
+    } finally {
+      unmount()
+    }
   })
 
-  it('should work with a promise actor', async () => {
+  it('should work with a promise actor', function*({ expect }) {
     const promiseLogic = createAsyncLogic({
       run: () => new Promise<number>((resolve) => setTimeout(() => resolve(42), 10)),
     })
@@ -409,16 +456,27 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       return <div data-testid='count'>{count.output}</div>
     }
 
-    render(<App />)
+    const { container, unmount } = render(<App />)
 
-    const count = screen.getByTestId('count')
+    try {
+      const count = within(container).getByTestId('count')
+      const initial = count.textContent
 
-    expect(count.textContent).toBe('')
+      yield* Effect.promise(() =>
+        testWaitFor(() => {
+          if (count.textContent !== '42') {
+            throw new Error(`promise actor output not rendered: ${String(count.textContent)}`)
+          }
+        })
+      )
 
-    await testWaitFor(() => expect(count.textContent).toBe('42'))
+      yield* expect({ initial, final: count.textContent }).toEqual({ initial: '', final: '42' })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should switch to a new machine when the component key changes', () => {
+  it('should switch to a new machine when the component key changes', function*({ expect }) {
     const machine1 = createMachine({
       initial: 'a',
       states: { a: {} },
@@ -475,15 +533,19 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<App />)
+    const { container, unmount } = render(<App />)
 
-    fireEvent.click(screen.getByText('Reload machine'))
-    fireEvent.click(screen.getByText('Send event'))
+    try {
+      fireEvent.click(within(container).getByText('Reload machine'))
+      fireEvent.click(within(container).getByText('Send event'))
 
-    expect(screen.getByText('b')).toBeTruthy()
+      yield* expect(within(container).getByText('b').textContent).toEqual('b')
+    } finally {
+      unmount()
+    }
   })
 
-  it('should keep the first machine when a different machine is passed later', () => {
+  it('should keep the first machine when a different machine is passed later', function*({ expect }) {
     const machine1 = createMachine({
       initial: 'a',
       states: {
@@ -537,18 +599,23 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<Test />)
+    const { container, unmount } = render(<Test />)
 
-    fireEvent.click(screen.getByText('Send event'))
-    fireEvent.click(screen.getByText('Reload machine'))
-    fireEvent.click(screen.getByText('Send event'))
+    try {
+      fireEvent.click(within(container).getByText('Send event'))
+      fireEvent.click(within(container).getByText('Reload machine'))
+      fireEvent.click(within(container).getByText('Send event'))
 
-    // machine1 is still in use: 'b' has no transitions there.
-    expect(screen.getByText('b')).toBeTruthy()
-    expect(refs.size).toBe(1)
+      yield* expect({ text: within(container).getByText('b').textContent, refs: refs.size }).toEqual({
+        text: 'b',
+        refs: 1,
+      })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should not loop or reset state when a machine factory is called on every render', () => {
+  it('should not loop or reset state when a machine factory is called on every render', function*({ expect }) {
     let renders = 0
 
     function Test() {
@@ -571,68 +638,81 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<Test />)
-    const button = screen.getByRole('button')
+    const { container, unmount } = render(<Test />)
 
-    fireEvent.click(button)
-    fireEvent.click(button)
-    fireEvent.click(button)
+    try {
+      const button = within(container).getByRole('button')
 
-    expect(button.textContent).toBe('3')
-    expect(renders).toBeLessThan(20)
-  })
+      fireEvent.click(button)
+      fireEvent.click(button)
+      fireEvent.click(button)
 
-  it("should execute action bound to a specific machine's instance when the action is provided in render", () => {
-    const spy1 = vi.fn()
-    const spy2 = vi.fn()
-
-    const machine = createMachine({
-      actions: {
-        stuff: spy1,
-      },
-      on: {
-        // DO: {
-        //   actions: 'stuff'
-        // }
-        DO: ({ actions }, enq) => enq(actions.stuff),
-      },
-    })
-
-    const Test = () => {
-      const actorRef1 = useActorRef(
-        machine.provide({
-          actions: {
-            stuff: spy1,
-          },
-        }),
+      yield* expect({ text: button.textContent, renders }).toSatisfy(
+        (observed) => observed.text === '3' && observed.renders < 20,
+        'the button shows the third count and the machine factory re-renders fewer than 20 times',
       )
-      useActorRef(
-        machine.provide({
-          actions: {
-            stuff: spy2,
-          },
-        }),
-      )
-
-      return (
-        <button
-          type='button'
-          onClick={() => {
-            actorRef1.send({
-              type: 'DO',
-            })
-          }}
-        >
-          Click
-        </button>
-      )
+    } finally {
+      unmount()
     }
-
-    render(<Test />)
-
-    screen.getByRole('button').click()
-
-    expect(spy1).toHaveBeenCalledTimes(1)
-    expect(spy2).not.toHaveBeenCalled()
   })
+
+  it(
+    "should execute action bound to a specific machine's instance when the action is provided in render",
+    function*({ expect }) {
+      const spy1 = vi.fn()
+      const spy2 = vi.fn()
+
+      const machine = createMachine({
+        actions: {
+          stuff: spy1,
+        },
+        on: {
+          DO: ({ actions }, enq) => enq(actions.stuff),
+        },
+      })
+
+      const Test = () => {
+        const actorRef1 = useActorRef(
+          machine.provide({
+            actions: {
+              stuff: spy1,
+            },
+          }),
+        )
+        useActorRef(
+          machine.provide({
+            actions: {
+              stuff: spy2,
+            },
+          }),
+        )
+
+        return (
+          <button
+            type='button'
+            onClick={() => {
+              actorRef1.send({
+                type: 'DO',
+              })
+            }}
+          >
+            Click
+          </button>
+        )
+      }
+
+      const { container, unmount } = render(<Test />)
+
+      try {
+        within(container).getByRole('button').click()
+
+        yield* expect({ spy1Calls: spy1.mock.calls.length, spy2Calls: spy2.mock.calls.length }).toEqual({
+          spy1Calls: 1,
+          spy2Calls: 0,
+        })
+      } finally {
+        unmount()
+      }
+    },
+  )
 })

@@ -1,15 +1,13 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { createLogic, createMachine, setup } from '@systemfsoftware/xstate'
 import { standardSchemaValidator } from '@systemfsoftware/xstate/validation'
 import { act, render } from '@testing-library/react'
 import * as React from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { vi } from 'vitest'
 import { z } from 'zod'
 import { useActorRef } from '../src/index.js'
 
-// Stands in for React Fast Refresh: replacing `refresh.signal` makes the next
-// render look like a refresh re-render.
 const refresh = vi.hoisted(() => ({ signal: {} as object }))
-// `useActorRef` detects a refresh through its only zero-dependency `useMemo`.
 vi.mock('react', async (importOriginal) => {
   const React = await importOriginal<typeof import('react')>()
   return {
@@ -40,6 +38,7 @@ function mount(machine: any) {
         utils.rerender(<App machine={next} />)
       })
     },
+    unmount: utils.unmount,
   }
 }
 
@@ -59,73 +58,101 @@ const createEditor = (extra: Record<string, any> = {}) =>
     },
   } as any)
 
-describe('Fast Refresh', () => {
-  it('keeps the running actor and its live context across a refresh', () => {
+describe('Fast Refresh', (it) => {
+  it('keeps the running actor and its live context across a refresh', function*({ expect }) {
     const v1 = createEditor()
     const app = mount(v1)
-    const original = app.actorRef
-    act(() => original.send({ type: 'NEXT' }))
-    const { el, cyclic } = original.getSnapshot().context
 
-    const v2 = createEditor({ DONE: { target: 'done' } })
-    expect(() => app.refreshTo(v2)).not.toThrow()
+    try {
+      const original = app.actorRef
+      act(() => original.send({ type: 'NEXT' }))
+      const { el, cyclic } = original.getSnapshot().context
 
-    expect(app.actorRef).toBe(original)
-    expect(app.actorRef.logic).toBe(v2)
-    const snapshot = app.actorRef.getSnapshot()
-    expect(snapshot.value).toBe('editing')
-    expect(snapshot.context.el).toBe(el)
-    expect(snapshot.context.cyclic).toBe(cyclic)
+      const v2 = createEditor({ DONE: { target: 'done' } })
+      app.refreshTo(v2)
 
-    // The new machine's transitions apply.
-    act(() => app.actorRef.send({ type: 'DONE' }))
-    expect(app.actorRef.getSnapshot().value).toBe('done')
+      const snapshot = app.actorRef.getSnapshot()
+      const kept = {
+        sameRef: app.actorRef === original,
+        sameLogic: app.actorRef.logic === v2,
+        value: snapshot.value,
+        sameEl: snapshot.context.el === el,
+        sameCyclic: snapshot.context.cyclic === cyclic,
+      }
+
+      act(() => app.actorRef.send({ type: 'DONE' }))
+
+      yield* expect({ ...kept, valueAfterDone: app.actorRef.getSnapshot().value }).toEqual({
+        sameRef: true,
+        sameLogic: true,
+        value: 'editing',
+        sameEl: true,
+        sameCyclic: true,
+        valueAfterDone: 'done',
+      })
+    } finally {
+      app.unmount()
+    }
   })
 
-  it('starts a fresh actor when the current state no longer exists', () => {
+  it('starts a fresh actor when the current state no longer exists', function*({ expect }) {
     const v1 = createEditor()
     const app = mount(v1)
-    const original = app.actorRef
-    act(() => original.send({ type: 'NEXT' }))
 
-    const v2 = createMachine({
-      id: 'editor',
-      initial: 'idle',
-      states: { idle: {} },
-    })
-    app.refreshTo(v2)
+    try {
+      const original = app.actorRef
+      act(() => original.send({ type: 'NEXT' }))
 
-    expect(app.actorRef).not.toBe(original)
-    expect(app.actorRef.logic).toBe(v2)
-    expect(app.actorRef.getSnapshot().value).toBe('idle')
+      const v2 = createMachine({
+        id: 'editor',
+        initial: 'idle',
+        states: { idle: {} },
+      })
+      app.refreshTo(v2)
+
+      yield* expect({
+        replaced: app.actorRef !== original,
+        sameLogic: app.actorRef.logic === v2,
+        value: app.actorRef.getSnapshot().value,
+      }).toEqual({ replaced: true, sameLogic: true, value: 'idle' })
+    } finally {
+      app.unmount()
+    }
   })
 
-  it('starts a fresh actor when the context validator rejects the context', () => {
+  it('starts a fresh actor when the context validator rejects the context', function*({ expect }) {
     const v1 = createEditor()
     const app = mount(v1)
-    const original = app.actorRef
-    act(() => original.send({ type: 'NEXT' }))
 
-    const v2 = setup({
-      validator: standardSchemaValidator(),
-      schemas: { context: z.object({ count: z.number() }) },
-    }).createMachine({
-      id: 'editor',
-      context: { count: 0 },
-      initial: 'idle',
-      states: {
-        idle: { on: { NEXT: { target: 'editing' } } },
-        editing: {},
-      },
-    })
-    app.refreshTo(v2)
+    try {
+      const original = app.actorRef
+      act(() => original.send({ type: 'NEXT' }))
 
-    expect(app.actorRef).not.toBe(original)
-    expect(app.actorRef.getSnapshot().value).toBe('idle')
-    expect(app.actorRef.getSnapshot().context).toEqual({ count: 0 })
+      const v2 = setup({
+        validator: standardSchemaValidator(),
+        schemas: { context: z.object({ count: z.number() }) },
+      }).createMachine({
+        id: 'editor',
+        context: { count: 0 },
+        initial: 'idle',
+        states: {
+          idle: { on: { NEXT: { target: 'editing' } } },
+          editing: {},
+        },
+      })
+      app.refreshTo(v2)
+
+      yield* expect({
+        replaced: app.actorRef !== original,
+        value: app.actorRef.getSnapshot().value,
+        context: app.actorRef.getSnapshot().context,
+      }).toEqual({ replaced: true, value: 'idle', context: { count: 0 } })
+    } finally {
+      app.unmount()
+    }
   })
 
-  it('keeps children whose logic is unchanged and restarts the others', () => {
+  it('keeps children whose logic is unchanged and restarts the others', function*({ expect }) {
     const stable = createLogic({ context: 0, run: () => undefined })
     const createParent = (other: any) =>
       createMachine({
@@ -140,20 +167,32 @@ describe('Fast Refresh', () => {
     const app = mount(
       createParent(createLogic({ context: 0, run: () => undefined })),
     )
-    const before = app.actorRef.getSnapshot().children
 
-    app.refreshTo(
-      createParent(createLogic({ context: 0, run: () => undefined })),
-    )
+    try {
+      const before = app.actorRef.getSnapshot().children
 
-    const after = app.actorRef.getSnapshot().children
-    expect(after.stable).toBe(before.stable)
-    expect(after.other).not.toBe(before.other)
-    expect(after.other.getSnapshot().status).toBe('active')
-    expect(before.other.getSnapshot().status).toBe('stopped')
+      app.refreshTo(
+        createParent(createLogic({ context: 0, run: () => undefined })),
+      )
+
+      const after = app.actorRef.getSnapshot().children
+      yield* expect({
+        stableKept: after.stable === before.stable,
+        otherReplaced: after.other !== before.other,
+        afterStatus: after.other.getSnapshot().status,
+        beforeStatus: before.other.getSnapshot().status,
+      }).toEqual({
+        stableKept: true,
+        otherReplaced: true,
+        afterStatus: 'active',
+        beforeStatus: 'stopped',
+      })
+    } finally {
+      app.unmount()
+    }
   })
 
-  it('starts a fresh actor when context holds a child that would restart', () => {
+  it('starts a fresh actor when context holds a child that would restart', function*({ expect }) {
     const createParent = (worker: any) =>
       createMachine({
         id: 'parent',
@@ -167,22 +206,29 @@ describe('Fast Refresh', () => {
     const app = mount(
       createParent(createLogic({ context: 0, run: () => undefined })),
     )
-    const original = app.actorRef
-    expect(original.getSnapshot().context.ref).toBe(
-      original.getSnapshot().children.worker,
-    )
 
-    app.refreshTo(
-      createParent(createLogic({ context: 1, run: () => undefined })),
-    )
+    try {
+      const original = app.actorRef
+      const before = original.getSnapshot()
+      const refKeptBefore = before.context.ref === before.children.worker
 
-    expect(app.actorRef).not.toBe(original)
-    const snapshot = app.actorRef.getSnapshot()
-    expect(snapshot.context.ref).toBe(snapshot.children.worker)
-    expect(snapshot.children.worker.getSnapshot().context).toBe(1)
+      app.refreshTo(
+        createParent(createLogic({ context: 1, run: () => undefined })),
+      )
+
+      const snapshot = app.actorRef.getSnapshot()
+      yield* expect({
+        refKeptBefore,
+        replaced: app.actorRef !== original,
+        refIsChild: snapshot.context.ref === snapshot.children.worker,
+        workerContext: snapshot.children.worker.getSnapshot().context,
+      }).toEqual({ refKeptBefore: true, replaced: true, refIsChild: true, workerContext: 1 })
+    } finally {
+      app.unmount()
+    }
   })
 
-  it('delivers snapshots a restarted child emits while starting', () => {
+  it('delivers snapshots a restarted child emits while starting', function*({ expect }) {
     const seen: unknown[] = []
     const createParent = (child: any) =>
       createMachine({
@@ -200,18 +246,22 @@ describe('Fast Refresh', () => {
     const app = mount(
       createParent(createLogic({ context: 'v1', run: () => undefined })),
     )
-    const original = app.actorRef
-    seen.length = 0
 
-    app.refreshTo(
-      createParent(createLogic({ context: 'v2', run: () => undefined })),
-    )
+    try {
+      const original = app.actorRef
+      seen.length = 0
 
-    expect(app.actorRef).toBe(original)
-    expect(seen).toEqual(['v2'])
+      app.refreshTo(
+        createParent(createLogic({ context: 'v2', run: () => undefined })),
+      )
+
+      yield* expect({ sameRef: app.actorRef === original, seen }).toEqual({ sameRef: true, seen: ['v2'] })
+    } finally {
+      app.unmount()
+    }
   })
 
-  it('starts a fresh actor when a remembered history state was removed', () => {
+  it('starts a fresh actor when a remembered history state was removed', function*({ expect }) {
     const createHistoryMachine = (withHistory: boolean) =>
       createMachine({
         id: 'player',
@@ -236,51 +286,73 @@ describe('Fast Refresh', () => {
       } as any)
 
     const app = mount(createHistoryMachine(true))
-    const original = app.actorRef
-    act(() => original.send({ type: 'NEXT' }))
-    act(() => original.send({ type: 'OFF' }))
-    expect(Object.keys(original.getSnapshot().historyValue)).toHaveLength(1)
 
-    app.refreshTo(createHistoryMachine(false))
+    try {
+      const original = app.actorRef
+      act(() => original.send({ type: 'NEXT' }))
+      act(() => original.send({ type: 'OFF' }))
+      const historyKeys = Object.keys(original.getSnapshot().historyValue)
 
-    expect(app.actorRef).not.toBe(original)
-    expect(app.actorRef.getSnapshot().value).toEqual({ on: 'a' })
+      app.refreshTo(createHistoryMachine(false))
+
+      yield* expect({
+        historyKeys,
+        replaced: app.actorRef !== original,
+        value: app.actorRef.getSnapshot().value,
+      }).toEqual({ historyKeys: ['player.on.hist'], replaced: true, value: { on: 'a' } })
+    } finally {
+      app.unmount()
+    }
   })
 
-  it('derives the state value when an active state gains substates', () => {
+  it('derives the state value when an active state gains substates', function*({ expect }) {
     const v1 = createEditor()
     const app = mount(v1)
-    const original = app.actorRef
-    act(() => original.send({ type: 'NEXT' }))
 
-    const v2 = createMachine({
-      id: 'editor',
-      initial: 'idle',
-      states: {
-        idle: { on: { NEXT: { target: 'editing' } } },
-        editing: { initial: 'typing', states: { typing: {} } },
-      },
-    })
-    app.refreshTo(v2)
+    try {
+      const original = app.actorRef
+      act(() => original.send({ type: 'NEXT' }))
 
-    expect(app.actorRef).toBe(original)
-    const snapshot = app.actorRef.getSnapshot()
-    expect(snapshot.value).toEqual({ editing: 'typing' })
-    expect(snapshot.matches({ editing: 'typing' })).toBe(true)
+      const v2 = createMachine({
+        id: 'editor',
+        initial: 'idle',
+        states: {
+          idle: { on: { NEXT: { target: 'editing' } } },
+          editing: { initial: 'typing', states: { typing: {} } },
+        },
+      })
+      app.refreshTo(v2)
+
+      const snapshot = app.actorRef.getSnapshot()
+      yield* expect({
+        sameRef: app.actorRef === original,
+        value: snapshot.value,
+        matches: snapshot.matches({ editing: 'typing' }),
+      }).toEqual({ sameRef: true, value: { editing: 'typing' }, matches: true })
+    } finally {
+      app.unmount()
+    }
   })
 
-  it('keeps the first machine when the machine changes without a refresh', () => {
+  it('keeps the first machine when the machine changes without a refresh', function*({ expect }) {
     const v1 = createEditor()
     let actorRef!: any
     const App = ({ machine }: { machine: any }) => {
       actorRef = useActorRef(machine)
       return null
     }
-    const { rerender } = render(<App machine={v1} />)
-    const original = actorRef
-    rerender(<App machine={createEditor({ DONE: { target: 'done' } })} />)
+    const { rerender, unmount } = render(<App machine={v1} />)
 
-    expect(actorRef).toBe(original)
-    expect(actorRef.logic).toBe(v1)
+    try {
+      const original = actorRef
+      rerender(<App machine={createEditor({ DONE: { target: 'done' } })} />)
+
+      yield* expect({ sameRef: actorRef === original, sameLogic: actorRef.logic === v1 }).toEqual({
+        sameRef: true,
+        sameLogic: true,
+      })
+    } finally {
+      unmount()
+    }
   })
 })

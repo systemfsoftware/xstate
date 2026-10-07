@@ -1,3 +1,4 @@
+import { it, vi } from '@systemfsoftware/vitest'
 import {
   Actor,
   createActor,
@@ -9,11 +10,11 @@ import {
   type Subscription,
 } from '@systemfsoftware/xstate'
 import { createAsyncLogic, createCallbackLogic, createObservableLogic } from '@systemfsoftware/xstate'
-import { act, fireEvent, screen } from '@testing-library/react'
+import { act, fireEvent, within } from '@testing-library/react'
+import { Effect } from 'effect'
 import * as React from 'react'
 import { useState } from 'react'
 import { BehaviorSubject, type Observable } from 'rxjs'
-import { afterEach, expect, it, vi } from 'vitest'
 import z from 'zod'
 import { useActor, useSelector } from '../src/index.js'
 import { describeEachReactMode } from './utils.js'
@@ -37,24 +38,9 @@ function toSubscribable<T>(source: Observable<T>): Subscribable<T> {
   }
 }
 
-afterEach(() => {
-  vi.useRealTimers()
-})
-
-describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
-  const context = {
-    data: undefined as undefined | string,
-  }
+describeEachReactMode('useActor (%s)', ({ render }) => {
   const fetchMachine = createMachine({
     id: 'fetch',
-    // types: {} as {
-    //   context: typeof context;
-    //   events: { type: 'FETCH' } | DoneActorEvent;
-    //   actors: {
-    //     src: 'fetchData';
-    //     logic: ActorLogicFrom<Promise<string>>;
-    //   };
-    // },
     schemas: {
       context: z.object({
         data: z.string().optional(),
@@ -67,7 +53,9 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       fetchData: createMachine({}),
     },
     initial: 'idle',
-    context,
+    context: {
+      data: undefined as undefined | string,
+    },
     states: {
       idle: {
         on: { FETCH: { target: 'loading' } },
@@ -75,17 +63,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       loading: {
         invoke: {
           id: 'fetchData',
-          // src: 'fetchData',
           src: ({ actors }: any) => actors.fetchData,
-          // onDone: {
-          //   target: 'success',
-          //   actions: assign({
-          //     data: ({ event }) => {
-          //       return event.output;
-          //     }
-          //   }),
-          //   guard: ({ event }) => !!event.output.length
-          // }
           onDone: ({ event }: any) => {
             if ((event.output as any).length > 0) {
               return {
@@ -129,7 +107,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     persistedState?: Snapshot<unknown>
   }> = ({
     onFetch = () => {
-      return new Promise((res) => res('some data'))
+      return Promise.resolve('some data')
     },
     persistedState,
   }) => {
@@ -160,60 +138,79 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     }
   }
 
-  it('should work with the useActor hook', async () => {
-    render(<Fetcher onFetch={() => new Promise((res) => res('fake data'))} />)
-    const button = screen.getByText('Fetch')
-    fireEvent.click(button)
-    screen.getByText('Loading...')
-    await screen.findByText(/Success/)
-    const dataEl = screen.getByTestId('data')
-    expect(dataEl.textContent).toBe('fake data')
+  it('should work with the useActor hook', function*({ expect }) {
+    const { container, unmount } = render(<Fetcher onFetch={() => Promise.resolve('fake data')} />)
+    const view = within(container)
+    try {
+      const button = view.getByText('Fetch')
+      yield* Effect.sync(() => fireEvent.click(button))
+      yield* expect(view.getByText('Loading...').textContent).toBe('Loading...')
+      yield* Effect.promise(() => view.findByText(/Success/))
+      const dataEl = view.getByTestId('data')
+      yield* expect(dataEl.textContent).toBe('fake data')
+    } finally {
+      unmount()
+    }
   })
 
-  it('should work with the useActor hook (rehydrated state)', async () => {
-    render(
+  it('should work with the useActor hook (rehydrated state)', function*({ expect }) {
+    const { container, unmount } = render(
       <Fetcher
-        onFetch={() => new Promise((res) => res('fake data'))}
+        onFetch={() => Promise.resolve('fake data')}
         persistedState={persistedSuccessFetchState}
       />,
     )
-
-    await screen.findByText(/Success/)
-    const dataEl = screen.getByTestId('data')
-    expect(dataEl.textContent).toBe('persisted data')
+    const view = within(container)
+    try {
+      yield* Effect.promise(() => view.findByText(/Success/))
+      const dataEl = view.getByTestId('data')
+      yield* expect(dataEl.textContent).toBe('persisted data')
+    } finally {
+      unmount()
+    }
   })
 
-  it('should work with the useMachine hook (rehydrated state config)', async () => {
+  it('should work with the useMachine hook (rehydrated state config)', function*({ expect }) {
     const persistedFetchStateConfig = JSON.parse(
       JSON.stringify(persistedSuccessFetchState),
     )
-    render(
+    const { container, unmount } = render(
       <Fetcher
-        onFetch={() => new Promise((res) => res('fake data'))}
+        onFetch={() => Promise.resolve('fake data')}
         persistedState={persistedFetchStateConfig}
       />,
     )
-
-    await screen.findByText(/Success/)
-    const dataEl = screen.getByTestId('data')
-    expect(dataEl.textContent).toBe('persisted data')
+    const view = within(container)
+    try {
+      yield* Effect.promise(() => view.findByText(/Success/))
+      const dataEl = view.getByTestId('data')
+      yield* expect(dataEl.textContent).toBe('persisted data')
+    } finally {
+      unmount()
+    }
   })
 
-  it('should provide the service', () => {
+  it('should provide the service', function*({ expect }) {
+    let service: unknown
+
     const Test = () => {
-      const [, , service] = useActor(fetchMachine)
-
-      if (!(service instanceof Actor)) {
-        throw new Error('service not instance of Interpreter')
-      }
-
+      const [, , observed] = useActor(fetchMachine)
+      service = observed
       return null
     }
 
-    render(<Test />)
+    const { unmount } = render(<Test />)
+    try {
+      yield* expect(service).toSatisfy(
+        (observed) => observed instanceof Actor,
+        'the third value useActor returns is an Actor instance',
+      )
+    } finally {
+      unmount()
+    }
   })
 
-  it('should accept input and provide it to the context factory', () => {
+  it('should accept input and provide it to the context factory', function*({ expect }) {
     const testMachine = createMachine({
       context: (({ input }: any) => ({
         foo: 'bar',
@@ -225,44 +222,42 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       },
     })
 
+    let observedContext: unknown
+
     const Test = () => {
       const [state] = useActor(testMachine, {
         input: { test: true },
       })
 
-      expect(state.context).toEqual({
-        foo: 'bar',
-        test: true,
-      })
+      observedContext = state.context
 
       return null
     }
 
-    render(<Test />)
+    const { unmount } = render(<Test />)
+    try {
+      yield* expect(observedContext).toEqual({
+        foo: 'bar',
+        test: true,
+      })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should not spawn actors until service is started', async () => {
+  it('should not spawn actors until service is started', function*({ expect }) {
     const spawnMachine = createMachine({
       id: 'spawn',
       initial: 'start',
       context: { ref: undefined } as any,
       states: {
         start: {
-          // entry: assign({
-          //   ref: ({ spawn }) =>
-          //     spawn(
-          //       createAsyncLogic(() => {
-          //         return new Promise((res) => res(42));
-          //       }),
-          //       { id: 'my-promise' }
-          //     )
-          // }),
           entry: (_, enq) => ({
             context: {
               ref: enq.spawn(
                 createAsyncLogic({
                   run: () => {
-                    return new Promise((res) => res(42))
+                    return Promise.resolve(42)
                   },
                 }),
                 { id: 'my-promise' },
@@ -292,19 +287,20 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       }
     }
 
-    render(<Spawner />)
-
-    await screen.findByTestId('success')
+    const { container, unmount } = render(<Spawner />)
+    const view = within(container)
+    try {
+      yield* Effect.promise(() => view.findByTestId('success'))
+      yield* expect(view.getByTestId('success').tagName).toBe('SPAN')
+    } finally {
+      unmount()
+    }
   })
 
-  it('actions should not use stale data in a builtin transition action', () => {
+  it('actions should not use stale data in a builtin transition action', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
 
     const toggleMachine = createMachine({
-      // types: {} as {
-      //   context: { latest: number };
-      //   events: { type: 'SET_LATEST' };
-      // },
       context: {
         latest: 0,
       } as any,
@@ -318,6 +314,8 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       },
     })
 
+    let observedCount: number | undefined
+
     const Component = () => {
       const [count, setCount] = useState(1)
 
@@ -325,7 +323,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
         toggleMachine.provide({
           actions: {
             getLatest: () => {
-              expect(count).toBe(2)
+              observedCount = count
               resolve()
             },
           },
@@ -350,18 +348,23 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<Component />)
+    const { container, unmount } = render(<Component />)
+    const view = within(container)
+    try {
+      const button = view.getByTestId('button')
+      const extButton = view.getByTestId('extbutton')
+      yield* Effect.sync(() => fireEvent.click(extButton))
 
-    const button = screen.getByTestId('button')
-    const extButton = screen.getByTestId('extbutton')
-    fireEvent.click(extButton)
+      yield* Effect.sync(() => fireEvent.click(button))
 
-    fireEvent.click(button)
-
-    return promise
+      yield* Effect.promise(() => promise)
+      yield* expect(observedCount).toBe(2)
+    } finally {
+      unmount()
+    }
   })
 
-  it('actions should not use stale data in a builtin entry action', () => {
+  it('actions should not use stale data in a builtin entry action', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
 
     const toggleMachine = createMachine({
@@ -386,6 +389,8 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       },
     })
 
+    let observedCount: number | undefined
+
     const Component = () => {
       const [count, setCount] = useState(1)
 
@@ -393,7 +398,7 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
         toggleMachine.provide({
           actions: {
             getLatest: () => {
-              expect(count).toBe(2)
+              observedCount = count
               resolve()
             },
           },
@@ -418,24 +423,26 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<Component />)
+    const { container, unmount } = render(<Component />)
+    const view = within(container)
+    try {
+      const button = view.getByTestId('button')
+      const extButton = view.getByTestId('extbutton')
+      yield* Effect.sync(() => fireEvent.click(extButton))
 
-    const button = screen.getByTestId('button')
-    const extButton = screen.getByTestId('extbutton')
-    fireEvent.click(extButton)
+      yield* Effect.sync(() => fireEvent.click(button))
 
-    fireEvent.click(button)
-
-    return promise
+      yield* Effect.promise(() => promise)
+      yield* expect(observedCount).toBe(2)
+    } finally {
+      unmount()
+    }
   })
 
-  it('actions should not use stale data in a custom entry action', () => {
+  it('actions should not use stale data in a custom entry action', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
 
     const toggleMachine = createMachine({
-      // types: {} as {
-      //   events: { type: 'TOGGLE' };
-      // },
       schemas: {
         events: z.object({
           type: z.literal('TOGGLE'),
@@ -457,11 +464,13 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       },
     })
 
+    let observedExt: boolean | undefined
+
     const Toggle = () => {
       const [ext, setExt] = useState(false)
 
       const doAction = React.useCallback(() => {
-        expect(ext).toBeTruthy()
+        observedExt = ext
         resolve()
       }, [ext])
 
@@ -491,18 +500,23 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    render(<Toggle />)
+    const { container, unmount } = render(<Toggle />)
+    const view = within(container)
+    try {
+      const button = view.getByTestId('button')
+      const extButton = view.getByTestId('extbutton')
+      yield* Effect.sync(() => fireEvent.click(extButton))
 
-    const button = screen.getByTestId('button')
-    const extButton = screen.getByTestId('extbutton')
-    fireEvent.click(extButton)
+      yield* Effect.sync(() => fireEvent.click(button))
 
-    fireEvent.click(button)
-
-    return promise
+      yield* Effect.promise(() => promise)
+      yield* expect({ observedExt }).toEqual({ observedExt: true })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should successfully spawn actors from the lazily declared context', () => {
+  it('should successfully spawn actors from the lazily declared context', function*({ expect }) {
     let childSpawned = false
 
     const machine = createMachine({
@@ -520,12 +534,15 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    render(<App />)
-
-    expect(childSpawned).toBe(true)
+    const { unmount } = render(<App />)
+    try {
+      yield* expect({ childSpawned }).toEqual({ childSpawned: true })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should be able to use an action provided outside of React', () => {
+  it('should be able to use an action provided outside of React', function*({ expect }) {
     let actionCalled = false
 
     const machine = createMachine({
@@ -544,12 +561,15 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    render(<App />)
-
-    expect(actionCalled).toBe(true)
+    const { unmount } = render(<App />)
+    try {
+      yield* expect({ actionCalled }).toEqual({ actionCalled: true })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should be able to use a guard provided outside of React', () => {
+  it('should be able to use a guard provided outside of React', function*({ expect }) {
     let guardCalled = false
 
     const machine = createMachine({
@@ -560,10 +580,6 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       states: {
         a: {
           on: {
-            // EV: {
-            //   guard: 'isAwesome',
-            //   target: 'b'
-            // }
             EV: ({ guards }) => {
               if (guards.isAwesome()) {
                 return {
@@ -593,12 +609,15 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    render(<App />)
-
-    expect(guardCalled).toBe(true)
+    const { unmount } = render(<App />)
+    try {
+      yield* expect({ guardCalled }).toEqual({ guardCalled: true })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should be able to use a service provided outside of React', () => {
+  it('should be able to use a service provided outside of React', function*({ expect }) {
     let serviceCalled = false
 
     const machine = createMachine({
@@ -619,7 +638,6 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
         },
         b: {
           invoke: {
-            // src: 'foo'
             src: ({ actors }) => actors.foo,
           },
         },
@@ -634,23 +652,20 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    render(<App />)
-
-    expect(serviceCalled).toBe(true)
+    const { unmount } = render(<App />)
+    try {
+      yield* expect({ serviceCalled }).toEqual({ serviceCalled: true })
+    } finally {
+      unmount()
+    }
   })
 
-  it('should be able to use a delay provided outside of React', () => {
+  it('should be able to use a delay provided outside of React', function*({ expect }) {
     vi.useFakeTimers()
+    let unmount: (() => void) | undefined
 
-    const machine =
-      // setup({
-      //   delays: {
-      //     myDelay: () => {
-      //       return 300;
-      //     }
-      //   }
-      // }).
-      createMachine({
+    try {
+      const machine = createMachine({
         delays: {
           myDelay: () => {
             return 300
@@ -672,31 +687,37 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
         },
       })
 
-    const App = () => {
-      const [state, send] = useActor(machine)
-      return (
-        <>
-          <div data-testid='result'>{state.value as any}</div>
-          <button onClick={() => send({ type: 'EV' })} />
-        </>
-      )
+      const App = () => {
+        const [state, send] = useActor(machine)
+        return (
+          <>
+            <div data-testid='result'>{state.value as any}</div>
+            <button onClick={() => send({ type: 'EV' })} />
+          </>
+        )
+      }
+
+      const rendered = render(<App />)
+      unmount = rendered.unmount
+      const view = within(rendered.container)
+
+      const btn = view.getByRole('button')
+      yield* Effect.sync(() => fireEvent.click(btn))
+
+      yield* expect(view.getByTestId('result').textContent).toBe('b')
+
+      yield* Effect.sync(() => {
+        act(() => vi.advanceTimersByTime(310))
+      })
+
+      yield* expect(view.getByTestId('result').textContent).toBe('c')
+    } finally {
+      unmount?.()
+      vi.useRealTimers()
     }
-
-    render(<App />)
-
-    const btn = screen.getByRole('button')
-    fireEvent.click(btn)
-
-    expect(screen.getByTestId('result').textContent).toBe('b')
-
-    act(() => {
-      vi.advanceTimersByTime(310)
-    })
-
-    expect(screen.getByTestId('result').textContent).toBe('c')
   })
 
-  it('should not use stale data in a guard', () => {
+  it('should not use stale data in a guard', function*({ expect }) {
     const machine = createMachine({
       guards: {
         isAwesome: () => false,
@@ -705,10 +726,6 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       states: {
         a: {
           on: {
-            // EV: {
-            //   guard: 'isAwesome',
-            //   target: 'b'
-            // }
             EV: ({ guards }) => {
               if (guards.isAwesome()) {
                 return {
@@ -739,20 +756,22 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       )
     }
 
-    const { rerender } = render(<App isAwesome={false} />)
-    rerender(<App isAwesome={true} />)
+    const { container, rerender, unmount } = render(<App isAwesome={false} />)
+    const view = within(container)
+    try {
+      rerender(<App isAwesome={true} />)
 
-    const btn = screen.getByRole('button')
-    fireEvent.click(btn)
+      const btn = view.getByRole('button')
+      fireEvent.click(btn)
 
-    expect(screen.getByTestId('result').textContent).toBe('b')
+      yield* expect(view.getByTestId('result').textContent).toBe('b')
+    } finally {
+      unmount()
+    }
   })
 
-  it('custom data should be available right away for the invoked actor', () => {
+  it('custom data should be available right away for the invoked actor', function*({ expect }) {
     const childMachine = createMachine({
-      // types: {
-      //   context: {} as { value: number }
-      // },
       schemas: {
         context: z.object({
           value: z.number(),
@@ -773,13 +792,6 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     })
 
     const machine = createMachine({
-      // types: {} as {
-      //   actors: {
-      //     src: 'child';
-      //     logic: typeof childMachine;
-      //     id: 'test';
-      //   };
-      // },
       actors: {
         child: childMachine,
       },
@@ -787,7 +799,6 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       states: {
         active: {
           invoke: {
-            // src: 'child',
             src: ({ actors }: any) => actors.child,
             id: 'test',
             input: { value: 42 },
@@ -796,86 +807,95 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       },
     })
 
+    let observedValue: unknown
+
     const Test = () => {
       const [state] = useActor(machine)
       const childState = useSelector(state.children['test']!, (s) => s)
 
-      expect(childState.context.value).toBe(42)
+      observedValue = childState.context.value
 
       return null
     }
 
-    render(<Test />)
+    const { unmount } = render(<Test />)
+    try {
+      yield* expect(observedValue).toBe(42)
+    } finally {
+      unmount()
+    }
   })
 
-  // https://github.com/statelyai/xstate/issues/1334
-  it('delayed transitions should work when initializing from a rehydrated state', () => {
+  it('delayed transitions should work when initializing from a rehydrated state', function*({ expect }) {
     vi.useFakeTimers()
-    const testMachine = createMachine({
-      // types: {} as {
-      //   events: {
-      //     type: 'START';
-      //   };
-      // },
-      schemas: {
-        events: z.object({
-          type: z.literal('START'),
-        }) as any,
-      },
-      id: 'app',
-      initial: 'idle',
-      states: {
-        idle: {
-          on: {
-            START: { target: 'doingStuff' },
+    let unmount: (() => void) | undefined
+
+    try {
+      const testMachine = createMachine({
+        schemas: {
+          events: z.object({
+            type: z.literal('START'),
+          }) as any,
+        },
+        id: 'app',
+        initial: 'idle',
+        states: {
+          idle: {
+            on: {
+              START: { target: 'doingStuff' },
+            },
+          },
+          doingStuff: {
+            id: 'doingStuff',
+            after: {
+              100: { target: 'idle' },
+            },
           },
         },
-        doingStuff: {
-          id: 'doingStuff',
-          after: {
-            100: { target: 'idle' },
-          },
-        },
-      },
-    })
-
-    const actorRef = createActor(testMachine).start()
-    const persistedState = JSON.stringify(actorRef.getPersistedSnapshot())
-    actorRef.stop()
-
-    let currentState: SnapshotFrom<typeof testMachine>
-
-    const Test = () => {
-      const [state, send] = useActor(testMachine, {
-        snapshot: JSON.parse(persistedState),
       })
 
-      currentState = state
+      const actorRef = createActor(testMachine).start()
+      const persistedState = JSON.stringify(actorRef.getPersistedSnapshot())
+      actorRef.stop()
 
-      return (
-        <button
-          onClick={() => send({ type: 'START' })}
-          data-testid='button'
-        >
-        </button>
-      )
+      let currentState: SnapshotFrom<typeof testMachine>
+
+      const Test = () => {
+        const [state, send] = useActor(testMachine, {
+          snapshot: JSON.parse(persistedState),
+        })
+
+        currentState = state
+
+        return (
+          <button
+            onClick={() => send({ type: 'START' })}
+            data-testid='button'
+          >
+          </button>
+        )
+      }
+
+      const rendered = render(<Test />)
+      unmount = rendered.unmount
+      const view = within(rendered.container)
+
+      const button = view.getByTestId('button')
+
+      fireEvent.click(button)
+      act(() => {
+        vi.advanceTimersByTime(110)
+      })
+
+      yield* expect(currentState!.value).toBe('idle')
+    } finally {
+      unmount?.()
+      vi.useRealTimers()
     }
-
-    render(<Test />)
-
-    const button = screen.getByTestId('button')
-
-    fireEvent.click(button)
-    act(() => {
-      vi.advanceTimersByTime(110)
-    })
-
-    expect(currentState!.matches('idle')).toBe(true)
   })
 
-  it('should not miss initial synchronous updates', () => {
+  it('should not miss initial synchronous updates', function*({ expect }) {
     const m = createMachine({
-      // types: {} as { context: { count: number } },
       schemas: {
         context: z.object({
           count: z.number(),
@@ -885,7 +905,6 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       context: {
         count: 0,
       },
-      // entry: [assign({ count: 1 }), raise({ type: 'INC' })],
       entry: (_, enq) => {
         enq.raise({ type: 'INC' })
         return {
@@ -895,12 +914,6 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
         }
       },
       on: {
-        // INC: {
-        //   actions: [
-        //     assign({ count: ({ context }) => context.count + 1 }),
-        //     raise({ type: 'UNHANDLED' })
-        //   ]
-        // }
         INC: ({ context }, enq) => {
           enq.raise({ type: 'UNHANDLED' })
           return {
@@ -920,14 +933,15 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       return <>{state.context.count}</>
     }
 
-    const { container } = render(<App />)
-
-    expect(container.textContent).toBe('2')
+    const { container, unmount } = render(<App />)
+    try {
+      yield* expect(container.textContent).toBe('2')
+    } finally {
+      unmount()
+    }
   })
 
-  // v6: In strict mode, the stop/restart cycle doesn't restart invoked
-  // children (observable actors), so the subscription is lost
-  it('should work with `onSnapshot`', () => {
+  it('should work with `onSnapshot`', function*({ expect }) {
     const subject = new BehaviorSubject(0)
 
     const spy = vi.fn()
@@ -935,9 +949,6 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
     const machine = createMachine({
       invoke: {
         src: createObservableLogic<number, undefined>(() => toSubscribable(subject)),
-        // onSnapshot: {
-        //   actions: [({ event }) => spy((event.snapshot as any).context)]
-        // }
         onSnapshot: ({ event }) => {
           spy((event.snapshot as any).context)
         },
@@ -949,50 +960,58 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
       return null
     }
 
-    render(<App />)
+    const { unmount } = render(<App />)
+    try {
+      spy.mockClear()
 
-    spy.mockClear()
+      subject.next(42)
+      subject.next(100)
 
-    subject.next(42)
-    subject.next(100)
-
-    expect(spy.mock.calls).toEqual([[42], [100]])
-  })
-
-  it('should execute a delayed transition of the initial state', async () => {
-    vi.useFakeTimers()
-
-    const machine = createMachine({
-      initial: 'one',
-      states: {
-        one: {
-          after: {
-            10: { target: 'two' },
-          },
-        },
-        two: {},
-      },
-    })
-
-    const App = () => {
-      const [state] = useActor(machine)
-      return <>{state.value}</>
+      yield* expect(spy.mock.calls).toEqual([[42], [100]])
+    } finally {
+      unmount()
     }
-
-    const { container } = render(<App />)
-
-    expect(container.textContent).toBe('one')
-
-    act(() => {
-      vi.advanceTimersByTime(10)
-    })
-
-    expect(container.textContent).toBe('two')
   })
 
-  // v6: In strict mode, the stop/restart cycle doesn't restart invoked
-  // children (promise actors), so the error never propagates
-  it('should throw an error to an error boundary when the actor reaches an error state', async () => {
+  it('should execute a delayed transition of the initial state', function*({ expect }) {
+    vi.useFakeTimers()
+    let unmount: (() => void) | undefined
+
+    try {
+      const machine = createMachine({
+        initial: 'one',
+        states: {
+          one: {
+            after: {
+              10: { target: 'two' },
+            },
+          },
+          two: {},
+        },
+      })
+
+      const App = () => {
+        const [state] = useActor(machine)
+        return <>{state.value}</>
+      }
+
+      const rendered = render(<App />)
+      unmount = rendered.unmount
+
+      yield* expect(rendered.container.textContent).toEqual('one')
+
+      yield* Effect.sync(() => {
+        act(() => vi.advanceTimersByTime(10))
+      })
+
+      yield* expect(rendered.container.textContent).toEqual('two')
+    } finally {
+      unmount?.()
+      vi.useRealTimers()
+    }
+  })
+
+  it('should throw an error to an error boundary when the actor reaches an error state', function*({ expect }) {
     const errorMessage = 'test_useActor_error'
 
     const machine = createMachine({
@@ -1031,13 +1050,17 @@ describeEachReactMode('useActor (%s)', ({ suiteKey, render }) => {
 
     console.error = vi.fn()
 
-    render(
+    const { container, unmount } = render(
       <ErrorBoundary>
         <App />
       </ErrorBoundary>,
     )
-
-    await screen.findByTestId('error')
-    expect(screen.getByTestId('error').textContent).toBe(errorMessage)
+    const view = within(container)
+    try {
+      yield* Effect.promise(() => view.findByTestId('error'))
+      yield* expect(view.getByTestId('error').textContent).toEqual(errorMessage)
+    } finally {
+      unmount()
+    }
   })
 })
