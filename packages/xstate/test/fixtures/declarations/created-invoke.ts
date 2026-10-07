@@ -1,5 +1,5 @@
 /* oxlint-disable typescript/require-await -- Exercise inference from plain async return values. */
-import { type ActorRefFromLogic, createAsyncLogic, setup, types } from '../../../src/index.ts'
+import { type ActorRefFromLogic, createAsyncLogic, setup, types } from '../../../src/index.js'
 
 const s = setup({
   schemas: {

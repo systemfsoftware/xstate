@@ -13,7 +13,7 @@ branch = "main"
 [[repos]]
 name = "xstate-upstream"
 url = "https://github.com/statelyai/xstate"
-description = "Upstream XState at 2146ae26, vendored for the oracle lane; the git-subtree-split trailer is the pin"
+description = "Upstream XState at 2146ae26, kept as reference material only; nothing builds, tests or type-checks against it"
 branch = "next"
 commit = "2146ae26ebfc7e6a624b3a1f237f9e6ddc30b9f5"
 tree = "a8e63ffb6821f3ed1cd157bf7d6c9ef97ef2f5c0"

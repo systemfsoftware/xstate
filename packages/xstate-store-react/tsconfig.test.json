@@ -21,9 +21,5 @@
     {
       "path": "./tsconfig.app.json"
     }
-  ],
-  "exclude": [
-    "src/index.test.tsx",
-    "src/types.test.tsx"
   ]
 }

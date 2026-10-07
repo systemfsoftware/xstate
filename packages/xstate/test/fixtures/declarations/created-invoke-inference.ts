@@ -9,7 +9,7 @@ import {
   setup,
   type SnapshotFrom,
   types,
-} from '../../../src/index.ts'
+} from '../../../src/index.js'
 
 // Explicit type arguments stop inference from weakening the assertion itself.
 type IsAny<T> = 0 extends 1 & T ? true : false

@@ -1,5 +1,5 @@
-import { setup, types } from '../../../src/index.ts'
-import { childMachine } from './registered-child.ts'
+import { setup, types } from '../../../src/index.js'
+import { childMachine } from './registered-child.js'
 
 export const parentMachine = setup({
   schemas: {

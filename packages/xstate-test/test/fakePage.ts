@@ -95,13 +95,13 @@ export class FakePage {
   }
 
   /** Writes `options.path`, or returns the image as a buffer without one. */
-  public screenshot(options?: { path?: string }): Promise<Buffer | undefined> {
-    if (options?.path) {
+  public screenshot(options?: { path?: string }): Promise<Uint8Array | undefined> {
+    if (options?.path !== undefined && options.path !== '') {
       this.screenshots.push(options.path)
       return Promise.resolve(undefined)
     }
     return Promise.resolve(
-      Buffer.from(`shot-${this.shots++}:${this.app.count}`),
+      new TextEncoder().encode(`shot-${this.shots++}:${this.app.count}`),
     )
   }
 
@@ -189,7 +189,7 @@ export class FakePage {
 
   public unroute(url: string, handler?: unknown): Promise<void> {
     this.routeLog.push(`unroute ${url}`)
-    if (this.unrouteError) {
+    if (Boolean(this.unrouteError)) {
       return Promise.reject(this.unrouteError)
     }
     const index = this.installedRoutes.findIndex(
@@ -217,7 +217,7 @@ export class FakePage {
       this.app.label = 'error'
       return
     }
-    this.app.count += this.options.broken ? amount + 1 : amount
+    this.app.count += Boolean(this.options.broken) ? amount + 1 : amount
     this.app.label = 'ok'
   }
 }

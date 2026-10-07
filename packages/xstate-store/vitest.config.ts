@@ -1,3 +1,6 @@
 import { forkTestConfig } from '../../vitest.shared.ts'
 
-export default forkTestConfig(import.meta.url, { environment: 'happy-dom', inline: ['@statelyai/inspect'] })
+export default forkTestConfig(import.meta.url, {
+  environment: 'happy-dom',
+  inline: ['@statelyai/inspect'],
+})

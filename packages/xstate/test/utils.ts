@@ -1,4 +1,13 @@
-import { AnyMachineSnapshot, AnyStateMachine, matchesState, StateValue, transition } from '../src/index.ts'
+import type { Observable } from 'rxjs'
+import { expect, it } from 'vitest'
+import {
+  type AnyMachineSnapshot,
+  type AnyStateMachine,
+  matchesState,
+  type StateValue,
+  transition,
+} from '../src/index.js'
+import type { Observer, Subscribable, Subscription } from '../src/types.js'
 
 const resolveSerializedStateValue = (
   machine: AnyStateMachine,
@@ -28,6 +37,10 @@ export function testMultiTransition(
 
   const [firstEventType, ...restEvents] = eventTypes.split(/,\s?/)
 
+  if (firstEventType === undefined) {
+    throw new Error('expected a first event type')
+  }
+
   const resultState = restEvents.reduce<AnyMachineSnapshot>(
     computeNext,
     computeNext(fromState, firstEventType),
@@ -41,8 +54,12 @@ export function testAll(
   expected: Record<string, Record<string, StateValue | undefined>>,
 ): void {
   Object.keys(expected).forEach((fromState) => {
-    Object.keys(expected[fromState]).forEach((eventTypes) => {
-      const toState = expected[fromState][eventTypes]
+    const fromStateExpected = expected[fromState]
+    if (fromStateExpected === undefined) {
+      throw new Error(`expected a record for "${fromState}"`)
+    }
+    Object.keys(fromStateExpected).forEach((eventTypes) => {
+      const toState = fromStateExpected[eventTypes]
 
       it(
         `should go from ${fromState} to ${
@@ -112,5 +129,24 @@ export function trackEntries(machine: StateNodeLike & { root: StateNodeLike }) {
     const flushed = logs
     logs = []
     return flushed
+  }
+}
+
+export function toSubscribable<T>(source: Observable<T>): Subscribable<T> {
+  return {
+    subscribe(
+      observerOrNext: Observer<T> | ((value: T) => void),
+      error?: (error: unknown) => void,
+      complete?: () => void,
+    ): Subscription {
+      if (typeof observerOrNext === 'function') {
+        return source.subscribe(observerOrNext, error, complete)
+      }
+      return source.subscribe(
+        (value) => observerOrNext.next?.(value),
+        (err) => observerOrNext.error?.(err),
+        () => observerOrNext.complete?.(),
+      )
+    },
   }
 }
