@@ -24,11 +24,33 @@
     "comment-checker_2": {
       "inputs": {
         "nixpkgs": [
+          "release-tools",
+          "nixpkgs"
+        ],
+        "rust-overlay": "rust-overlay_2"
+      },
+      "locked": {
+        "lastModified": 1788142907,
+        "narHash": "sha256-arhhsgBbDTOTtnG9gphKARLXkCj3emOZUm3sP0a0jnI=",
+        "owner": "systemfsoftware",
+        "repo": "comment-checker",
+        "rev": "60e60bbedb2686c807a9ca64a31f7bba4e75b97b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "systemfsoftware",
+        "repo": "comment-checker",
+        "type": "github"
+      }
+    },
+    "comment-checker_3": {
+      "inputs": {
+        "nixpkgs": [
           "systemfsoftware",
           "pnpm-release-management",
           "nixpkgs"
         ],
-        "rust-overlay": "rust-overlay_2"
+        "rust-overlay": "rust-overlay_3"
       },
       "locked": {
         "lastModified": 1790884787,
@@ -105,6 +127,22 @@
         "type": "github"
       }
     },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1789006805,
+        "narHash": "sha256-xB8mKMOx1IA9vTDNLmJZ6n4wCMq/cuWBBOzGCRnqxrU=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "pnpm-release-management": {
       "inputs": {
         "comment-checker": [
@@ -131,7 +169,7 @@
     },
     "pnpm-release-management_2": {
       "inputs": {
-        "comment-checker": "comment-checker_2",
+        "comment-checker": "comment-checker_3",
         "importPnpmLock": "importPnpmLock_2",
         "nixpkgs": [
           "systemfsoftware",
@@ -153,12 +191,33 @@
         "type": "github"
       }
     },
+    "release-tools": {
+      "inputs": {
+        "comment-checker": "comment-checker_2",
+        "nixpkgs": "nixpkgs_2"
+      },
+      "locked": {
+        "lastModified": 1791336788,
+        "narHash": "sha256-UtGMujD5AC037PA1ZBVBWXKbvA/xHXgBRmxOSYcNwTs=",
+        "owner": "systemfsoftware",
+        "repo": "pnpm-release-management",
+        "rev": "5432b8b642bbbdb1b03a4b576dff82f3e9083ac5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "systemfsoftware",
+        "repo": "pnpm-release-management",
+        "rev": "5432b8b642bbbdb1b03a4b576dff82f3e9083ac5",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "comment-checker": "comment-checker",
         "importPnpmLock": "importPnpmLock",
         "nixpkgs": "nixpkgs",
         "pnpm-release-management": "pnpm-release-management",
+        "release-tools": "release-tools",
         "stryker-js-effect": "stryker-js-effect",
         "systemfsoftware": "systemfsoftware"
       }
@@ -187,6 +246,28 @@
     "rust-overlay_2": {
       "inputs": {
         "nixpkgs": [
+          "release-tools",
+          "comment-checker",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787367552,
+        "narHash": "sha256-YT4Fs2k7bi+7YzuLt93EtIRgjpwHK5ZfsQEIh5dEQSk=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "fd2ebb9cc4323d0c5a1336138dab5c3c5a5d8bd9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_3": {
+      "inputs": {
+        "nixpkgs": [
           "systemfsoftware",
           "pnpm-release-management",
           "comment-checker",
@@ -207,7 +288,7 @@
         "type": "github"
       }
     },
-    "rust-overlay_3": {
+    "rust-overlay_4": {
       "inputs": {
         "nixpkgs": [
           "systemfsoftware",
@@ -254,7 +335,7 @@
           "nixpkgs"
         ],
         "pnpm-release-management": "pnpm-release-management_2",
-        "rust-overlay": "rust-overlay_3"
+        "rust-overlay": "rust-overlay_4"
       },
       "locked": {
         "lastModified": 1791330870,

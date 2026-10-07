@@ -16,6 +16,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
     };
+    # The release workflows run pnpm-release-management's main; the Changeset
+    # Check runs its changeset-management CLI from this pin of main inside the
+    # dev shell, where the .sfs-deps tarballs the install needs exist. The pin
+    # above stays for mkPnpmWorkspacePackages, which main does not carry. It
+    # keeps its own nixpkgs: its deno-compile runtime is pinned to that deno.
+    release-tools.url = "github:systemfsoftware/pnpm-release-management/5432b8b642bbbdb1b03a4b576dff82f3e9083ac5";
     # systemfsoftware#606's merge into main: its workspace tarballs carry
     # per-system integrity, so the macOS leg installs what Linux installs. It
     # keeps its own pnpm-release-management pin, whose mkPnpmConsumerStore the
@@ -39,7 +45,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, comment-checker, pnpm-release-management, systemfsoftware, stryker-js-effect, importPnpmLock }:
+  outputs = { self, nixpkgs, comment-checker, pnpm-release-management, release-tools, systemfsoftware, stryker-js-effect, importPnpmLock }:
     let
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
@@ -120,13 +126,15 @@
 
       devShells = forEachSystem (pkgs:
         let
-          own = self.packages.${pkgs.stdenv.hostPlatform.system};
+          system = pkgs.stdenv.hostPlatform.system;
+          own = self.packages.${system};
         in {
           default = pkgs.mkShell {
             packages = [
               own.dprint
               own.comment-checker
               own.sandbox
+              release-tools.packages.${system}.changeset-management
               pkgs.actionlint
               pkgs.jq
               pkgs.nodejs_24
