@@ -14,7 +14,7 @@ export {
 export { ActorScope, withActorScope } from './actorScope.js'
 export { createEffectActor, type EffectActorOptions } from './createEffectActor.js'
 export { EffectActor } from './effectActor.js'
-export { ActorStoppedError, EffectInterruptedError } from './errors.js'
+export { ActorFailedError, ActorStoppedError, EffectInterruptedError } from './errors.js'
 export {
   type EffectActorLogic,
   type EffectLogicBrand,

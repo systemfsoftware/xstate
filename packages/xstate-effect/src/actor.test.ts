@@ -1,7 +1,8 @@
-import { type AnyActorRef, createMachine, type ErrorFrom, type SnapshotFrom, types } from '@systemfsoftware/xstate'
+import { type AnyActorRef, createMachine, type SnapshotFrom, types } from '@systemfsoftware/xstate'
 import { Cause, Clock, Duration, Effect, Exit, Fiber, Scope, Stream } from 'effect'
 import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
 import {
+  ActorFailedError,
   ActorStoppedError,
   createEffectActor,
   EffectActor,
@@ -387,7 +388,7 @@ describe('join', () => {
     expect(output).toEqual({ count: 1 })
   })
 
-  it('fails with the typed actor error', async () => {
+  it('fails with ActorFailedError carrying the typed actor error', async () => {
     const failure = { code: 'X' as const }
     const error = await runScoped(
       Effect.gen(function*() {
@@ -401,11 +402,14 @@ describe('join', () => {
       }),
     )
 
-    error satisfies { code: 'X' } | ActorStoppedError
-    expect(error).toEqual(failure)
+    error satisfies ActorFailedError<{ code: 'X' }> | ActorStoppedError
+    if (!(error instanceof ActorFailedError)) {
+      throw new Error('expected the failure to be an ActorFailedError')
+    }
+    expect(error.cause).toBe(failure)
   })
 
-  it('exposes machine errors as unknown and preserves the thrown value', async () => {
+  it('fails with ActorFailedError carrying the thrown value', async () => {
     const failure = { code: 'MACHINE_FAILURE' }
     const machine = createMachine({
       on: {
@@ -417,15 +421,19 @@ describe('join', () => {
     const error = await runScoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(machine)
-        expectTypeOf<
-          ErrorFrom<typeof actor> | ActorStoppedError
-        >().toEqualTypeOf<unknown>()
+        const result = join(actor)
+        expectTypeOf<Effect.Error<typeof result>>().toEqualTypeOf<
+          ActorFailedError | ActorStoppedError
+        >()
         afterSubscribe(actor, () => actor.send({ type: 'FAIL' }))
-        return yield* Effect.flip(join(actor))
+        return yield* Effect.flip(result)
       }),
     )
 
-    expect(error).toBe(failure)
+    if (!(error instanceof ActorFailedError)) {
+      throw new Error('expected the failure to be an ActorFailedError')
+    }
+    expect(error.cause).toBe(failure)
   })
 
   it('fails with ActorStoppedError when the actor is stopped', async () => {
