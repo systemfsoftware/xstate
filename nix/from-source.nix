@@ -63,10 +63,24 @@ in
       cp -r ${source} workspace
       chmod -R u+w workspace
       export HOME="$TMPDIR"
-      export pnpm_config_store_dir=${store}
+      # pnpm writes index.db while it reads the store, so it gets a writable
+      # view of the read-only store, as the sandbox launcher builds one.
+      store_view="$TMPDIR/pnpm-store"
+      for layout in ${store}/v*; do
+        mkdir -p "$store_view/''${layout##*/}"
+        for entry in "$layout"/*; do
+          if [ "''${entry##*/}" = index.db ]; then
+            install -m 0644 "$entry" "$store_view/''${layout##*/}/index.db"
+          else
+            ln -s "$entry" "$store_view/''${layout##*/}/''${entry##*/}"
+          fi
+        done
+      done
+      export pnpm_config_store_dir="$store_view"
       export pnpm_config_offline=true
       export pnpm_config_frozen_lockfile=true
       export pnpm_config_trust_lockfile=true
+      export pnpm_config_package_import_method=clone-or-copy
       pushd workspace
       pnpm install
       ${lib.concatMapStrings (p: ''
