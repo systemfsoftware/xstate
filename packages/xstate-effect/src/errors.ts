@@ -37,6 +37,16 @@ export class ActorStoppedError extends Data.TaggedError(
   }
 }
 
+export class ActorFailedError<E = unknown> extends Data.TaggedError(
+  '@systemfsoftware/xstate-effect/errors/ActorFailedError',
+)<{
+  readonly cause: E
+}> {
+  override get message(): string {
+    return 'The actor failed'
+  }
+}
+
 /**
  * Reported by the `send` atom of `createActorAtoms` when an event is sent
  * before the actor's runtime has finished building.

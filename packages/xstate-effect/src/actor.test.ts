@@ -7,6 +7,7 @@ import {
   type SnapshotFrom
 } from 'xstate';
 import {
+  ActorFailedError,
   ActorStoppedError,
   EffectActor,
   createEffectActor,
@@ -386,7 +387,7 @@ describe('join', () => {
     expect(output).toEqual({ count: 1 });
   });
 
-  it('fails with the typed actor error', async () => {
+  it('fails with ActorFailedError carrying the typed actor error', async () => {
     const failure = { code: 'X' as const };
     const error = await runScoped(
       Effect.gen(function* () {
@@ -398,11 +399,14 @@ describe('join', () => {
       })
     );
 
-    error satisfies { code: 'X' } | ActorStoppedError;
-    expect(error).toEqual(failure);
+    error satisfies ActorFailedError<{ code: 'X' }> | ActorStoppedError;
+    if (!(error instanceof ActorFailedError)) {
+      throw new Error('expected the failure to be an ActorFailedError');
+    }
+    expect(error.cause).toBe(failure);
   });
 
-  it('exposes machine errors as unknown and preserves the thrown value', async () => {
+  it('fails with ActorFailedError carrying the thrown value', async () => {
     const failure = { code: 'MACHINE_FAILURE' };
     const machine = createMachine({
       on: {
@@ -415,13 +419,18 @@ describe('join', () => {
       Effect.gen(function* () {
         const actor = yield* createEffectActor(machine);
         const result = join(actor);
-        expectTypeOf<Effect.Error<typeof result>>().toEqualTypeOf<unknown>();
+        expectTypeOf<Effect.Error<typeof result>>().toEqualTypeOf<
+          ActorFailedError | ActorStoppedError
+        >();
         afterSubscribe(actor, () => actor.send({ type: 'FAIL' }));
         return yield* Effect.flip(result);
       })
     );
 
-    expect(error).toBe(failure);
+    if (!(error instanceof ActorFailedError)) {
+      throw new Error('expected the failure to be an ActorFailedError');
+    }
+    expect(error.cause).toBe(failure);
   });
 
   it('fails with ActorStoppedError when the actor is stopped', async () => {
