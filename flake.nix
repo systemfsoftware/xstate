@@ -16,13 +16,14 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
     };
-    # systemfsoftware#606's head: the first snapshot whose workspace deps hash
-    # is measured per system, so aarch64-darwin builds the tarballs too.
+    # systemfsoftware#606's merge into main: its workspace tarballs carry
+    # per-system integrity, so the macOS leg installs what Linux installs. It
+    # keeps its own pnpm-release-management pin, whose mkPnpmConsumerStore the
+    # pin above lacks.
     systemfsoftware = {
-      url = "github:systemfsoftware/systemfsoftware/bb5956b3521bf96361e94e136cdc7fa968e1db78";
+      url = "github:systemfsoftware/systemfsoftware/217c80d5d52c17d03d4aeb83b580ef97ed986c85";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
-      inputs.pnpm-release-management.follows = "pnpm-release-management";
     };
     # The pnpm store is hashless: each tarball's lockfile integrity is its fetch hash, so a lockfile change needs no hash edit.
     importPnpmLock = {
