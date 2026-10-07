@@ -1,15 +1,13 @@
+import { describe } from '@systemfsoftware/vitest'
 import { type AnyActorLogic, createMachine, setup } from '@systemfsoftware/xstate'
 import { Context, Effect, Scope } from 'effect'
-import { describe, it } from 'vitest'
 import { createEffectActor, fromEffect, type RequirementsFrom, setupEffect, withActorScope } from './index.js'
 
-/** Invariant type equality. */
 type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true
   : false
 
 type IsNever<T> = [T] extends [never] ? true : false
 
-/** Whether `TWhole` (a requirements union) contains `TPart`. */
 type Includes<TWhole, TPart> = [TPart] extends [TWhole] ? true : false
 
 /**
@@ -44,8 +42,8 @@ const alphaLogic = fromEffect(alphaEffect)
 const betaLogic = fromEffect(betaEffect)
 const plainLogic = fromEffect(Effect.succeed(1))
 
-describe('RequirementsFrom', () => {
-  it('supplies invocation and owning actor scopes without an application Layer', () => {
+describe('RequirementsFrom', (it) => {
+  it('supplies invocation and owning actor scopes without an application Layer', function*({ expect }) {
     const task = fromEffect(
       Effect.acquireRelease(alphaEffect, () => Effect.void),
     )
@@ -55,9 +53,13 @@ describe('RequirementsFrom', () => {
     true satisfies Equals<RequirementsFrom<typeof task>, AlphaRequirement>
     true satisfies Equals<RequirementsFrom<typeof shared>, BetaRequirement>
     true satisfies Includes<ActorRequirements<typeof task>, Scope.Scope>
+    yield* expect({
+      task: typeof task.transition,
+      shared: typeof shared.transition,
+    }).toEqual({ task: 'function', shared: 'function' })
   })
 
-  it('tracks services replaced by provided actors', () => {
+  it('tracks services replaced by provided actors', function*({ expect }) {
     const machine = setup({ actors: { work: alphaLogic } }).createMachine({
       invoke: { src: 'work' },
     })
@@ -65,9 +67,10 @@ describe('RequirementsFrom', () => {
       actors: { work: fromEffect(Effect.as(betaEffect, 0)) },
     })
     true satisfies Equals<RequirementsFrom<typeof provided>, BetaRequirement>
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('tracks services introduced and replaced by provided actions', () => {
+  it('tracks services introduced and replaced by provided actions', function*({ expect }) {
     const machine = setupEffect({
       actions: { work: (_args) => Effect.void },
     }).createMachine({
@@ -85,9 +88,10 @@ describe('RequirementsFrom', () => {
     true satisfies Equals<RequirementsFrom<typeof parent>, BetaRequirement>
     const actorWithoutAlpha = Effect.scoped(createEffectActor(alpha))
     true satisfies Equals<Effect.Services<typeof actorWithoutAlpha>, AlphaRequirement>
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('retains services of untouched and optionally provided actions', () => {
+  it('retains services of untouched and optionally provided actions', function*({ expect }) {
     const machine = setupEffect({
       actions: {
         first: (_args) => alphaEffect,
@@ -105,9 +109,10 @@ describe('RequirementsFrom', () => {
       RequirementsFrom<typeof maybe>,
       AlphaRequirement | BetaRequirement
     >
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('collects requirements from Effect logic directly', () => {
+  it('collects requirements from Effect logic directly', function*({ expect }) {
     true satisfies Equals<
       RequirementsFrom<typeof alphaLogic>,
       AlphaRequirement
@@ -117,9 +122,10 @@ describe('RequirementsFrom', () => {
       ActorRequirements<typeof alphaLogic>,
       AlphaRequirement
     >
+    yield* expect(typeof alphaLogic.transition).toEqual('function')
   })
 
-  it('collects requirements from a registered Effect actor', () => {
+  it('collects requirements from a registered Effect actor', function*({ expect }) {
     const machine = setup({ actors: { alphaLogic } }).createMachine({
       initial: 'a',
       states: { a: { invoke: { src: 'alphaLogic' } } },
@@ -130,9 +136,10 @@ describe('RequirementsFrom', () => {
       ActorRequirements<typeof machine>,
       AlphaRequirement
     >
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('collects requirements from a registered Effect action', () => {
+  it('collects requirements from a registered Effect action', function*({ expect }) {
     const machine = setupEffect({
       actions: {
         alpha: (_args) => Alpha.use((alpha) => Effect.succeed(alpha.a)),
@@ -144,9 +151,10 @@ describe('RequirementsFrom', () => {
     })
 
     true satisfies Equals<RequirementsFrom<typeof machine>, AlphaRequirement>
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('collects requirements through a registered child machine', () => {
+  it('collects requirements through a registered child machine', function*({ expect }) {
     const child = setup({ actors: { alphaLogic } }).createMachine({
       initial: 'a',
       states: { a: { invoke: { src: 'alphaLogic' } } },
@@ -159,15 +167,14 @@ describe('RequirementsFrom', () => {
     true satisfies Equals<RequirementsFrom<typeof parent>, AlphaRequirement>
     true satisfies Includes<ActorRequirements<typeof parent>, AlphaRequirement>
 
-    // The gap this type closes: the parent's requirements used to infer
-    // `never`, so this probe used to compile.
     // @ts-expect-error -- nested requirements must no longer be `never`
     const probe: IsNever<ActorRequirements<typeof parent>> extends true ? 'NESTED_R_IS_NEVER'
       : 'nested ok' = 'NESTED_R_IS_NEVER'
     void probe
+    yield* expect(parent.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('collects requirements two machine levels deep', () => {
+  it('collects requirements two machine levels deep', function*({ expect }) {
     const grandchild = setup({ actors: { alphaLogic } }).createMachine({
       initial: 'a',
       states: { a: { invoke: { src: 'alphaLogic' } } },
@@ -183,9 +190,10 @@ describe('RequirementsFrom', () => {
 
     true satisfies Equals<RequirementsFrom<typeof parent>, AlphaRequirement>
     true satisfies Includes<ActorRequirements<typeof parent>, AlphaRequirement>
+    yield* expect(parent.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('infers `never` for a machine with no Effect sources', () => {
+  it('infers `never` for a machine with no Effect sources', function*({ expect }) {
     const child = setup({ actors: { plainLogic } }).createMachine({
       initial: 'a',
       states: { a: { invoke: { src: 'plainLogic' } } },
@@ -199,9 +207,10 @@ describe('RequirementsFrom', () => {
     true satisfies IsNever<RequirementsFrom<typeof parent>>
     // @ts-expect-error -- a machine with no Effect sources requires nothing
     true satisfies Includes<ActorRequirements<typeof parent>, AlphaRequirement>
+    yield* expect(parent.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('unions requirements from two different actors', () => {
+  it('unions requirements from two different actors', function*({ expect }) {
     const child = setup({ actors: { betaLogic } }).createMachine({
       initial: 'a',
       states: { a: { invoke: { src: 'betaLogic' } } },
@@ -219,11 +228,12 @@ describe('RequirementsFrom', () => {
     false satisfies Equals<RequirementsFrom<typeof parent>, BetaRequirement>
     true satisfies Includes<ActorRequirements<typeof parent>, AlphaRequirement>
     true satisfies Includes<ActorRequirements<typeof parent>, BetaRequirement>
+    yield* expect(parent.getInitialSnapshot().status).toEqual('active')
   })
 })
 
-describe('RequirementsFrom (inline invoke.src)', () => {
-  it('collects requirements from an inline root invoke', () => {
+describe('RequirementsFrom (inline invoke.src)', (it) => {
+  it('collects requirements from an inline root invoke', function*({ expect }) {
     const machine = createMachine({
       invoke: { src: alphaLogic },
     })
@@ -233,9 +243,10 @@ describe('RequirementsFrom (inline invoke.src)', () => {
       ActorRequirements<typeof machine>,
       AlphaRequirement
     >
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('collects requirements from an inline invoke nested two states deep', () => {
+  it('collects requirements from an inline invoke nested two states deep', function*({ expect }) {
     const machine = setup({}).createMachine({
       initial: 'outer',
       states: {
@@ -249,9 +260,10 @@ describe('RequirementsFrom (inline invoke.src)', () => {
     })
 
     true satisfies Equals<RequirementsFrom<typeof machine>, AlphaRequirement>
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('collects requirements from an array of invoke configs', () => {
+  it('collects requirements from an array of invoke configs', function*({ expect }) {
     const machine = setup({ actors: { betaLogic } }).createMachine({
       initial: 'a',
       states: {
@@ -265,9 +277,10 @@ describe('RequirementsFrom (inline invoke.src)', () => {
       RequirementsFrom<typeof machine>,
       AlphaRequirement | BetaRequirement
     >
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('recurses into an inline child machine used as invoke.src', () => {
+  it('recurses into an inline child machine used as invoke.src', function*({ expect }) {
     const child = createMachine({
       initial: 'a',
       states: { a: { invoke: { src: alphaLogic } } },
@@ -279,9 +292,10 @@ describe('RequirementsFrom (inline invoke.src)', () => {
 
     true satisfies Equals<RequirementsFrom<typeof parent>, AlphaRequirement>
     true satisfies Includes<ActorRequirements<typeof parent>, AlphaRequirement>
+    yield* expect(parent.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('no longer infers `never` for inline Effect logic', () => {
+  it('no longer infers `never` for inline Effect logic', function*({ expect }) {
     const inline = createMachine({
       initial: 'a',
       states: { a: { invoke: { src: alphaLogic } } },
@@ -293,18 +307,20 @@ describe('RequirementsFrom (inline invoke.src)', () => {
     const probe: IsNever<RequirementsFrom<typeof inline>> extends true ? 'INLINE_R_IS_NEVER'
       : 'inline ok' = 'INLINE_R_IS_NEVER'
     void probe
+    yield* expect(inline.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('infers `never` when every invoke.src is a registered string', () => {
+  it('infers `never` when every invoke.src is a registered string', function*({ expect }) {
     const machine = setup({ actors: { plainLogic } }).createMachine({
       initial: 'a',
       states: { a: { invoke: { src: 'plainLogic' } } },
     })
 
     true satisfies IsNever<RequirementsFrom<typeof machine>>
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('cannot see logic spawned inside a transition function body', () => {
+  it('cannot see logic spawned inside a transition function body', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -318,8 +334,7 @@ describe('RequirementsFrom (inline invoke.src)', () => {
       },
     })
 
-    // Known limitation: `enq.spawn` happens inside a function body, so the
-    // spawned logic never reaches the machine's type.
     true satisfies IsNever<RequirementsFrom<typeof machine>>
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 })

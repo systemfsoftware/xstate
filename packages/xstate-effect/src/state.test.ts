@@ -1,6 +1,6 @@
+import { describe } from '@systemfsoftware/vitest'
 import { createActor, createMachine } from '@systemfsoftware/xstate'
 import { Effect, Match, Schema, Stream } from 'effect'
-import { describe, expect, it } from 'vitest'
 import {
   createEffectActor,
   send,
@@ -76,33 +76,45 @@ const describeState = Match.type<TaggedState<typeof machine>>().pipe(
   Match.exhaustive,
 )
 
-describe('taggedState', () => {
-  it('tags the state path and keeps the per-state context', () => {
+describe('taggedState', (it) => {
+  it('tags the state path and keeps the per-state context', function*({ expect }) {
     const actor = createActor(machine).start()
     const idle = taggedState(actor.getSnapshot())
-    expect(idle._tag).toBe('idle')
-    expect(idle.value).toBe('idle')
 
     actor.send({ type: 'START' })
     const loading = taggedState(actor.getSnapshot())
-    expect(loading._tag).toBe('loading')
-    expect(loading.context).toEqual({ id: 'a', startedAt: 1 })
 
     actor.send({ type: 'DONE' })
     const done = taggedState(actor.getSnapshot())
-    expect(done._tag).toBe('done.success')
-    expect(done.value).toEqual({ done: 'success' })
-    expect(done.snapshot).toBe(actor.getSnapshot())
+    yield* expect({
+      idle: { _tag: idle._tag, value: idle.value },
+      loading: { _tag: loading._tag, context: loading.context },
+      done: {
+        _tag: done._tag,
+        value: done.value,
+        sameSnapshot: done.snapshot === actor.getSnapshot(),
+      },
+    }).toEqual({
+      idle: { _tag: 'idle', value: 'idle' },
+      loading: { _tag: 'loading', context: { id: 'a', startedAt: 1 } },
+      done: {
+        _tag: 'done.success',
+        value: { done: 'success' },
+        sameSnapshot: true,
+      },
+    })
   })
 
-  it('stops at a parallel state', () => {
+  it('stops at a parallel state', function*({ expect }) {
     const actor = createActor(parallelMachine).start()
     const tagged = taggedState(actor.getSnapshot())
-    expect(tagged._tag).toBe('(machine)')
-    expect(tagged.value).toEqual({ a: 'a1', b: 'b1' })
+    yield* expect({ _tag: tagged._tag, value: tagged.value }).toEqual({
+      _tag: '(machine)',
+      value: { a: 'a1', b: 'b1' },
+    })
   })
 
-  it('matches exhaustively over snapshots of an Effect actor', async () => {
+  it('matches exhaustively over snapshots of an Effect actor', function*({ expect }) {
     const program = Effect.gen(function*() {
       const actor = yield* createEffectActor(machine)
       const seen = yield* snapshots(actor).pipe(
@@ -121,14 +133,11 @@ describe('taggedState', () => {
       return [...seen]
     })
 
-    await expect(Effect.runPromise(Effect.scoped(program))).resolves.toEqual([
-      'idle',
-      'loading since 1',
-      'failed',
-    ])
+    const seen = yield* Effect.scoped(program)
+    yield* expect(seen).toEqual(['idle', 'loading since 1', 'failed'])
   })
 
-  it('types the tag union and per-state context', () => {
+  it('types the tag union and per-state context', function*({ expect }) {
     type Tagged = TaggedState<typeof machine>
     type Tags = Tagged['_tag']
     'idle' satisfies Tags
@@ -145,7 +154,12 @@ describe('taggedState', () => {
         tagged.value satisfies 'loading'
       }
     }
-    check(taggedState(createActor(machine).getSnapshot()))
+    const idle = taggedState(createActor(machine).getSnapshot())
+    check(idle)
+    yield* expect({ _tag: idle._tag, value: idle.value }).toEqual({
+      _tag: 'idle',
+      value: 'idle',
+    })
 
     type Parallel = TaggedStateFrom<
       ReturnType<typeof parallelMachine.getInitialSnapshot>

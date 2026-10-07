@@ -1,3 +1,4 @@
+import { describe, expectTypeOf, it } from '@systemfsoftware/vitest'
 import {
   createActor,
   createMachine,
@@ -7,33 +8,22 @@ import {
   types,
 } from '@systemfsoftware/xstate'
 import { standardSchemaValidator } from '@systemfsoftware/xstate/validation'
-import { Clock, Context, Deferred, Effect, Exit, Layer, ManagedRuntime, Option, Schema, Scope, Stream } from 'effect'
-import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
+import { Clock, Context, Deferred, Effect, Layer, ManagedRuntime, Option, Ref, Schema, Scope, Stream } from 'effect'
 import { createEffectActor, fromEffect, fromEffectEventStream, fromEffectStream, setupEffect } from './index.js'
 
-/**
- * Polls until `predicate` holds. Effects run on detached fibers, so tests wait
- * for the condition they assert on instead of for a fixed number of ticks.
- */
 const until = (predicate: () => boolean, timeoutMs = 1000) =>
-  Effect.runPromise(
-    Effect.gen(function*() {
-      const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-      while (!predicate()) {
-        if ((yield* Clock.currentTimeMillis) > deadline) {
-          return yield* Effect.die(
-            new Error('Timed out waiting for condition'),
-          )
-        }
-        yield* Effect.sleep(1)
+  Effect.gen(function*() {
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
+    while (!predicate()) {
+      if ((yield* Clock.currentTimeMillis) > deadline) {
+        return yield* Effect.die(
+          new Error('Timed out waiting for condition'),
+        )
       }
-    }),
-  )
+      yield* Effect.sleep(1)
+    }
+  })
 
-/**
- * Runs a value through a converted schema with the Standard Schema interface
- * XState validates against, and reports whether the schema rejected it.
- */
 const rejects = (schema: StandardSchemaV1, value: unknown): boolean => {
   const result = schema['~standard'].validate(value)
   if (result instanceof Promise) {
@@ -42,27 +32,17 @@ const rejects = (schema: StandardSchemaV1, value: unknown): boolean => {
   return result.issues !== undefined
 }
 
-let scopes: Scope.Closeable[] = []
-
-afterEach(async () => {
-  const pending = scopes
-  scopes = []
-  for (const scope of pending) {
-    await Effect.runPromise(Scope.close(scope, Exit.void))
+const thrownMessage = (call: () => unknown): string => {
+  try {
+    call()
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
   }
-})
-
-/** Runs a scoped Effect in a scope that stays open until the test ends. */
-const runScoped = async <A, E>(
-  effect: Effect.Effect<A, E, Scope.Scope>,
-): Promise<A> => {
-  const scope = await Effect.runPromise(Scope.make())
-  scopes.push(scope)
-  return Effect.runPromise(Scope.provide(effect, scope))
+  throw new Error('expected the call to throw')
 }
 
-describe('@xstate/effect', () => {
-  it('accepts Effect schemas in setupEffect with full type inference', async () => {
+describe('@xstate/effect', (it) => {
+  it('accepts Effect schemas in setupEffect with full type inference', function*({ expect }) {
     const effectSetup = setupEffect({
       schemas: {
         context: Schema.Struct({ count: Schema.Finite }),
@@ -89,19 +69,25 @@ describe('@xstate/effect', () => {
       },
     })
 
-    const actor = await runScoped(createEffectActor(machine))
-    actor.send({ type: 'ADD', value: 3 })
-    const sendInvalidEvent = () => {
-      // @ts-expect-error -- Effect schemas constrain event payloads
-      actor.send({ type: 'ADD', value: 'invalid' })
-    }
-    void sendInvalidEvent
-    await until(() => actor.getSnapshot().context.count === 3)
+    const context = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(machine)
+        actor.send({ type: 'ADD', value: 3 })
+        const sendInvalidEvent = () => {
+          // @ts-expect-error -- Effect schemas constrain event payloads
+          actor.send({ type: 'ADD', value: 'invalid' })
+        }
+        void sendInvalidEvent
+        yield* until(() => actor.getSnapshot().context.count === 3)
 
-    expect(actor.getSnapshot().context).toEqual({ count: 3 })
+        return actor.getSnapshot().context
+      }),
+    )
+
+    yield* expect(context).toEqual({ count: 3 })
   })
 
-  it('validates converted context and event schemas at runtime', async () => {
+  it('validates converted context and event schemas at runtime', function*({ expect }) {
     const machine = setupEffect({
       validator: standardSchemaValidator(),
       schemas: {
@@ -116,28 +102,37 @@ describe('@xstate/effect', () => {
         }),
       },
     })
-    const actor = await runScoped(createEffectActor(machine))
 
-    actor.send({ type: 'ADD', value: 2 })
-    await until(() => actor.getSnapshot().context.count === 2)
+    const context = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(machine)
 
-    // The converted event schema is what runtime validation asserts against,
-    // so an invalid payload is rejected instead of transitioning. A second
-    // valid event, processed after it, proves the invalid one was dropped.
-    actor.send({ type: 'ADD', value: 'invalid' } as any)
-    actor.send({ type: 'ADD', value: 1 })
-    await until(() => actor.getSnapshot().context.count === 3)
-    expect(actor.getSnapshot().context).toEqual({ count: 3 })
+        actor.send({ type: 'ADD', value: 2 })
+        yield* until(() => actor.getSnapshot().context.count === 2)
+
+        actor.send({ type: 'ADD', value: 'invalid' } as any)
+        actor.send({ type: 'ADD', value: 1 })
+        yield* until(() => actor.getSnapshot().context.count === 3)
+
+        return actor.getSnapshot().context
+      }),
+    )
 
     const invalidContext = setupEffect({
       validator: standardSchemaValidator(),
       schemas: { context: Schema.Struct({ count: Schema.Finite }) },
     }).createMachine({ context: { count: 'invalid' } as any })
 
-    expect(() => initialTransition(invalidContext)).toThrow('Invalid context')
+    yield* expect({
+      context,
+      invalidContext: thrownMessage(() => initialTransition(invalidContext)),
+    }).toEqual({
+      context: { count: 3 },
+      invalidContext: expect.stringMatching(/Invalid context/),
+    })
   })
 
-  it('accepts Effect schemas when extending setupEffect', async () => {
+  it('accepts Effect schemas when extending setupEffect', function*({ expect }) {
     const effectSetup = setupEffect({
       schemas: {
         context: Schema.Struct({ count: Schema.Finite }),
@@ -166,18 +161,25 @@ describe('@xstate/effect', () => {
         },
       },
     })
-    const actor = await runScoped(createEffectActor(machine))
 
-    actor.send({ type: 'ADD', value: 2 })
-    await until(() => actor.getSnapshot().context.count === 2)
+    const context = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(machine)
 
-    expect(actor.getSnapshot().context).toEqual({ count: 2 })
-    expect(rejects(effectSetup.schemas.events.ADD, { value: 'invalid' })).toBe(
-      true,
+        actor.send({ type: 'ADD', value: 2 })
+        yield* until(() => actor.getSnapshot().context.count === 2)
+
+        return actor.getSnapshot().context
+      }),
     )
+
+    yield* expect({
+      context,
+      rejected: rejects(effectSetup.schemas.events.ADD, { value: 'invalid' }),
+    }).toEqual({ context: { count: 2 }, rejected: true })
   })
 
-  it('preserves runtime validation compatibility through setupEffect.extend', () => {
+  it('preserves runtime validation compatibility through setupEffect.extend', function*({ expect }) {
     const validated = setupEffect({
       validator: standardSchemaValidator(),
     })
@@ -205,13 +207,19 @@ describe('@xstate/effect', () => {
       incompatibleStates.extend({ validator: standardSchemaValidator() })
     }
 
-    validated.extend({
+    const extended = validated.extend({
       validator: undefined,
       schemas: { input: Schema.FiniteFromString },
     })
+
+    const baseSchemas: Record<string, unknown> = validated.schemas
+    yield* expect({
+      baseInput: baseSchemas['input'] ?? null,
+      extendedInputDiffers: extended.schemas.input !== baseSchemas['input'],
+    }).toEqual({ baseInput: null, extendedInputDiffers: true })
   })
 
-  it('preserves Effect action requirements when extending setupEffect', () => {
+  it('preserves Effect action requirements when extending setupEffect', function*({ expect }) {
     class Audit extends Context.Service<Audit, { record: () => void }>()(
       '@systemfsoftware/xstate-effect/index.test/Audit',
     ) {}
@@ -228,9 +236,11 @@ describe('@xstate/effect', () => {
       })
     const actorWithoutAudit = createEffectActor(machine)
     expectTypeOf<Effect.Services<typeof actorWithoutAudit>>().toEqualTypeOf<Audit | Scope.Scope>()
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('converts nested Effect state schemas', () => {
+  it('converts nested Effect state schemas', function*({ expect }) {
     const effectSetup = setupEffect({
       states: {
         running: {
@@ -248,18 +258,16 @@ describe('@xstate/effect', () => {
       },
     })
 
-    expect(rejects(effectSetup.states.running.schemas!.input!, {})).toBe(true)
-    expect(
+    yield* expect([
+      rejects(effectSetup.states.running.schemas!.input!, {}),
       rejects(effectSetup.states.running.schemas!.input!, { timeout: 5 }),
-    ).toBe(false)
-    expect(
       rejects(effectSetup.states.running.states!.retrying.schemas!.context!, {
         attempt: 'no',
       }),
-    ).toBe(true)
+    ]).toEqual([true, false, true])
   })
 
-  it('converts Effect schemas in every setup schema map', () => {
+  it('converts Effect schemas in every setup schema map', function*({ expect }) {
     const effectSetup = setupEffect({
       schemas: {
         internalEvents: {
@@ -282,25 +290,27 @@ describe('@xstate/effect', () => {
       },
     })
 
-    expect(
-      rejects(effectSetup.schemas.internalEvents.TICK, { count: 'no' }),
-    ).toBe(true)
-    expect(rejects(effectSetup.schemas.actions.track.params, { key: 1 })).toBe(
-      true,
-    )
-    expect(
-      rejects(effectSetup.schemas.guards.hasAccess.params, { role: 1 }),
-    ).toBe(true)
-    expect(rejects(effectSetup.schemas.emitted.changed, { value: 'no' })).toBe(
-      true,
-    )
-    expect(rejects(effectSetup.schemas.meta, { label: 1 })).toBe(true)
-    expect(rejects(effectSetup.schemas.tags, 'inactive')).toBe(true)
-    // `Schema.Unknown` accepts anything; converting it must not change that.
-    expect(rejects(effectSetup.schemas.children.child, 'anything')).toBe(false)
+    yield* expect({
+      internalEvents: rejects(effectSetup.schemas.internalEvents.TICK, { count: 'no' }),
+      actions: rejects(effectSetup.schemas.actions.track.params, { key: 1 }),
+      guards: rejects(effectSetup.schemas.guards.hasAccess.params, { role: 1 }),
+      emitted: rejects(effectSetup.schemas.emitted.changed, { value: 'no' }),
+      meta: rejects(effectSetup.schemas.meta, { label: 1 }),
+      tags: rejects(effectSetup.schemas.tags, 'inactive'),
+      // `Schema.Unknown` accepts anything; converting it must not change that.
+      children: rejects(effectSetup.schemas.children.child, 'anything'),
+    }).toEqual({
+      internalEvents: true,
+      actions: true,
+      guards: true,
+      emitted: true,
+      meta: true,
+      tags: true,
+      children: false,
+    })
   })
 
-  it('preserves __proto__ schema and state keys while converting', () => {
+  it('preserves __proto__ schema and state keys while converting', function*({ expect }) {
     const effectSetup = setupEffect({
       schemas: {
         events: { ['__proto__']: Schema.String },
@@ -312,15 +322,15 @@ describe('@xstate/effect', () => {
       },
     })
 
-    expect(Object.hasOwn(effectSetup.schemas.events, '__proto__')).toBe(true)
-    expect(rejects(effectSetup.schemas.events['__proto__'], 42)).toBe(true)
-    expect(Object.hasOwn(effectSetup.states, '__proto__')).toBe(true)
-    expect(rejects(effectSetup.states['__proto__'].schemas!.input!, 42)).toBe(
-      true,
-    )
+    yield* expect([
+      Object.hasOwn(effectSetup.schemas.events, '__proto__'),
+      rejects(effectSetup.schemas.events['__proto__'], 42),
+      Object.hasOwn(effectSetup.states, '__proto__'),
+      rejects(effectSetup.states['__proto__'].schemas!.input!, 42),
+    ]).toEqual([true, true, true, true])
   })
 
-  it('uses converted Effect schemas with XState runtime validation', () => {
+  it('uses converted Effect schemas with XState runtime validation', function*({ expect }) {
     const machine = setupEffect({
       validator: standardSchemaValidator(),
       schemas: {
@@ -330,10 +340,10 @@ describe('@xstate/effect', () => {
       context: ({ input }) => ({ count: input.count }),
     })
 
-    expect(() => initialTransition(machine, { count: 'invalid' } as any)).toThrow('Invalid input')
+    yield* expect(() => initialTransition(machine, { count: 'invalid' } as any)).toThrow('Invalid input')
   })
 
-  it('reports asynchronous Effect schemas as unsupported by runtime validation', () => {
+  it('reports asynchronous Effect schemas as unsupported by runtime validation', function*({ expect }) {
     const asyncString = Schema.String.pipe(
       Schema.catchDecoding(() => Effect.delay(Effect.succeed(Option.some('fallback')), 1)),
     )
@@ -342,12 +352,12 @@ describe('@xstate/effect', () => {
       schemas: { input: asyncString },
     }).createMachine({})
 
-    expect(() => initialTransition(machine, 42 as any)).toThrow(
+    yield* expect(() => initialTransition(machine, 42 as any)).toThrow(
       'Async schema validation is unsupported for input',
     )
   })
 
-  it('rejects transforming Effect schemas when runtime validation is enabled', () => {
+  it('rejects transforming Effect schemas when runtime validation is enabled', function*({ expect }) {
     const invalidSetup = () =>
       setupEffect({
         validator: standardSchemaValidator(),
@@ -368,9 +378,13 @@ describe('@xstate/effect', () => {
 
     void invalidSetup
     void invalidLogic
+
+    yield* expect(
+      Object.keys(setupEffect({ schemas: { input: Schema.FiniteFromString } }).schemas),
+    ).toEqual(['input'])
   })
 
-  it('accepts Effect schemas for fromEffect input and output', async () => {
+  it('accepts Effect schemas for fromEffect input and output', function*({ expect }) {
     const logic = fromEffect({
       schemas: {
         input: Schema.Struct({ id: Schema.String }),
@@ -382,22 +396,26 @@ describe('@xstate/effect', () => {
       },
     })
 
-    const actor = await runScoped(
-      createEffectActor(logic, { input: { id: '42' } }),
-    )
-    const createWithInvalidInput = () => {
-      // @ts-expect-error -- input comes from the Effect schema
-      const invalidActor = createEffectActor(logic, { input: { id: 42 } })
-      void invalidActor
-    }
-    void createWithInvalidInput
-    await until(() => actor.getSnapshot().status === 'done')
+    const output = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(logic, { input: { id: '42' } })
+        const createWithInvalidInput = () => {
+          // @ts-expect-error -- input comes from the Effect schema
+          const invalidActor = createEffectActor(logic, { input: { id: 42 } })
+          void invalidActor
+        }
+        void createWithInvalidInput
+        yield* until(() => actor.getSnapshot().status === 'done')
 
-    actor.getSnapshot().output?.greeting satisfies string | undefined
-    expect(actor.getSnapshot().output).toEqual({ greeting: 'Hello 42' })
+        actor.getSnapshot().output?.greeting satisfies string | undefined
+        return actor.getSnapshot().output
+      }),
+    )
+
+    yield* expect(output).toEqual({ greeting: 'Hello 42' })
   })
 
-  it('rejects invalid fromEffect input with XState runtime validation', () => {
+  it('rejects invalid fromEffect input with XState runtime validation', function*({ expect }) {
     const logic = fromEffect({
       validator: standardSchemaValidator(),
       schemas: {
@@ -407,12 +425,12 @@ describe('@xstate/effect', () => {
       effect: ({ input }) => Effect.succeed({ greeting: `Hello ${input.id}` }),
     })
 
-    expect(() => initialTransition(logic, { id: 42 } as any)).toThrow(
+    yield* expect(() => initialTransition(logic, { id: 42 } as any)).toThrow(
       'Invalid input',
     )
   })
 
-  it('checks fromEffect results against the output schema', () => {
+  it('checks fromEffect results against the output schema', function*({ expect }) {
     const invalidLogic = () =>
       fromEffect({
         // @ts-expect-error -- the Effect result must match the output schema
@@ -421,9 +439,20 @@ describe('@xstate/effect', () => {
       })
 
     void invalidLogic
+
+    const output = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(invalidLogic())
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        return actor.getSnapshot().output
+      }),
+    )
+
+    yield* expect(output).toEqual(42)
   })
 
-  it('preserves failures and requirements with input and output schemas', () => {
+  it('preserves failures and requirements with input and output schemas', function*({ expect }) {
     class Service extends Context.Service<Service, { name: string }>()(
       '@systemfsoftware/xstate-effect/index.test/Service',
     ) {}
@@ -452,9 +481,24 @@ describe('@xstate/effect', () => {
     })
     const actorWithoutService = createEffectActor(logic, { input: { id: '42' } })
     expectTypeOf<Effect.Services<typeof actorWithoutService>>().toEqualTypeOf<Service | Scope.Scope>()
+
+    const output = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* Effect.provideService(
+          createEffectActor(logic, { input: { id: '42' } }),
+          Service,
+          { name: 'svc' },
+        )
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        return actor.getSnapshot().output
+      }),
+    )
+
+    yield* expect(output).toEqual({ name: 'svc' })
   })
 
-  it('infers fromEffect output and requirements with only an input schema', () => {
+  it('infers fromEffect output and requirements with only an input schema', function*({ expect }) {
     class Service extends Context.Service<Service, { prefix: string }>()(
       '@systemfsoftware/xstate-effect/index.test/Service',
     ) {}
@@ -467,76 +511,123 @@ describe('@xstate/effect', () => {
 
     const actorWithoutService = createEffectActor(logic, { input: { id: '42' } })
     expectTypeOf<Effect.Services<typeof actorWithoutService>>().toEqualTypeOf<Service | Scope.Scope>()
+
+    const output = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* Effect.provideService(
+          createEffectActor(logic, { input: { id: '42' } }),
+          Service,
+          { prefix: 'p' },
+        )
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        return actor.getSnapshot().output
+      }),
+    )
+
+    yield* expect(output).toEqual('p42')
   })
 
-  it('accepts a constant Effect with only an input schema', async () => {
+  it('accepts a constant Effect with only an input schema', function*({ expect }) {
     const logic = fromEffect({
       schemas: {
         input: Schema.Struct({ id: Schema.String }),
       },
       effect: Effect.succeed('ok'),
     })
-    const actor = await runScoped(
-      createEffectActor(logic, { input: { id: '42' } }),
-    )
-    await until(() => actor.getSnapshot().status === 'done')
 
-    expect(actor.getSnapshot().output).toBe('ok')
+    const output = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(logic, { input: { id: '42' } })
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        return actor.getSnapshot().output
+      }),
+    )
+
+    yield* expect(output).toBe('ok')
   })
 
-  it('accepts an output-only Effect schema', async () => {
+  it('accepts an output-only Effect schema', function*({ expect }) {
     const logic = fromEffect({
       schemas: { output: Schema.String },
       effect: Effect.succeed('ok'),
     })
-    const actor = await runScoped(createEffectActor(logic))
-    await until(() => actor.getSnapshot().status === 'done')
 
-    actor.getSnapshot().output satisfies string | undefined
-    expect(actor.getSnapshot().output).toBe('ok')
+    const output = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(logic)
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        actor.getSnapshot().output satisfies string | undefined
+        return actor.getSnapshot().output
+      }),
+    )
+
+    yield* expect(output).toBe('ok')
   })
 
-  it('infers actor input with only an output schema', async () => {
+  it('infers actor input with only an output schema', function*({ expect }) {
     const logic = fromEffect({
       schemas: { output: Schema.String },
       effect: ({ input }: { input: number }) => Effect.succeed(String(input)),
     })
-    const actor = await runScoped(createEffectActor(logic, { input: 42 }))
-    await until(() => actor.getSnapshot().status === 'done')
 
-    expect(actor.getSnapshot().output).toBe('42')
+    const output = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(logic, { input: 42 })
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        return actor.getSnapshot().output
+      }),
+    )
+
+    yield* expect(output).toBe('42')
   })
 
-  it('validates fromEffect schemas when a validator is provided', async () => {
+  it('validates fromEffect schemas when a validator is provided', function*({ expect }) {
     const logic = fromEffect({
       validator: standardSchemaValidator(),
       schemas: { output: Schema.String },
       effect: Effect.succeed('ok'),
     })
-    const actor = await runScoped(createEffectActor(logic))
-    await until(() => actor.getSnapshot().status === 'done')
 
-    expect(actor.getSnapshot().status).toBe('done')
+    const status = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(logic)
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        return actor.getSnapshot().status
+      }),
+    )
+
+    yield* expect(status).toBe('done')
   })
 
-  it('rejects invalid fromEffect output with XState runtime validation', async () => {
-    const deferred = await Effect.runPromise(Deferred.make<number>())
-    const output = Effect.runPromise(Deferred.await(deferred))
+  it('rejects invalid fromEffect output with XState runtime validation', function*({ expect }) {
+    const deferred = yield* Deferred.make<number>()
     const logic = fromEffect({
       validator: standardSchemaValidator(),
       schemas: { output: Schema.String },
-      effect: Effect.promise(() => output) as Effect.Effect<any>,
+      effect: Deferred.await(deferred) as Effect.Effect<any>,
     })
     const errors: unknown[] = []
-    const actor = await runScoped(createEffectActor(logic))
-    actor.subscribe({ error: (error) => errors.push(error) })
-    void Effect.runPromise(Deferred.succeed(deferred, 42))
-    await until(() => actor.getSnapshot().status === 'error')
+    yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(logic)
+        actor.subscribe({ error: (error) => errors.push(error) })
+        yield* Deferred.succeed(deferred, 42)
+        yield* until(() => actor.getSnapshot().status === 'error')
+      }),
+    )
 
-    expect(errors).toHaveLength(1)
+    yield* expect(errors).toSatisfy(
+      (all: readonly unknown[]) => all.length === 1 && all[0] instanceof Error && /Invalid output/.test(all[0].message),
+      'exactly one error saying the output is invalid',
+    )
   })
 
-  it('runs setupEffect actions inside the host Effect context', async () => {
+  it('runs setupEffect actions inside the host Effect context', function*({ expect }) {
     class Audit extends Context.Service<
       Audit,
       { record: (value: number) => void }
@@ -562,37 +653,40 @@ describe('@xstate/effect', () => {
       },
     })
 
-    const actor = await runScoped(
-      Effect.provideService(createEffectActor(machine), Audit, {
-        record: (value) => recorded.push(value),
-      }),
-    )
     const actorWithoutAudit = createEffectActor(machine)
     expectTypeOf<Effect.Services<typeof actorWithoutAudit>>().toEqualTypeOf<Audit | Scope.Scope>()
 
-    actor.send({ type: 'AUDIT' })
-    await until(() => recorded.length === 1)
+    yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* Effect.provideService(createEffectActor(machine), Audit, {
+          record: (value) => recorded.push(value),
+        })
 
-    expect(recorded).toEqual([1])
+        actor.send({ type: 'AUDIT' })
+        yield* until(() => recorded.length === 1)
+      }),
+    )
+
+    yield* expect(recorded).toEqual([1])
   })
 
-  it('uses scoped Layer services while the caller-owned runtime is alive', async () => {
+  it.live('uses scoped Layer services while the caller-owned runtime is alive', function*({ expect }) {
     class Resource extends Context.Service<Resource, { value: string }>()(
       '@systemfsoftware/xstate-effect/index.test/Resource',
     ) {}
-    let acquired = 0
-    let released = 0
-    let observed: string | undefined
+    const acquired = yield* Ref.make(0)
+    const released = yield* Ref.make(0)
+    const observed = yield* Ref.make<string | undefined>(undefined)
     const layer = Layer.effect(
       Resource,
       Effect.acquireRelease(
         Effect.sync(() => {
-          acquired++
+          Effect.runSync(Ref.update(acquired, (n) => n + 1))
           return { value: 'scoped' }
         }),
         () =>
           Effect.sync(() => {
-            released++
+            Effect.runSync(Ref.update(released, (n) => n + 1))
           }),
       ),
     )
@@ -602,7 +696,7 @@ describe('@xstate/effect', () => {
         read: (_args) =>
           Resource.use((resource) =>
             Effect.sync(() => {
-              observed = resource.value
+              Effect.runSync(Ref.set(observed, resource.value))
             })
           ),
       },
@@ -612,31 +706,35 @@ describe('@xstate/effect', () => {
       },
     })
 
-    try {
-      const scope = await runtime.runPromise(Scope.make())
-      scopes.push(scope)
-      const actor = await runtime.runPromise(
+    const scope = yield* Effect.promise(() => runtime.runPromise(Scope.make()))
+    const actor = yield* Effect.promise(() =>
+      runtime.runPromise(
         Scope.provide(createEffectActor(machine), scope),
       )
+    )
 
-      expect(acquired).toBe(1)
-      expect(released).toBe(0)
-      actor.send({ type: 'READ' })
-      await until(() => observed !== undefined)
-      expect(observed).toBe('scoped')
+    yield* expect({
+      acquired: Ref.getUnsafe(acquired),
+      released: Ref.getUnsafe(released),
+    }).toEqual({ acquired: 1, released: 0 })
 
-      actor.stop()
-      expect(released).toBe(0)
-    } finally {
-      await runtime.dispose()
-    }
+    actor.send({ type: 'READ' })
+    yield* until(() => Ref.getUnsafe(observed) !== undefined)
+    actor.stop()
 
-    expect(released).toBe(1)
+    yield* expect({
+      observed: Ref.getUnsafe(observed),
+      released: Ref.getUnsafe(released),
+    }).toEqual({ observed: 'scoped', released: 0 })
+
+    yield* Effect.promise(() => runtime.dispose())
+
+    yield* expect(Ref.getUnsafe(released)).toEqual(1)
   })
 
-  it('routes failed Effect actions through the machine error transition', async () => {
+  it('routes failed Effect actions through the machine error transition', function*({ expect }) {
     const failure = { code: 'AUDIT_FAILED' as const }
-    let received: unknown
+    const received = yield* Ref.make<unknown>(undefined)
     const effectSetup = setupEffect({
       actions: {
         fail: (_args) => Effect.fail(failure),
@@ -650,7 +748,7 @@ describe('@xstate/effect', () => {
             FAIL: (args, enq) => enq(args.actions.fail, args),
           },
           onError: ({ event }) => {
-            received = event.error
+            Effect.runSync(Ref.set(received, event.error))
             return { target: 'failed' }
           },
         },
@@ -658,14 +756,19 @@ describe('@xstate/effect', () => {
       },
     })
 
-    const actor = await runScoped(createEffectActor(machine))
-    actor.send({ type: 'FAIL' })
-    await until(() => actor.getSnapshot().value === 'failed')
+    yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(machine)
+        actor.send({ type: 'FAIL' })
+        yield* until(() => actor.getSnapshot().value === 'failed')
+      }),
+    )
 
-    expect(received).toEqual(failure)
+    const error = yield* Ref.get(received)
+    yield* expect(error).toEqual(failure)
   })
 
-  it('invokes an Effect actor and routes success to onDone', async () => {
+  it('invokes an Effect actor and routes success to onDone', function*({ expect }) {
     const logic = fromEffect(Effect.succeed('ok'))
     const machine = createMachine({
       initial: 'pending',
@@ -683,24 +786,37 @@ describe('@xstate/effect', () => {
       },
     })
 
-    const actor = await runScoped(createEffectActor(machine))
-    await until(() => actor.getSnapshot().value === 'success')
+    const context = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(machine)
+        yield* until(() => actor.getSnapshot().value === 'success')
 
-    expect(actor.getSnapshot().context).toEqual({ result: 'ok' })
+        return actor.getSnapshot().context
+      }),
+    )
+
+    yield* expect(context).toEqual({ result: 'ok' })
   })
 
-  it('uses the Effect runtime brand when distinguishing config objects', async () => {
+  it('uses the Effect runtime brand when distinguishing config objects', function*({ expect }) {
     const directEffect = Object.assign(Effect.succeed('direct'), {
       effect: Effect.succeed('nested'),
     })
     const logic = fromEffect(directEffect)
-    const actor = await runScoped(createEffectActor(logic))
-    await until(() => actor.getSnapshot().status === 'done')
 
-    expect(actor.getSnapshot().output).toBe('direct')
+    const output = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(logic)
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        return actor.getSnapshot().output
+      }),
+    )
+
+    yield* expect(output).toBe('direct')
   })
 
-  it('routes typed Effect failures to onError', async () => {
+  it('routes typed Effect failures to onError', function*({ expect }) {
     const failure = { code: 'NOT_FOUND' as const }
     const logic = fromEffect(Effect.fail(failure))
     const machine = createMachine({
@@ -719,13 +835,19 @@ describe('@xstate/effect', () => {
       },
     })
 
-    const actor = await runScoped(createEffectActor(machine))
-    await until(() => actor.getSnapshot().value === 'failed')
+    const context = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(machine)
+        yield* until(() => actor.getSnapshot().value === 'failed')
 
-    expect(actor.getSnapshot().context).toEqual({ error: failure })
+        return actor.getSnapshot().context
+      }),
+    )
+
+    yield* expect(context).toEqual({ error: failure })
   })
 
-  it('preserves typed Effect errors through registered v6 actors', () => {
+  it('preserves typed Effect errors through registered v6 actors', function*({ expect }) {
     const failure = { code: 'NOT_FOUND' as const }
     const request = fromEffect(Effect.fail(failure))
     const effectSetup = setupEffect({ actors: { request } })
@@ -748,10 +870,19 @@ describe('@xstate/effect', () => {
       },
     })
 
-    expect(machine).toBeDefined()
+    const value = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(machine)
+        yield* until(() => actor.getSnapshot().value === 'failed')
+
+        return actor.getSnapshot().value
+      }),
+    )
+
+    yield* expect(value).toEqual('failed')
   })
 
-  it('collects requirements from registered Effect actors', () => {
+  it('collects requirements from registered Effect actors', function*({ expect }) {
     class Service extends Context.Service<Service, { value: number }>()(
       '@systemfsoftware/xstate-effect/index.test/Service',
     ) {}
@@ -771,26 +902,46 @@ describe('@xstate/effect', () => {
 
     const actorWithoutRegisteredService = createEffectActor(machine)
     expectTypeOf<Effect.Services<typeof actorWithoutRegisteredService>>().toEqualTypeOf<Service | Scope.Scope>()
+
+    const output = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* Effect.provideService(createEffectActor(logic), Service, {
+          value: 7,
+        })
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        return actor.getSnapshot().output
+      }),
+    )
+
+    yield* expect(output).toEqual(7)
   })
 
-  it('rejects running Effect logic through ordinary createActor', () => {
+  it('rejects running Effect logic through ordinary createActor', function*({ expect }) {
     const logic = fromEffect(Effect.succeed('ok'))
     const actor = createActor(logic)
     actor.subscribe({ error: () => {} })
     actor.start()
 
-    expect(actor.getSnapshot().status).toBe('error')
+    yield* expect(actor.getSnapshot().status).toBe('error')
   })
 
-  it('exposes the latest item from an Effect stream and completes', async () => {
+  it('exposes the latest item from an Effect stream and completes', function*({ expect }) {
     const logic = fromEffectStream(Stream.make(1, 2, 3))
-    const actor = await runScoped(createEffectActor(logic))
-    await until(() => actor.getSnapshot().status === 'done')
 
-    expect(actor.getSnapshot().context).toBe(3)
+    const context = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(logic)
+        yield* until(() => actor.getSnapshot().status === 'done')
+
+        return actor.getSnapshot().context
+      }),
+    )
+
+    yield* expect(context).toBe(3)
   })
 
-  it('infers stream input from the fromEffectStream config form', async () => {
+  it('infers stream input from the fromEffectStream config form', function*({ expect }) {
     const logic = fromEffectStream({
       schemas: { input: Schema.Struct({ n: Schema.Finite }) },
       stream: ({ input }) => {
@@ -799,15 +950,19 @@ describe('@xstate/effect', () => {
       },
     })
 
-    const actor = await runScoped(
-      createEffectActor(logic, { input: { n: 5 } }),
-    )
-    await until(() => actor.getSnapshot().status === 'done')
+    const context = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(logic, { input: { n: 5 } })
+        yield* until(() => actor.getSnapshot().status === 'done')
 
-    expect(actor.getSnapshot().context).toBe(6)
+        return actor.getSnapshot().context
+      }),
+    )
+
+    yield* expect(context).toBe(6)
   })
 
-  it('relays a configured Effect event stream to its parent', async () => {
+  it('relays a configured Effect event stream to its parent', function*({ expect }) {
     const relay = fromEffectEventStream({
       schemas: { input: Schema.Struct({ n: Schema.Finite }) },
       stream: ({ input }) => {
@@ -838,9 +993,15 @@ describe('@xstate/effect', () => {
       },
     })
 
-    const actor = await runScoped(createEffectActor(machine))
-    await until(() => actor.getSnapshot().context['seen'] === 9)
+    const context = yield* Effect.scoped(
+      Effect.gen(function*() {
+        const actor = yield* createEffectActor(machine)
+        yield* until(() => actor.getSnapshot().context['seen'] === 9)
 
-    expect(actor.getSnapshot().context).toEqual({ seen: 9 })
+        return actor.getSnapshot().context
+      }),
+    )
+
+    yield* expect(context).toEqual({ seen: 9 })
   })
 })
