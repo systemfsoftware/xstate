@@ -5,11 +5,11 @@
   "author": "Ryan Lee <drdgvhbh@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/systemfsoftware/systemfsoftware.git",
-    "directory": "packages/xstate/xstate-react"
+    "url": "git+https://github.com/systemfsoftware/xstate.git",
+    "directory": "packages/xstate-react"
   },
-  "homepage": "https://github.com/systemfsoftware/systemfsoftware/tree/main/packages/xstate/xstate-react#readme",
-  "bugs": "https://github.com/systemfsoftware/systemfsoftware/issues",
+  "homepage": "https://github.com/systemfsoftware/xstate/tree/main/packages/xstate-react#readme",
+  "bugs": "https://github.com/systemfsoftware/xstate/issues",
   "description": "React hooks for XState actors — forked under systemfsoftware from statelyai/xstate (@xstate/react at 2146ae26).",
   "type": "module",
   "sideEffects": false,

@@ -5,11 +5,11 @@
   "author": "Ryan Lee <drdgvhbh@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/systemfsoftware/systemfsoftware.git",
-    "directory": "packages/xstate/xstate"
+    "url": "git+https://github.com/systemfsoftware/xstate.git",
+    "directory": "packages/xstate"
   },
-  "homepage": "https://github.com/systemfsoftware/systemfsoftware/tree/main/packages/xstate/xstate#readme",
-  "bugs": "https://github.com/systemfsoftware/systemfsoftware/issues",
+  "homepage": "https://github.com/systemfsoftware/xstate/tree/main/packages/xstate#readme",
+  "bugs": "https://github.com/systemfsoftware/xstate/issues",
   "description": "Statecharts and actors for TypeScript, as pure machine definitions and transitions — forked under systemfsoftware from statelyai/xstate (xstate at 2146ae26).",
   "type": "module",
   "sideEffects": false,
