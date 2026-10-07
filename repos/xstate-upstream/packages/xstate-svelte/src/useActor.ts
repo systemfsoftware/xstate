@@ -1,0 +1,41 @@
+import { Readable, readable } from 'svelte/store';
+import {
+  Actor,
+  ActorOptions,
+  AnyActorLogic,
+  SnapshotFrom,
+  type ConditionalRequired,
+  type IsNotNever,
+  type RequiredActorOptionsKeys,
+  type RequiredActorOptionsFor
+} from 'xstate';
+import { useActorRef } from './useActorRef.ts';
+
+export function useActor<TLogic extends AnyActorLogic>(
+  logic: TLogic,
+  ...[options]: ConditionalRequired<
+    [options?: ActorOptions<TLogic> & RequiredActorOptionsFor<TLogic>],
+    IsNotNever<RequiredActorOptionsKeys<TLogic>>
+  >
+): {
+  snapshot: Readable<SnapshotFrom<TLogic>>;
+  send: Actor<TLogic>['send'];
+  actorRef: Actor<TLogic>;
+} {
+  const actorRef = useActorRef(logic, options);
+
+  let currentSnapshot = actorRef.getSnapshot();
+
+  const snapshot = readable(currentSnapshot, (set) => {
+    currentSnapshot = actorRef.getSnapshot();
+    set(currentSnapshot);
+    return actorRef.subscribe((nextSnapshot) => {
+      if (currentSnapshot !== nextSnapshot) {
+        currentSnapshot = nextSnapshot;
+        set(currentSnapshot);
+      }
+    }).unsubscribe;
+  });
+
+  return { snapshot, send: actorRef.send, actorRef };
+}
