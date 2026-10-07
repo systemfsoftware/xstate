@@ -9,3 +9,9 @@ name = "worktrunk-scripts"
 url = "https://github.com/systemfsoftware/worktrunk-scripts"
 description = "Deno worktree hooks for worktrunk automating environment setup, warm-copy indexing, and path isolation"
 branch = "main"
+
+[[repos]]
+name = "xstate-upstream"
+url = "https://github.com/statelyai/xstate"
+description = "Upstream XState at the fork's pin (2146ae26), whose test suite runs unedited as the oracle lane; the git-subtree-split trailer is the pin"
+branch = "next"
