@@ -31,6 +31,8 @@ jobs:
           - leg: test
             runs-on: ubuntu-latest
             gate: pnpm test
+            # full history: the git-subtree-split trailer that pins repos/xstate-upstream must be reachable
+            fetch-depth: "0"
           - leg: dist
             runs-on: ubuntu-latest
             gate: pnpm gate:dist
@@ -42,6 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: ${{ matrix.fetch-depth || '1' }}
           persist-credentials: false
       - uses: ./.github/actions/dev-shell
       - name: Turbo cache
