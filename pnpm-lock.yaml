@@ -454,9 +454,6 @@ importers:
       '@types/use-sync-external-store':
         specifier: 1.7.0
         version: 1.7.0
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.1
       happy-dom:
         specifier: 20.14.5
         version: 20.14.5
