@@ -6,24 +6,10 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
-  require-changeset:
-    if: github.head_ref != 'changeset-release/main'
-    name: a publishable-package change needs a changeset
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/dev-shell
-        with:
-          install: "false"
-      - name: Require a changeset for release-set package changes
-        uses: ./.github/actions/sandbox
-        with:
-          hosts: |
-            jsr.io
-            registry.npmjs.org
-          command: ./scripts/check-changeset.ts ${{ github.event.pull_request.base.sha }}
+  check:
+    uses: systemfsoftware/pnpm-release-management/.github/workflows/changeset-check.yml@main
+    with:
+      tools-ref: main
