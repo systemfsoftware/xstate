@@ -90,7 +90,12 @@
         "flake.lock",
         "pnpm-lock.yaml",
         "nix/*/pnpm-lock.yaml",
-        "nix/from-source/assert-local-sfs.awk"
+        "nix/from-source/assert-local-sfs.awk",
+        "dprint.json",
+        "packages/*/upstream-tests.json",
+        "packages/upstream-tsconfig.json",
+        "packages/**/*.test.ts",
+        "packages/**/*.test.tsx"
       ],
       "outputs": [],
       "dependsOn": [
