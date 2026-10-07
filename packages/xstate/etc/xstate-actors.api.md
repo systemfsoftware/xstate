@@ -491,11 +491,11 @@ export class TimeoutError extends Error {
 
 // Warnings were encountered during analysis:
 //
-// dist/index-q5hIk3dW.d.ts:36:5 - (ae-forgotten-export) The symbol "ActorSystemRuntime" needs to be exported by the entry point actors.d.ts
-// dist/index-q5hIk3dW.d.ts:71:3 - (ae-forgotten-export) The symbol "LogicTransition" needs to be exported by the entry point actors.d.ts
-// dist/index-q5hIk3dW.d.ts:171:3 - (ae-forgotten-export) The symbol "Receiver" needs to be exported by the entry point actors.d.ts
-// dist/index-q5hIk3dW.d.ts:298:3 - (ae-forgotten-export) The symbol "Subscription" needs to be exported by the entry point actors.d.ts
-// dist/index-q5hIk3dW.d.ts:362:3 - (ae-forgotten-export) The symbol "ObservableActor" needs to be exported by the entry point actors.d.ts
+// dist/index-BKKH0NB5.d.ts:36:5 - (ae-forgotten-export) The symbol "ActorSystemRuntime" needs to be exported by the entry point actors.d.ts
+// dist/index-BKKH0NB5.d.ts:71:3 - (ae-forgotten-export) The symbol "LogicTransition" needs to be exported by the entry point actors.d.ts
+// dist/index-BKKH0NB5.d.ts:171:3 - (ae-forgotten-export) The symbol "Receiver" needs to be exported by the entry point actors.d.ts
+// dist/index-BKKH0NB5.d.ts:298:3 - (ae-forgotten-export) The symbol "Subscription" needs to be exported by the entry point actors.d.ts
+// dist/index-BKKH0NB5.d.ts:362:3 - (ae-forgotten-export) The symbol "ObservableActor" needs to be exported by the entry point actors.d.ts
 
 // (No @packageDocumentation comment for this package)
 

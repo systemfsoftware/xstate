@@ -22,6 +22,7 @@ import type {
   StateValue,
   TransitionConfigTarget,
 } from './types.js'
+import { defaultWarn } from './warnSink.js'
 
 /** @public */
 export function matchesState(
@@ -230,7 +231,7 @@ export function resolveOutput<
     typeof mapper === 'object' &&
     Object.values(mapper).some((val) => typeof val === 'function')
   ) {
-    console.warn(
+    self.system._warn(
       `Dynamically mapping values to individual properties is deprecated. Use a single function that returns the mapped object instead.\nFound object containing properties whose values are possibly mapping functions: ${
         Object.entries(
           mapper,
@@ -421,6 +422,7 @@ export function matchesEvent(
 export function matchesEventDescriptor(
   eventType: string,
   descriptor: string,
+  warn: (message: string) => void = defaultWarn,
 ): boolean {
   if (descriptor === eventType) {
     return true
@@ -435,7 +437,7 @@ export function matchesEventDescriptor(
   }
 
   if (isDevelopment && /.*\*.+/.test(descriptor)) {
-    console.warn(
+    warn(
       `Wildcards can only be the last token of an event descriptor (e.g., "event.*") or the entire event descriptor ("*"). Check the "${descriptor}" event.`,
     )
   }
@@ -455,7 +457,7 @@ export function matchesEventDescriptor(
       const isLastToken = tokenIndex === partialEventTokens.length - 1
 
       if (isDevelopment && !isLastToken) {
-        console.warn(
+        warn(
           `Infix wildcards in transition events are not allowed. Check the "${descriptor}" transition.`,
         )
       }

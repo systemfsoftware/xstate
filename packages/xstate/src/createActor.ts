@@ -54,6 +54,7 @@ import type {
   Subscription,
 } from './types.js'
 import { toObserver } from './utils.js'
+import { defaultWarn } from './warnSink.js'
 
 /**
  * Marks a serialized object as an actor reference (`xstate$type` in JSON
@@ -157,6 +158,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
     | Map<string, Set<(emittedEvent: EmittedFrom<TLogic>) => void>>
     | undefined
   private logger: (...args: any[]) => void
+  private warn: (message: string) => void
 
   /** @internal */
   public _processingStatus: ProcessingStatus = ProcessingStatus.NotStarted
@@ -269,7 +271,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
       options ? { ...defaultOptions, ...options } : defaultOptions
     ) as ActorOptions<TLogic> & typeof defaultOptions
 
-    const { clock, logger, parent, syncSnapshot, id, registryKey, inspect } = resolvedOptions
+    const { clock, logger, warn, parent, syncSnapshot, id, registryKey, inspect } = resolvedOptions
 
     this.system = parent
       ? parent.system
@@ -278,6 +280,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
           clock,
           logger,
           reportUnhandledError: resolvedOptions.reportUnhandledError,
+          warn: warn ?? defaultWarn,
           snapshot: resolvedOptions.snapshot,
           createActorRef,
         }))
@@ -305,6 +308,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
       src: resolvedOptions.src ?? logic,
     })
     this.logger = options?.logger ?? this.system._logger
+    this.warn = options?.warn ?? this.system._warn
     this.clock = options?.clock ?? this.system._clock
     this._parent = parent
     this._syncSnapshot = syncSnapshot
@@ -1043,7 +1047,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
       const warned = (this._warnedUnhandledTypes ??= new Set())
       if (!warned.has(event.type)) {
         warned.add(event.type)
-        console.warn(
+        this.warn(
           `Actor ${this.id} received event "${event.type}" in state ${
             JSON.stringify(
               (this._snapshot as { value?: unknown }).value,
@@ -1307,6 +1311,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
     return this.logic.getPersistedSnapshot(
       this._snapshot,
       options,
+      this.warn,
     ) as PersistedSnapshotOf<TLogic>
   }
 

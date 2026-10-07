@@ -89,6 +89,7 @@ import type {
 import { matchesEventDescriptor, resolveReferencedActor, toStatePath } from './utils.js'
 import { assertValid } from './validation.js'
 import type { ActorLogicValidator } from './validation.types.js'
+import { defaultWarn } from './warnSink.js'
 
 const STATE_IDENTIFIER = '#'
 
@@ -139,6 +140,7 @@ function getEmptyCanActorScope(): AnyActorScope {
   emptyCanActorScope = {
     self: actor,
     logger: () => {},
+    warn: defaultWarn,
     id: '',
     sessionId: '',
     defer: () => {},
@@ -1438,8 +1440,9 @@ export class StateMachine<
       TConfig
     >,
     options?: unknown,
+    warn?: (message: string) => void,
   ) {
-    return getPersistedSnapshot(snapshot, options)
+    return getPersistedSnapshot(snapshot, options, warn)
   }
 
   /**
@@ -1692,7 +1695,7 @@ export class StateMachine<
               resolved = this.root.machine.getStateNodeById(item.id)
             } catch {
               if (isDevelopment) {
-                console.warn(`Could not resolve StateNode for id: ${item.id}`)
+                resolvedActorScope.warn(`Could not resolve StateNode for id: ${item.id}`)
               }
             }
           }
@@ -1749,7 +1752,7 @@ export class StateMachine<
         (node) => node.always?.length || node.type === 'choice',
       )
       if (eventlessNode) {
-        console.warn(
+        resolvedActorScope.warn(
           `Restored snapshot is in state "${eventlessNode.id}" which has eventless transitions; they are not re-evaluated until the next event`,
         )
       }

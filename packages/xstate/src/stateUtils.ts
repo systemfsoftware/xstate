@@ -374,6 +374,7 @@ function normalizeLegacyInternalEvent(
 export function getCandidates<TEvent extends EventObject>(
   stateNode: StateNode<any, TEvent>,
   event: TEvent,
+  warn: (message: string) => void,
 ): Array<TransitionDefinition<any, TEvent>> {
   const eventTypes = getEventTypeAliases(event)
   const exactMatches = eventTypes.flatMap(
@@ -383,7 +384,7 @@ export function getCandidates<TEvent extends EventObject>(
     .filter(
       (eventDescriptor) =>
         !eventTypes.includes(eventDescriptor) &&
-        eventTypes.some((eventType) => matchesEventDescriptor(eventType, eventDescriptor)),
+        eventTypes.some((eventType) => matchesEventDescriptor(eventType, eventDescriptor, warn)),
     )
     .sort((a, b) => b.length - a.length)
     .flatMap((key) => stateNode.transitions.get(key)!)

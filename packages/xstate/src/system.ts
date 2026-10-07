@@ -525,6 +525,7 @@ export interface ActorSystem<
   _clock: Clock
   _logger: (...args: any[]) => void
   _reportUnhandledError: (error: unknown) => void
+  _warn: (message: string) => void
   /**
    * The runtime executing this system's effects. When unset, the built-in
    * local in-memory runtime runs them; `createActor(machine).start()` is just
@@ -570,6 +571,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
   public _clock: Clock
   public _logger: (...args: any[]) => void
   public _reportUnhandledError: (error: unknown) => void
+  public _warn: (message: string) => void
   public createActorRef: ActorSystem<T>['createActorRef']
 
   public get children(): Map<string, AnyActor> {
@@ -623,6 +625,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
       clock: Clock
       logger: (...args: any[]) => void
       reportUnhandledError?: ((error: unknown) => void) | undefined
+      warn: (message: string) => void
       snapshot?: unknown
       createActorRef: ActorSystem<T>['createActorRef']
     },
@@ -635,6 +638,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
     this._clock = options.clock
     this._logger = options.logger
     this._reportUnhandledError = options.reportUnhandledError ?? reportUnhandledError
+    this._warn = options.warn
     this.createActorRef = options.createActorRef
     const ambientInspector = getAmbientInspector()
     if (ambientInspector) {
@@ -965,7 +969,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
       return override(source, target, event, reason, detail)
     }
     if (isDevelopment) {
-      console.warn(
+      this._warn(
         target
           ? `Event "${event.type}" to actor "${target.id}" was not delivered (${reason}).`
           : `Actor "${source?.id}" sent event "${event.type}" to missing target ${
@@ -1088,6 +1092,7 @@ export function createRuntimeSystem<T extends ActorSystemInfo>(
     clock: Clock
     logger: (...args: any[]) => void
     reportUnhandledError?: ((error: unknown) => void) | undefined
+    warn: (message: string) => void
     snapshot?: unknown
     createActorRef: ActorSystem<T>['createActorRef']
   },

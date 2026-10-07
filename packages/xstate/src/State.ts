@@ -28,6 +28,7 @@ import type {
   StateValueMap,
 } from './types.js'
 import { isActorRefLike, matchesState } from './utils.js'
+import { defaultWarn } from './warnSink.js'
 
 const emptySnapshotRecord = Object.freeze({})
 
@@ -579,6 +580,7 @@ export function getPersistedSnapshot<
     any // state schema
   >,
   options?: unknown,
+  warn: (message: string) => void = defaultWarn,
 ): Snapshot<unknown> {
   const {
     nodes,
@@ -607,6 +609,7 @@ export function getPersistedSnapshot<
         stateInputs: _stateInputs,
       },
       machine.id,
+      warn,
     )
   }
 
@@ -739,11 +742,12 @@ export function getPersistedSnapshot<
 function warnOnNonJsonPayload(
   persisted: Record<string, unknown>,
   machineId: string,
+  warn: (message: string) => void,
 ) {
   for (const key of ['context', 'output', 'error', 'stateInputs']) {
     const found = findNonJsonPath(persisted[key], key)
     if (found) {
-      console.warn(
+      warn(
         `Persisted snapshot of machine '${machineId}' contains a non-JSON value (${found.kind}) at '${found.path}'. Persisted snapshots must be JSON-serializable; this value will be lost or throw in JSON.stringify.`,
       )
       return
