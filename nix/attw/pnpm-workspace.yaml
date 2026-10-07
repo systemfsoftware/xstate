@@ -1,0 +1,39 @@
+allowBuilds:
+  cpu-features: false
+  msgpackr-extract: false
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: false
+  ssh2: false
+packages:
+  - apps/arethetypeswrong-cli
+  - packages/arethetypeswrong
+catalog:
+  "@effect/platform-node": 4.0.0-rc.112
+  "@effect/platform-node-shared": 4.0.0-rc.112
+  "@loaderkit/resolve": ^1.0.6
+  "@systemfsoftware/effect-cell-types": file:.sfs-deps/effect-cell-types-7.0.0.tgz
+  "@systemfsoftware/npm-package": file:.sfs-deps/npm-package-1.0.0.tgz
+  "@systemfsoftware/tsconfig": file:.sfs-deps/tsconfig-2.0.1.tgz
+  "@types/node": ^24.13.4
+  "@types/semver": ^7.8.0
+  "@types/validate-npm-package-name": ^4.0.2
+  cjs-module-lexer: ^2.2.1
+  effect: 4.0.0-rc.112
+  semver: ^7.8.5
+  tsdown: ^0.23.0
+  typescript: ^7.0.2
+  validate-npm-package-name: ^8.0.0
+catalogMode: prefer
+catalogs:
+  attw:
+    typescript: ^6.0.3
+overrides:
+  effect: 4.0.0-rc.112
+  "@effect/platform-node": 4.0.0-rc.112
+  "@effect/platform-node-shared": 4.0.0-rc.112
+  "@systemfsoftware/effect-cell-types": "catalog:"
+supportedArchitectures:
+  os: [linux, darwin]
+  cpu: [x64, arm64]
+  libc: [glibc]
