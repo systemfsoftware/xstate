@@ -7,7 +7,7 @@ catalog:
   "@commitlint/cli": ^21.2.1
   "@commitlint/config-conventional": ^21.2.0
   "@commitlint/types": ^21.2.0
-  "@effect/tsgo": ^0.45.0
+  "@effect/tsgo": ^0.50.0
   "@systemfsoftware/effect-gherkin-spec": ^6.0.1
   "@systemfsoftware/oxlint-config-recommended": ^3.4.0
   "@systemfsoftware/stryker-ignorer-effect-schema-declarations": ^0.2.0
@@ -45,6 +45,14 @@ minimumReleaseAgeExclude:
   - "@systemfsoftware/oxlint-plugin-dmmf-workflow@6.1.0"
   - "@systemfsoftware/oxlint-plugin-effect-schema@5.7.0"
   - "@systemfsoftware/oxlint-plugin-test-discipline@4.1.0"
+  - "@effect/tsgo-darwin-arm64@0.50.0"
+  - "@effect/tsgo-darwin-x64@0.50.0"
+  - "@effect/tsgo-linux-arm64@0.50.0"
+  - "@effect/tsgo-linux-arm@0.50.0"
+  - "@effect/tsgo-linux-x64@0.50.0"
+  - "@effect/tsgo-win32-arm64@0.50.0"
+  - "@effect/tsgo-win32-x64@0.50.0"
+  - "@effect/tsgo@0.50.0"
 packages:
   - apps/*
   - packages/*
