@@ -176,6 +176,9 @@ catalogs:
     '@effect/tsgo':
       specifier: 0.48.1
       version: 0.48.1
+    '@systemfsoftware/arethetypeswrong-cli':
+      specifier: file:.sfs-deps/arethetypeswrong-cli-4.2.0.tgz
+      version: file:.sfs-deps/arethetypeswrong-cli-4.2.0.tgz
     '@types/node':
       specifier: 24.19.1
       version: 24.19.1
@@ -300,6 +303,12 @@ importers:
 
   packages/starter:
     devDependencies:
+      '@effect/tsgo':
+        specifier: 'catalog:'
+        version: 0.48.1
+      '@systemfsoftware/arethetypeswrong-cli':
+        specifier: 'catalog:'
+        version: file:.sfs-deps/arethetypeswrong-cli-4.2.0.tgz
       '@systemfsoftware/effect-gherkin-spec':
         specifier: file:../../.sfs-deps/effect-gherkin-spec-7.0.1.tgz
         version: file:.sfs-deps/effect-gherkin-spec-7.0.1.tgz(@systemfsoftware/vitest@file:.sfs-deps/vitest-2.0.0.tgz(effect@4.0.1)(redis@6.2.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.2.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1))))(effect@4.0.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(vite@8.2.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1)))
@@ -1224,6 +1233,12 @@ packages:
   '@simple-libs/stream-utils@2.0.0':
     resolution: {integrity: sha512-fCTuZK4QBa+39Oz9l4OGfJfz+GpwCp3AqO7Zch3to99xHPgstVsRFpeQ8LNd2o1Gv8raL2mCFwiaHh7bFSp5DQ==}
     engines: {node: '>=22'}
+
+  '@systemfsoftware/arethetypeswrong-cli@file:.sfs-deps/arethetypeswrong-cli-4.2.0.tgz':
+    resolution: {integrity: sha512-Otl/hFbZCAwkXIaVkyFQeppoKjL1IjSgurfEgM3JfwPdOv5gs4Y2Ns0La7lzehctqDxW9BVmdC0/6jwI+gnebg==, tarball: file:.sfs-deps/arethetypeswrong-cli-4.2.0.tgz}
+    version: 4.2.0
+    engines: {node: '>=24'}
+    hasBin: true
 
   '@systemfsoftware/effect-cell-types@file:.sfs-deps/effect-cell-types-12.0.0.tgz':
     resolution: {integrity: sha512-3pmbmzGrUe//NOacyRToZZtv/ow+DREFxL05LiS7Z8ZhPriIKwpvCBACWQ8kPFzkcSAIVPZV+XMx56LkU266EQ==, tarball: file:.sfs-deps/effect-cell-types-12.0.0.tgz}
@@ -3183,6 +3198,8 @@ snapshots:
       '@simple-libs/stream-utils': 2.0.0
 
   '@simple-libs/stream-utils@2.0.0': {}
+
+  '@systemfsoftware/arethetypeswrong-cli@file:.sfs-deps/arethetypeswrong-cli-4.2.0.tgz': {}
 
   '@systemfsoftware/effect-cell-types@file:.sfs-deps/effect-cell-types-12.0.0.tgz(effect@4.0.1)':
     dependencies:

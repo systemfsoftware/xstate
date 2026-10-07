@@ -2,6 +2,8 @@
   "author": "TODO <todo@example.com>",
   "description": "TODO: one-line description",
   "devDependencies": {
+    "@effect/tsgo": "catalog:",
+    "@systemfsoftware/arethetypeswrong-cli": "catalog:",
     "@systemfsoftware/effect-gherkin-spec": "catalog:",
     "@systemfsoftware/oxlint-config-recommended": "catalog:",
     "@systemfsoftware/stryker-ignorer-effect-schema-declarations": "catalog:",
@@ -29,9 +31,11 @@
   "private": true,
   "publishConfig": { "exports": { ".": "./dist/index.js", "./package.json": "./package.json" }, "provenance": true },
   "scripts": {
+    "attw": "attw --pack . --profile esm-only",
     "build": "rimraf dist && tsdown",
     "clean": "rimraf dist",
     "lint": "f=${OXLINT_FORMAT:-${AGENT:+agent}}; oxlint . --format=${f:-default}",
+    "lint:tsgo": "effect-tsgo diagnostics --project tsconfig.json --format ${TSGO_FORMAT:-text}",
     "mutation": "stryker run",
     "mutation:full": "stryker run --force",
     "test": "vitest run --passWithNoTests",
