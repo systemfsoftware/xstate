@@ -28,7 +28,9 @@ jobs:
       - name: Discover mutation projects
         uses: ./.github/actions/sandbox
         with:
-          hosts: jsr.io
+          hosts: |
+            jsr.io
+            registry.npmjs.org
           command: >-
             deno run --config=scripts/deno.json --allow-read --allow-write
             scripts/stryker-plan-gate.ts projects --out .cache/mutation-projects.txt
@@ -49,7 +51,9 @@ jobs:
       - name: Gate the plan
         uses: ./.github/actions/sandbox
         with:
-          hosts: jsr.io
+          hosts: |
+            jsr.io
+            registry.npmjs.org
           command: >-
             deno run --config=scripts/deno.json --allow-read --allow-write
             scripts/stryker-plan-gate.ts gate --plan .cache/stryker-plan.json --out .cache/mutation-plan.out
