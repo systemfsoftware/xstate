@@ -1,5 +1,6 @@
 import * as RTL from '@testing-library/react'
 import * as React from 'react'
+import { describe } from 'vitest'
 
 // TS trips over signatures with generic overloads when using bare `typeof RTL.render`
 // conditional types just resolve the last overload

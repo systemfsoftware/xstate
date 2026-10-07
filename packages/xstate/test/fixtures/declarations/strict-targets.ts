@@ -1,4 +1,4 @@
-import { setup, types } from '../../../src/index.ts'
+import { setup, types } from '../../../src/index.js'
 
 // `states` in `setup(...)` turns on strict transition targets, which the types
 // carry through private marker keys. A machine declared this way is exported

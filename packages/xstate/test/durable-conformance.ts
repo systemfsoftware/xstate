@@ -6,7 +6,7 @@ import {
   type InputFrom,
   setup,
   type SnapshotFrom,
-} from '../src/index.ts'
+} from '../src/index.js'
 
 type DurableConformanceCapability =
   | 'actions'
@@ -189,7 +189,7 @@ export function durableExecutionConformance({
             enq.spawn(actors.child, { id: 'worker' })
           },
           on: {
-            STOP: ({ children }, enq) => enq.stop(children.worker),
+            STOP: ({ children }, enq) => enq.stop(children['worker']),
           },
         })
         const execution = await createHarness().start(machine, undefined)
@@ -222,7 +222,7 @@ export function durableExecutionConformance({
             active: {
               invoke: { id: 'worker', src: 'child' },
               on: {
-                SEND: ({ children }, enq) => enq.sendTo(children.worker, { type: 'PING' }),
+                SEND: ({ children }, enq) => enq.sendTo(children['worker'], { type: 'PING' }),
                 PONG: { target: 'done' },
               },
             },
@@ -269,7 +269,7 @@ export function durableExecutionConformance({
                 onDone: { target: 'done' },
               },
               on: {
-                FINISH_CHILD: ({ children }, enq) => enq.sendTo(children.worker, { type: 'FINISH' }),
+                FINISH_CHILD: ({ children }, enq) => enq.sendTo(children['worker'], { type: 'FINISH' }),
               },
             },
             done: { type: 'final' },

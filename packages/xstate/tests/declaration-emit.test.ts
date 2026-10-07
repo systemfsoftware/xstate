@@ -116,8 +116,8 @@ const manyInvokedStates = (count: number) => {
   on: { ${eventKeys.slice(i * 8, (i + 1) * 8).map((key) => `${key}: { target: 'p${(i + 1) % count}' }`).join(',')} }
 });`,
   )
-  return `import { setup, types } from '../../../src/index.ts';
-import { childMachine } from './registered-child.ts';
+  return `import { setup, types } from '../../../src/index.js';
+import { childMachine } from './registered-child.js';
 
 const parentSetup = setup({
   schemas: {
@@ -234,7 +234,7 @@ it('Should_NameOnlyEntryPointExports_When_ADeclarationReachesIntoTheSources', fu
   yield* Effect.promise(() =>
     writeFile(
       probe,
-      `import type {\n${names.map((name) => `  ${name},`).join('\n')}\n} from '../../../src/index.ts'\n`,
+      `import type {\n${names.map((name) => `  ${name},`).join('\n')}\n} from '../../../src/index.js'\n`,
     )
   )
   const compiled = yield* compile(root, ['--noEmit', `${fixtureDir}/entry-point-names.ts`])

@@ -1,4 +1,4 @@
-import { setup, types } from '../../../src/index.ts'
+import { setup, types } from '../../../src/index.js'
 
 const s = setup({
   schemas: {
