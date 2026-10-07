@@ -73,14 +73,29 @@
       "outputs": [],
       "cache": true
     },
+    "//#assert-local-sfs": {
+      "inputs": [
+        "pnpm-lock.yaml",
+        "nix/*/pnpm-lock.yaml",
+        "nix/from-source/assert-local-sfs.awk"
+      ],
+      "outputs": [],
+      "cache": true
+    },
     "//#test:scripts": {
       "outputLogs": "errors-only",
       "inputs": [
         "scripts/**",
         "flake.nix",
-        "flake.lock"
+        "flake.lock",
+        "pnpm-lock.yaml",
+        "nix/*/pnpm-lock.yaml",
+        "nix/from-source/assert-local-sfs.awk"
       ],
       "outputs": [],
+      "dependsOn": [
+        "//#assert-local-sfs"
+      ],
       "cache": true
     },
     "test": {
