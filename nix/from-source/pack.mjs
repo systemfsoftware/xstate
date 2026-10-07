@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -16,7 +16,7 @@ try {
   const files = readdirSync(staged)
   if (files.length !== 1) throw new Error(`pnpm pack produced ${files.length} files for ${manifest.name}`)
   const target = join(out, `${unscoped}-${manifest.version}.tgz`)
-  renameSync(join(staged, files[0]), target)
+  copyFileSync(join(staged, files[0]), target)
   process.stdout.write(`${manifest.name}@${manifest.version} -> ${target}\n`)
 } finally {
   rmSync(staged, { force: true, recursive: true })

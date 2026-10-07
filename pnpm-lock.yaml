@@ -1280,7 +1280,7 @@ packages:
       vitest: ^5
 
   '@systemfsoftware/stryker-js@file:.sfs-deps/stryker-js-17.0.2.tgz':
-    resolution: {integrity: sha512-nC0a4YNnYY4QYS0fVIzhVTiIYyMhwdk25yyfJKSWlf+/r7XJpYfSuJrr9SLUDi4BrvE/AtaT9w2CyhskXCV6og==, tarball: file:.sfs-deps/stryker-js-17.0.2.tgz}
+    resolution: {integrity: sha512-bkCiqVGqWJ96Yh1fLPz/Y1YG1yacdE0Z6efCO6ANzn4zSrz9Ed01yWtxLWLaBHcMKT8tI937Sh7a2f5s4X64bA==, tarball: file:.sfs-deps/stryker-js-17.0.2.tgz}
     version: 17.0.2
     engines: {node: '>=24.13.1'}
     hasBin: true
