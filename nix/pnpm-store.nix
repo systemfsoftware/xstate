@@ -25,6 +25,12 @@ let
   fetchable = runCommand "${pname}-fetchable-pnpm-lock.yaml" { nativeBuildInputs = [ yq-go ]; } ''
     yq 'del(.packages[] | select(.resolution.tarball // "" | test("^file:")))' ${lockFile} > "$out"
   '';
+  # An absolute https tarball URL (a registry mirror, such as npm.jsr.io) would
+  # be requested as written, and no https handshake with the replay cache can
+  # succeed. pnpm reads this lockfile instead: same integrity, http URLs.
+  httpLock = runCommand "${pname}-http-pnpm-lock.yaml" { nativeBuildInputs = [ yq-go ]; } ''
+    yq '(.packages[] | select(.resolution.tarball // "" | test("^https://")) | .resolution.tarball) |= sub("^https://"; "http://")' ${lockFile} > "$out"
+  '';
   # pnpm on darwin rejects the leaf certificates mitm-cache forges for https
   # (`invalid peer certificate: EkuError` on macos-latest), whichever CA it is
   # handed. So the replay serves the same tarballs over plain http: pnpm fetches
@@ -52,7 +58,7 @@ stdenvNoCC.mkDerivation {
   ];
   buildPhase = ''
     runHook preBuild
-    cp ${lockFile} pnpm-lock.yaml
+    cp ${httpLock} pnpm-lock.yaml
     cp ${workspaceFile} pnpm-workspace.yaml
     ${lib.concatStrings (
       lib.mapAttrsToList (dir: source: ''
