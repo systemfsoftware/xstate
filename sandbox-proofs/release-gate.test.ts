@@ -63,6 +63,26 @@ const inSandbox = (step: SandboxStep, root: string, env: Record<string, string> 
     { cwd: root, env: { ...env, SANDBOX_PROJECT: root } },
   )
 
+const STRYKER_DIST = `${repoRoot}node_modules/@systemfsoftware/stryker-js/dist`
+const GUARD_REGION = /\/\/#region src\/refuse-local-mutation\.cell\.ts\n([\s\S]*?)\/\/#endregion/g
+const GUARD_ENV_READ = /\benvOf(?:\$\d+)?\("([A-Z0-9_]+)"\)/g
+const GUARD_OVERRIDE = 'ALLOW_LOCAL_MUTATION'
+
+const guardEnvReads = async (): Promise<ReadonlySet<string>> => {
+  const reads = new Set<string>()
+  for await (const entry of Deno.readDir(STRYKER_DIST)) {
+    if (!entry.name.endsWith('.mjs')) continue
+    const bundle = await Deno.readTextFile(`${STRYKER_DIST}/${entry.name}`)
+    for (const [, region] of bundle.matchAll(GUARD_REGION)) {
+      for (const [, name] of region!.matchAll(GUARD_ENV_READ)) reads.add(name!)
+    }
+  }
+  if (!reads.has(GUARD_OVERRIDE)) {
+    throw new Error(`stryker-js's local-mutation guard in ${STRYKER_DIST} reads [${[...reads]}], not ${GUARD_OVERRIDE}`)
+  }
+  return reads
+}
+
 const PLAN = {
   version: 1,
   targetSeconds: 900,
@@ -114,21 +134,39 @@ Deno.test('each release-gate planner step runs in the sandbox on only the hosts 
   }
 })
 
-Deno.test('the release-gate mutation step hands stryker the GITHUB_ACTIONS flag its main-CI guard admits', async () => {
+Deno.test('the release-gate mutation step passes stryker every variable its main-CI guard reads, and never the local override', async () => {
+  const required = [...await guardEnvReads()].filter((name) => name !== GUARD_OVERRIDE)
   const steps = await sandboxSteps('mutation', 'stryker run')
   if (steps.length !== 1) throw new Error(`expected one stryker run step, found ${steps.map((step) => step.name)}`)
+  const step = steps[0]!
+  const missing = required.filter((name) => !step.passEnv.includes(name))
+  if (missing.length > 0 || step.passEnv.includes(GUARD_OVERRIDE)) {
+    throw new Error(
+      `"${step.name}" passes [${step.passEnv}]; the guard needs [${required}] and never ${GUARD_OVERRIDE}`,
+    )
+  }
   const root = await writeFixture()
   try {
     await Deno.mkdir(`${root}/node_modules/.bin`, { recursive: true })
     await Deno.writeTextFile(
       `${root}/node_modules/.bin/stryker`,
-      '#!/usr/bin/env bash\nprintf \'GITHUB_ACTIONS=%s\\nMUTATION_SHARD=%s\\n\' "${GITHUB_ACTIONS-}" "${MUTATION_SHARD-}" > .cache/stryker-env.txt\n',
-      { mode: 0o755 },
+      '#!/usr/bin/env bash\nenv > .cache/stryker-env.txt\n',
+      {
+        mode: 0o755,
+      },
     )
-    const outcome = await inSandbox(steps[0]!, root, { GITHUB_ACTIONS: 'true', MUTATION_SHARD: '1/1' })
-    if (outcome.code !== 0) throw new Error(`"${steps[0]!.name}" exited ${outcome.code}:\n${outcome.out}`)
-    const seen = await Deno.readTextFile(`${root}/.cache/stryker-env.txt`)
-    if (seen !== 'GITHUB_ACTIONS=true\nMUTATION_SHARD=1/1\n') throw new Error(`stryker saw ${JSON.stringify(seen)}`)
+    const runner = Object.fromEntries([...required, GUARD_OVERRIDE].map((name) => [name, `runner-${name}`]))
+    const outcome = await inSandbox(step, root, { ...runner, MUTATION_SHARD: '1/1' })
+    if (outcome.code !== 0) throw new Error(`"${step.name}" exited ${outcome.code}:\n${outcome.out}`)
+    const seen = new Map(
+      (await Deno.readTextFile(`${root}/.cache/stryker-env.txt`)).split('\n')
+        .filter((line) => line.includes('='))
+        .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+    )
+    const lost = required.filter((name) => seen.get(name) !== runner[name])
+    if (lost.length > 0 || seen.has(GUARD_OVERRIDE)) {
+      throw new Error(`stryker lost [${lost}]${seen.has(GUARD_OVERRIDE) ? ` and saw ${GUARD_OVERRIDE}` : ''}`)
+    }
   } finally {
     await Deno.remove(root, { recursive: true })
   }
