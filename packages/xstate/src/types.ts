@@ -2326,10 +2326,12 @@ export type ActorSelf<
   & ActorRuntime<TSnapshot, TEvent, TEmitted, TSendEvent>
   & ActorRef<TSnapshot, TEvent, TEmitted, TSendEvent>
 
+type MachineContextOf<T> = T extends { root: StateNode<infer TContext, any, any, any> } ? TContext : never
+
 // TODO: in v6, this should only accept AnyActorLogic, like ActorRefFromLogic
 /** @public */
 export type ActorRefFrom<T> = T extends StateMachine<
-  infer TContext,
+  any,
   infer TEvent,
   infer TChildren,
   infer TStateValue,
@@ -2346,7 +2348,7 @@ export type ActorRefFrom<T> = T extends StateMachine<
   infer TInternalEvent
 > ? ActorRef<
     MachineSnapshot<
-      TContext,
+      MachineContextOf<T>,
       TEvent,
       TChildren,
       TStateValue,
@@ -2773,7 +2775,7 @@ export type EventFrom<
 
 /** @public */
 export type ContextFrom<T> = T extends StateMachine<
-  infer TContext,
+  any,
   infer _TEvent,
   infer _TChildren,
   infer _TStateValue,
@@ -2787,7 +2789,7 @@ export type ContextFrom<T> = T extends StateMachine<
   infer _TActorMap,
   infer _TGuardMap,
   infer _TDelayMap
-> ? TContext
+> ? MachineContextOf<T>
   : T extends MachineSnapshot<
     infer TContext,
     infer _TEvent,
