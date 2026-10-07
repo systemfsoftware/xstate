@@ -101,7 +101,9 @@ jobs:
         env:
           MUTATION_SHARD: ${{ matrix.shard }}
         with:
-          pass-env: MUTATION_SHARD
+          pass-env: |
+            GITHUB_ACTIONS
+            MUTATION_SHARD
           command: ./node_modules/.bin/stryker run --plan .cache/stryker-plan.json --shard "$MUTATION_SHARD"
       - if: always()
         uses: actions/upload-artifact@v6
