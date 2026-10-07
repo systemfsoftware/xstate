@@ -41,6 +41,12 @@ export interface Clock {
   clearTimeout(id: any): void
 }
 
+export interface WallClock {
+  now(): number
+}
+
+const defaultWallClock: WallClock = { now: () => Date.now() }
+
 interface Scheduler {
   schedule(source: AnyActor, id: string, delay: number): void
   cancel(source: AnyActor, id: string): void
@@ -523,6 +529,7 @@ export interface ActorSystem<
   _snapshotVersion: number
   start: () => void
   _clock: Clock
+  _wallClock: WallClock
   _logger: (...args: any[]) => void
   _reportUnhandledError: (error: unknown) => void
   _warn: (message: string) => void
@@ -569,6 +576,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
   public _snapshotVersion = 0
   public scheduler: Scheduler = this
   public _clock: Clock
+  public _wallClock: WallClock
   public _logger: (...args: any[]) => void
   public _reportUnhandledError: (error: unknown) => void
   public _warn: (message: string) => void
@@ -623,6 +631,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
     private _rootActor: AnyActor,
     options: {
       clock: Clock
+      wallClock?: WallClock | undefined
       logger: (...args: any[]) => void
       reportUnhandledError?: ((error: unknown) => void) | undefined
       warn: (message: string) => void
@@ -636,6 +645,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
       })
       : undefined
     this._clock = options.clock
+    this._wallClock = options.wallClock ?? defaultWallClock
     this._logger = options.logger
     this._reportUnhandledError = options.reportUnhandledError ?? reportUnhandledError
     this._warn = options.warn
@@ -691,7 +701,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
       this._recordSent(source, target, timer.event, delay, id)
     }
 
-    const scheduledAt = this._clock.now?.() ?? Date.now()
+    const scheduledAt = this._clock.now?.() ?? this._wallClock.now()
     const scheduledTimer: ScheduledTimer = {
       source,
       delay,
@@ -1079,7 +1089,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
       this.scheduleTimer(
         source,
         id,
-        Math.max(0, dueAt - (this._clock.now?.() ?? Date.now())),
+        Math.max(0, dueAt - (this._clock.now?.() ?? this._wallClock.now())),
       )
     }
   }
@@ -1090,6 +1100,7 @@ export function createRuntimeSystem<T extends ActorSystemInfo>(
   rootActor: AnyActor,
   options: {
     clock: Clock
+    wallClock?: WallClock | undefined
     logger: (...args: any[]) => void
     reportUnhandledError?: ((error: unknown) => void) | undefined
     warn: (message: string) => void

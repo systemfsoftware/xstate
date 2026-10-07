@@ -11,6 +11,7 @@ import {
   createRuntimeSystem,
   encodeAddressSegment,
   resolveActorId,
+  type WallClock,
 } from './system.js'
 
 // those are needed to make JSDoc `@link` work properly
@@ -142,6 +143,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
    * delayed events and transitions.
    */
   public clock: Clock
+  public wallClock: WallClock
   public options: Readonly<ActorOptions<TLogic>>
 
   /** The unique identifier for this actor relative to its parent. */
@@ -271,13 +273,14 @@ export class Actor<TLogic extends AnyActorLogic> implements
       options ? { ...defaultOptions, ...options } : defaultOptions
     ) as ActorOptions<TLogic> & typeof defaultOptions
 
-    const { clock, logger, warn, parent, syncSnapshot, id, registryKey, inspect } = resolvedOptions
+    const { clock, wallClock, logger, warn, parent, syncSnapshot, id, registryKey, inspect } = resolvedOptions
 
     this.system = parent
       ? parent.system
       : (resolvedOptions._systemRef?.current ??
         createRuntimeSystem(this, {
           clock,
+          wallClock,
           logger,
           reportUnhandledError: resolvedOptions.reportUnhandledError,
           warn: warn ?? defaultWarn,
@@ -310,6 +313,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
     this.logger = options?.logger ?? this.system._logger
     this.warn = options?.warn ?? this.system._warn
     this.clock = options?.clock ?? this.system._clock
+    this.wallClock = options?.wallClock ?? this.system._wallClock
     this._parent = parent
     this._syncSnapshot = syncSnapshot
     this.options = resolvedOptions as
@@ -954,14 +958,14 @@ export class Actor<TLogic extends AnyActorLogic> implements
       // restores every timer with its declared delay. The clamp bounds
       // remaining time by the declared delay in case the wall clock moved
       // backwards between persist and restore.
-      const wallClock = !this.system._clock.now
-      const now = Date.now()
+      const isWallClock = !this.system._clock.now
+      const now = this.wallClock.now()
       for (const timer of Object.values(timers)) {
         // A timer persisted from a live runtime carries its wall-clock start;
         // honor the absolute deadline instead of restarting the full delay.
         // Without a start (a pure-transition snapshot, or an older snapshot)
         // the declared delay is all there is.
-        const delay = wallClock && timer.startedAt !== undefined
+        const delay = isWallClock && timer.startedAt !== undefined
           ? Math.min(
             timer.delay,
             Math.max(0, timer.startedAt + timer.delay - now),

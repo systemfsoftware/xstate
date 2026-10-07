@@ -589,6 +589,7 @@ class SystemReduction {
           throw new Error('Timers must be canceled as logical effects.')
         },
       },
+      _wallClock: { now: () => this.snapshot.now },
     }
   }
 

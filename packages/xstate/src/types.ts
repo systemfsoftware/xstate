@@ -12,6 +12,7 @@ import type {
   DeadLetterDetail,
   EventRejection,
   EventRejectionReason,
+  WallClock,
 } from './system.js'
 
 // this is needed to make JSDoc `@link` work properly
@@ -1928,6 +1929,7 @@ export interface ActorOptions<TLogic extends AnyActorLogic> {
    * @see {@link (SimulatedClock:class)}
    */
   clock?: Clock
+  wallClock?: WallClock
   /**
    * Specifies the logger to be used for `log(...)` actions. Defaults to the
    * native `console.log(...)` method.
