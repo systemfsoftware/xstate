@@ -15,7 +15,7 @@ Upstream XState is the reference, not a dependency: the fork keeps upstream's ob
 The packages are not published to a registry. Releases are git tags and GitHub Releases, and this repository's Nix flake builds each package's tarball:
 
 ```bash
-# every package listed in release-set.json, plus index.json mapping each name to its tarball
+# every public package, plus index.json mapping each name to its tarball
 nix build github:systemfsoftware/xstate#workspace-tarballs
 ```
 

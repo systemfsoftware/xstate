@@ -16,13 +16,14 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
     };
-    # systemfsoftware#606's head: the first snapshot whose workspace deps hash
-    # is measured per system, so aarch64-darwin builds the tarballs too.
+    # systemfsoftware#606's merge into main: its workspace tarballs carry
+    # per-system integrity, so the macOS leg installs what Linux installs. It
+    # keeps its own pnpm-release-management pin, whose mkPnpmConsumerStore the
+    # pin above lacks.
     systemfsoftware = {
-      url = "github:systemfsoftware/systemfsoftware/bb5956b3521bf96361e94e136cdc7fa968e1db78";
+      url = "github:systemfsoftware/systemfsoftware/217c80d5d52c17d03d4aeb83b580ef97ed986c85";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
-      inputs.pnpm-release-management.follows = "pnpm-release-management";
     };
     # The pnpm store is hashless: each tarball's lockfile integrity is its fetch hash, so a lockfile change needs no hash edit.
     importPnpmLock = {
@@ -42,31 +43,17 @@
         let
           system = pkgs.stdenv.hostPlatform.system;
           sfs-deps = systemfsoftware.packages.${system}.workspace-tarballs;
-          # One tarball per release-set package (release-set.json), plus
-          # workspace-tarballs (all of them and index.json). Every workspace
-          # package is private, since nothing here goes to npm, and the builder
-          # packs only packages that are not private, so the source copy drops
-          # `private` from the release set's manifests and nowhere else. The
-          # lockfile names the systemfsoftware tarballs as file:.sfs-deps/*.tgz,
-          # so the builder's source carries them beside the checkout. The
-          # sandbox installs from the hashless store below, so the builder's own
-          # whole-store pnpm-store stays out.
-          releaseSet = (lib.importJSON ./release-set.json).packages;
-          releaseManifest = dir:
-            let manifest = lib.importJSON (self + "/${dir}/package.json"); in
-            assert (manifest.private or false) || throw "flake.nix: release-set package ${dir} must be private: nothing here is published to npm";
-            manifest;
-          releaseAttrs = map (dir: lib.last (lib.splitString "/" (releaseManifest dir).name)) releaseSet;
-          workspace-source = pkgs.runCommand "xstate-workspace-source" { nativeBuildInputs = [ pkgs.jq ]; } ''
+          # One tarball per public workspace package, plus workspace-tarballs
+          # (all of them and index.json). The lockfile names the systemfsoftware
+          # tarballs as file:.sfs-deps/*.tgz, so the builder's source carries
+          # them beside the checkout. The sandbox installs from the hashless
+          # store below, so the builder's own whole-store pnpm-store stays out.
+          workspace-source = pkgs.runCommand "xstate-workspace-source" { } ''
             cp -r ${self} "$out"
             chmod -R u+w "$out"
             cp -r ${sfs-deps} "$out/.sfs-deps"
             # git carries no empty directory; the builder reads packages/ for the workspace glob.
             mkdir -p "$out/packages"
-            for dir in ${lib.escapeShellArgs releaseSet}; do
-              jq 'del(.private)' "$out/$dir/package.json" > "$out/$dir/package.json.next"
-              mv "$out/$dir/package.json.next" "$out/$dir/package.json"
-            done
           '';
           workspace = removeAttrs (pnpm-release-management.lib.mkPnpmWorkspacePackages {
             inherit pkgs;
@@ -107,11 +94,8 @@
             default = own.dprint;
           };
           clashes = builtins.attrNames (builtins.intersectAttrs own workspace);
-          tarballAttrs = lib.sort lib.lessThan (lib.remove "workspace-tarballs" (builtins.attrNames workspace));
         in
         assert clashes == [ ] || throw "flake.nix: workspace packages ${lib.concatStringsSep ", " clashes} collide with flake packages";
-        assert tarballAttrs == lib.sort lib.lessThan releaseAttrs
-          || throw "flake.nix: the tarballs (${lib.concatStringsSep ", " tarballAttrs}) differ from release-set.json (${lib.concatStringsSep ", " releaseAttrs})";
         workspace // own);
 
       devShells = forEachSystem (pkgs:
