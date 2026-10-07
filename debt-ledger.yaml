@@ -1,1 +1,25 @@
-entries: []
+entries:
+  - rule: XS1
+    scope: "@systemfsoftware/xstate"
+    reason: No mutation script until the core rewrite finishes; the verbatim import has no mutated set yet.
+    removedBy: U9 core definitions and enrollment
+  - rule: XS1
+    scope: "@systemfsoftware/xstate-effect"
+    reason: No mutation script until the xstate-effect rewrite finishes.
+    removedBy: U11 xstate-effect rewrite and enrollment
+  - rule: XS1
+    scope: "@systemfsoftware/xstate-react"
+    reason: No mutation script until the xstate-react rewrite finishes.
+    removedBy: U12 xstate-react rewrite and enrollment
+  - rule: XS1
+    scope: "@systemfsoftware/xstate-store"
+    reason: No mutation script until the xstate-store rewrite finishes.
+    removedBy: U13 xstate-store and store-react rewrite and enrollment
+  - rule: XS1
+    scope: "@systemfsoftware/xstate-store-react"
+    reason: No mutation script until the xstate-store-react rewrite finishes.
+    removedBy: U13 xstate-store and store-react rewrite and enrollment
+  - rule: XS1
+    scope: "@systemfsoftware/xstate-test"
+    reason: No mutation script until the xstate-test rewrite finishes.
+    removedBy: U14 xstate-test rewrite and enrollment

@@ -3,6 +3,7 @@ dist/
 coverage/
 reports/
 .stryker-tmp/
+packages/*/temp/
 *.tsbuildinfo
 
 .mcp.json
