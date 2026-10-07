@@ -2,10 +2,21 @@ import type { EventObject, Snapshot } from '@systemfsoftware/xstate'
 import * as Effect from 'effect/Effect'
 import { dual } from 'effect/Function'
 import type * as fc from 'fast-check'
-import { AsyncLocalStorage } from 'node:async_hooks'
+import type { AsyncLocalStorage } from 'node:async_hooks'
 import type { TestReference, TestSut, TestSutSession } from './engine/index.js'
 
-const schedulerStorage = new AsyncLocalStorage<fc.Scheduler | undefined>()
+type SchedulerStorage = AsyncLocalStorage<fc.Scheduler | undefined>
+
+let schedulerStorage: SchedulerStorage | undefined
+let schedulerStorageLoading: Promise<SchedulerStorage> | undefined
+
+function loadSchedulerStorage(): Promise<SchedulerStorage> {
+  schedulerStorageLoading ??= import('node:async_hooks').then((hooks) => {
+    schedulerStorage = new hooks.AsyncLocalStorage()
+    return schedulerStorage
+  })
+  return schedulerStorageLoading
+}
 
 /**
  * Awaits `value` as an Effect. A value and a thenable are both accepted, and a
@@ -24,7 +35,7 @@ const awaited = <A>(value: A | PromiseLike<A>): Effect.Effect<Awaited<A>> =>
  * @experimental
  */
 export function getCurrentScheduler(): fc.Scheduler | undefined {
-  return schedulerStorage.getStore()
+  return schedulerStorage?.getStore()
 }
 
 /** @internal */
@@ -40,7 +51,7 @@ export const withCurrentScheduler: {
   scheduler: fc.Scheduler | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
-  return schedulerStorage.run(scheduler, run)
+  return loadSchedulerStorage().then((storage) => storage.run(scheduler, run))
 })
 
 function scheduleMethod<TArgs extends unknown[], T>(
