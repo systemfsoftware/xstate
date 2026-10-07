@@ -54,6 +54,16 @@ import { SystemRegistry } from '@systemfsoftware/xstate';
 import { SystemRuntime } from '@systemfsoftware/xstate';
 import { VoidIfEmpty } from 'effect/Types';
 
+// Warning: (ae-forgotten-export) The symbol "ActorFailedError_base" needs to be exported by the entry point index.d.ts
+//
+// @public (undocumented)
+export class ActorFailedError<E = unknown> extends ActorFailedError_base<{
+    readonly cause: E;
+}> {
+    // (undocumented)
+    get message(): string;
+}
+
 // Warning: (ae-forgotten-export) The symbol "ActorScopeService" needs to be exported by the entry point index.d.ts
 //
 // @public
@@ -311,7 +321,7 @@ export function fromEffectStream<TItem, TError = unknown, TInput = undefined, TR
 export function inspect(actor: AnyActorRef): Stream.Stream<InspectionEvent>;
 
 // @public
-export function join<TActor extends AnyActorRef>(actor: TActor): Effect.Effect<OutputFrom<TActor>, ErrorFrom<TActor> | ActorStoppedError>;
+export function join<TActor extends AnyActorRef>(actor: TActor): Effect.Effect<OutputFrom<TActor>, ActorFailedError<ErrorFrom<TActor>> | ActorStoppedError>;
 
 // Warning: (ae-forgotten-export) The symbol "Depth" needs to be exported by the entry point index.d.ts
 // Warning: (ae-forgotten-export) The symbol "MaxDepth" needs to be exported by the entry point index.d.ts

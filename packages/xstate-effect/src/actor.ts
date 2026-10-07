@@ -17,7 +17,7 @@ import type { Cause, Duration } from 'effect'
 import { Effect, Queue, Stream } from 'effect'
 import { dual } from 'effect/Function'
 import type { EffectActor } from './effectActor.js'
-import { ActorStoppedError } from './errors.js'
+import { ActorFailedError, ActorStoppedError } from './errors.js'
 
 /** The event type accepted by an actor's `send` method. */
 export type SendableEventFrom<TActor extends AnyActorRef> = Parameters<
@@ -308,23 +308,26 @@ export const waitFor: {
 
 /**
  * Joins an actor's final result, like `Fiber.join`: succeeds with its `output`
- * when it is done, fails with `snapshot.error` when it errors, and fails with
- * `ActorStoppedError` when it stops without output. Waits for a still-active
- * actor to settle.
+ * when it is done, fails with `ActorFailedError` carrying `snapshot.error` when
+ * it errors, and fails with `ActorStoppedError` when it stops without output.
+ * Waits for a still-active actor to settle.
  */
 export function join<TActor extends AnyActorRef>(
   actor: TActor,
-): Effect.Effect<OutputFrom<TActor>, ErrorFrom<TActor> | ActorStoppedError> {
+): Effect.Effect<
+  OutputFrom<TActor>,
+  ActorFailedError<ErrorFrom<TActor>> | ActorStoppedError
+> {
   return Effect.callback<
     OutputFrom<TActor>,
-    ErrorFrom<TActor> | ActorStoppedError
+    ActorFailedError<ErrorFrom<TActor>> | ActorStoppedError
   >((resume) => {
     const settle = () => {
       const snapshot = actor.getSnapshot()
       if (snapshot.status === 'done') {
         resume(Effect.succeed(snapshot.output as OutputFrom<TActor>))
       } else if (snapshot.status === 'error') {
-        resume(Effect.fail(snapshot.error as ErrorFrom<TActor>))
+        resume(Effect.fail(new ActorFailedError({ cause: snapshot.error as ErrorFrom<TActor> })))
       } else {
         resume(Effect.fail(stoppedError(actor)))
       }
