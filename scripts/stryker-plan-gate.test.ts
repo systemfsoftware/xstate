@@ -67,6 +67,7 @@ Deno.test('a valid plan yields the plan matrix and has-shards', async () => {
     result: {
       matrix: { include: [{ shard: '1/2', predictedSeconds: 5 }, { shard: '2/2', predictedSeconds: 3 }] },
       hasShards: true,
+      unmutated: [],
     },
   })
 })
@@ -146,7 +147,15 @@ Deno.test('a mutation package with no scheduled mutants is allowed by a ledger e
   })
   assertEquals(await gatePlan({ root, planFile }), {
     ok: true,
-    result: { matrix: { include: [{ shard: '1/1', predictedSeconds: 1 }] }, hasShards: true },
+    result: {
+      matrix: { include: [{ shard: '1/1', predictedSeconds: 1 }] },
+      hasShards: true,
+      unmutated: [{
+        package: '@fixture/site',
+        dir: 'packages/site',
+        exemption: { rule: 'XS1', scope: '@fixture/site', reason: 'not split yet', removedBy: '#42' },
+      }],
+    },
   })
 })
 
@@ -164,8 +173,31 @@ Deno.test('an empty plan is allowed by a ledger exemption', async () => {
   })
   assertEquals(await gatePlan({ root, planFile }), {
     ok: true,
-    result: { matrix: { include: [] }, hasShards: false },
+    result: {
+      matrix: { include: [] },
+      hasShards: false,
+      unmutated: [{
+        package: '@fixture/core',
+        dir: 'packages/core',
+        exemption: { rule: 'XS1', scope: '@fixture/core', reason: 'not split yet', removedBy: '#42' },
+      }],
+    },
   })
+})
+
+Deno.test('an empty plan names each member no XS1 entry covers, apart from the ones that are', async () => {
+  const { root, planFile } = await writeFixture({
+    packages: [
+      { dir: 'packages/core', name: '@fixture/core', mutates: false },
+      { dir: 'packages/docs', name: '@fixture/docs', mutates: false },
+    ],
+    ledger: 'entries:\n  - rule: XS1\n    scope: "@fixture/core"\n    reason: "not split yet"\n    removedBy: "#42"\n',
+  })
+  const outcome = await gatePlan({ root, planFile })
+  assertEquals(
+    outcome.ok ? outcome.result.unmutated.map((member) => [member.package, member.exemption?.rule]) : outcome,
+    [['@fixture/core', 'XS1'], ['@fixture/docs', undefined]],
+  )
 })
 
 const tagsOf = (refusals: readonly Refusal[]): readonly string[] => refusals.map((refusal) => refusal._tag)

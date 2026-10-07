@@ -228,10 +228,22 @@ export interface GateInput {
   readonly planFile: string
 }
 
+export interface Unmutated {
+  readonly package: string
+  readonly dir: string
+  readonly exemption: typeof LedgerEntry.Type | undefined
+}
+
 export interface GateResult {
   readonly matrix: ShardPlan['matrix']
   readonly hasShards: boolean
+  readonly unmutated: readonly Unmutated[]
 }
+
+export const renderUnmutated = (member: Unmutated): string =>
+  member.exemption === undefined
+    ? `0 mutants for ${member.package} (${member.dir}): no mutation script and no ${MUTATION_EXEMPTION_RULE} debt-ledger entry`
+    : `0 mutants for ${member.package} (${member.dir}): accepted by ${MUTATION_EXEMPTION_RULE} debt-ledger entry "${member.exemption.reason}", removed by ${member.exemption.removedBy}`
 
 export type GateOutcome =
   | { readonly ok: true; readonly result: GateResult }
@@ -267,11 +279,11 @@ export const gatePlan = async ({ root, planFile }: GateInput): Promise<GateOutco
     }
   }
 
-  const exempt = (name: string): boolean =>
-    ledger.entries.some((entry) => entry.rule === MUTATION_EXEMPTION_RULE && entry.scope === name)
+  const exemption = (name: string): typeof LedgerEntry.Type | undefined =>
+    ledger.entries.find((entry) => entry.rule === MUTATION_EXEMPTION_RULE && entry.scope === name)
 
   for (const member of mutationMembers) {
-    if ((scheduled.get(member.dir) ?? 0) === 0 && !exempt(member.name)) {
+    if ((scheduled.get(member.dir) ?? 0) === 0 && exemption(member.name) === undefined) {
       refusals.push({ _tag: 'MutationPackageWithoutMutants', package: member.name })
     }
   }
@@ -280,7 +292,10 @@ export const gatePlan = async ({ root, planFile }: GateInput): Promise<GateOutco
   if (scheduledTotal === 0 && ledger.entries.length === 0) refusals.push({ _tag: 'VacuousPlan' })
 
   if (refusals.length > 0) return { ok: false, refusals }
-  return { ok: true, result: { matrix: plan.matrix, hasShards: plan.matrix.include.length > 0 } }
+  const unmutated = discovery.members
+    .filter((member) => (scheduled.get(member.dir) ?? 0) === 0)
+    .map((member) => ({ package: member.name, dir: member.dir, exemption: exemption(member.name) }))
+  return { ok: true, result: { matrix: plan.matrix, hasShards: plan.matrix.include.length > 0, unmutated } }
 }
 
 if (import.meta.main) {
@@ -311,6 +326,8 @@ if (import.meta.main) {
     for (const refusal of outcome.refusals) console.error(`stryker-plan-gate: ${renderRefusal(refusal)}`)
     Deno.exit(1)
   }
+  for (const member of outcome.result.unmutated) console.error(`stryker-plan-gate: ${renderUnmutated(member)}`)
+  console.error(`stryker-plan-gate: ${outcome.result.matrix.include.length} shard(s)`)
   await emit(`matrix=${JSON.stringify(outcome.result.matrix)}\nhas-shards=${outcome.result.hasShards}\n`)
   Deno.exit(0)
 }

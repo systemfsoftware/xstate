@@ -102,7 +102,12 @@ const writeFixture = async (): Promise<string> => {
     await Deno.copyFile(`${repoRoot}scripts/${file}`, `${root}/scripts/${file}`)
   }
   await Deno.writeTextFile(`${root}/pnpm-workspace.yaml`, 'packages:\n  - packages/*\n')
-  await Deno.writeTextFile(`${root}/debt-ledger.yaml`, 'entries: []\n')
+  await Deno.writeTextFile(
+    `${root}/debt-ledger.yaml`,
+    'entries:\n  - rule: XS1\n    scope: "@fixture/docs"\n    reason: "docs rewrite pending"\n    removedBy: "U99"\n',
+  )
+  await Deno.mkdir(`${root}/packages/docs`, { recursive: true })
+  await Deno.writeTextFile(`${root}/packages/docs/package.json`, `${JSON.stringify({ name: '@fixture/docs' })}\n`)
   await Deno.mkdir(`${root}/packages/core`, { recursive: true })
   await Deno.writeTextFile(
     `${root}/packages/core/package.json`,
@@ -113,18 +118,23 @@ const writeFixture = async (): Promise<string> => {
   return root
 }
 
-Deno.test('each release-gate planner step runs in the sandbox on only the hosts release-gate.yml declares for it', async () => {
+Deno.test('each release-gate planner step runs in the sandbox on only its declared hosts, and the gate logs every XS1 entry it accepted', async () => {
   const steps = await sandboxSteps('plan', 'scripts/stryker-plan-gate.ts')
   if (steps.length !== 2) {
     throw new Error(`expected the discover and gate steps, found ${steps.map((step) => step.name)}`)
   }
   const root = await writeFixture()
   try {
+    const logs: string[] = []
     for (const step of steps) {
       await Deno.remove(`${root}/.cache/deno`, { recursive: true }).catch(() => undefined)
       const outcome = await inSandbox(step, root)
       if (outcome.code !== 0) throw new Error(`"${step.name}" exited ${outcome.code}:\n${outcome.out}`)
+      logs.push(outcome.out)
     }
+    const accepted =
+      '@fixture/docs (packages/docs): accepted by XS1 debt-ledger entry "docs rewrite pending", removed by U99'
+    if (!logs[1]!.includes(accepted)) throw new Error(`the gate step's log does not name the XS1 entry:\n${logs[1]}`)
     const projects = await Deno.readTextFile(`${root}/.cache/mutation-projects.txt`)
     if (projects !== 'packages/core\n') throw new Error(`discover wrote ${JSON.stringify(projects)}`)
     const gate = await Deno.readTextFile(`${root}/.cache/mutation-plan.out`)
