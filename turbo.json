@@ -90,7 +90,9 @@
         "flake.lock",
         "pnpm-lock.yaml",
         "nix/*/pnpm-lock.yaml",
-        "nix/from-source/assert-local-sfs.awk"
+        "nix/from-source/assert-local-sfs.awk",
+        "subtrees.toml",
+        "repos/xstate-upstream/**"
       ],
       "outputs": [],
       "dependsOn": [
