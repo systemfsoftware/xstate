@@ -159,6 +159,7 @@
         "importPnpmLock": "importPnpmLock",
         "nixpkgs": "nixpkgs",
         "pnpm-release-management": "pnpm-release-management",
+        "stryker-js-effect": "stryker-js-effect",
         "systemfsoftware": "systemfsoftware"
       }
     },
@@ -224,6 +225,23 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "stryker-js-effect": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791330724,
+        "narHash": "sha256-e7AS4Mmt3qsW5UvUzXZYhR1qJkrklZkZl2ir707nJAU=",
+        "owner": "systemfsoftware",
+        "repo": "stryker-js-effect",
+        "rev": "3db0c428530803e6b425a834a64b2764fd6ee41b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "systemfsoftware",
+        "repo": "stryker-js-effect",
+        "rev": "3db0c428530803e6b425a834a64b2764fd6ee41b",
         "type": "github"
       }
     },

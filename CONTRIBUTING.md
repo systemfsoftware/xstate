@@ -51,7 +51,7 @@ pnpm check:ci
 nix build .#workspace-tarballs
 ```
 
-Mutation testing is not part of `pnpm check:ci`. The release gate (`.github/workflows/release-gate.yml`) runs Stryker at a break threshold of 100 on every push to `main`, one job per package that declares a `mutation` script.
+Mutation testing is not part of `pnpm check:ci`. The release gate (`.github/workflows/release-gate.yml`) runs `stryker plan` once over every workspace package that declares a `mutation` script, then `stryker run` for each planned shard at a break threshold of 100 on every push to `main`.
 
 ## Pull Requests & Commits
 
