@@ -1,0 +1,6 @@
+{
+  "license": "Apache-2.0",
+  "name": "are-the-types-wrong-build",
+  "private": true,
+  "type": "module"
+}

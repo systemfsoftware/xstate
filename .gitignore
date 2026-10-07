@@ -10,3 +10,5 @@ reports/
 .direnv/
 result
 result-*
+.sfs-deps
+.cache/

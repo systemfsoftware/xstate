@@ -1,6 +1,6 @@
-# starter
+# xstate
 
-Starter template for TypeScript / Effect libraries and tools.
+The `@systemfsoftware/xstate*` packages: systemfsoftware's owned fork of XState v6 on Effect 4.
 
 ## Boundaries
 
@@ -21,14 +21,14 @@ Starter template for TypeScript / Effect libraries and tools.
 | `START-3` | All test suites pass                                | `pnpm test`         |
 | `START-4` | Full CI validation passes before completion         | `pnpm check:ci`     |
 
-Workspace roots: `packages/` holds libraries, `apps/` holds publishable
-applications — both are workspace globs in `pnpm-workspace.yaml`. Turbo declares
-`dist/**` as each package's build output; `pnpm gate:dist` runs that build.
+Turbo declares `dist/**` as each package's build output; `pnpm gate:dist` runs
+that build. `nix build .#workspace-tarballs` packs every public workspace package
+through pnpm-release-management's `mkPnpmWorkspacePackages`.
 
 ## CI
 
 - Every job runs on GitHub-hosted runners: `ubuntu-latest`, and `macos-latest` for the macOS `check:ci` leg. This repository is public, and the org's self-hosted fleet runner group admits only private repositories (fork safety), so a `[self-hosted, systemfsoftware-runner, *]` job here queues forever. Gate: review of the workflow diff.
-- Heavy suites split across parallel hosted jobs instead of a larger runner: Linux `check:ci` runs as one job per part (format, lint, typecheck, test, dist), and mutation on `main` runs one job per package. Gate: review of the workflow diff.
+- Heavy suites split across parallel hosted jobs instead of a larger runner: Linux `check:ci` runs as one job per part (format, lint, typecheck, test, dist), and mutation on `main` runs one job per shard of the `stryker plan` fan-out. Gate: review of the workflow diff.
 
 ## End of Session
 
