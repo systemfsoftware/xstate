@@ -1933,6 +1933,7 @@ export interface ActorOptions<TLogic extends AnyActorLogic> {
    * native `console.log(...)` method.
    */
   logger?: (...args: any[]) => void
+  reportUnhandledError?: (error: unknown) => void
   parent?: AnyActor
   /** @internal */
   syncSnapshot?: boolean | undefined

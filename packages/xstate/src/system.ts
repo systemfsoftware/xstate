@@ -524,6 +524,7 @@ export interface ActorSystem<
   start: () => void
   _clock: Clock
   _logger: (...args: any[]) => void
+  _reportUnhandledError: (error: unknown) => void
   /**
    * The runtime executing this system's effects. When unset, the built-in
    * local in-memory runtime runs them; `createActor(machine).start()` is just
@@ -568,6 +569,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
   public scheduler: Scheduler = this
   public _clock: Clock
   public _logger: (...args: any[]) => void
+  public _reportUnhandledError: (error: unknown) => void
   public createActorRef: ActorSystem<T>['createActorRef']
 
   public get children(): Map<string, AnyActor> {
@@ -620,6 +622,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
     options: {
       clock: Clock
       logger: (...args: any[]) => void
+      reportUnhandledError?: ((error: unknown) => void) | undefined
       snapshot?: unknown
       createActorRef: ActorSystem<T>['createActorRef']
     },
@@ -631,6 +634,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
       : undefined
     this._clock = options.clock
     this._logger = options.logger
+    this._reportUnhandledError = options.reportUnhandledError ?? reportUnhandledError
     this.createActorRef = options.createActorRef
     const ambientInspector = getAmbientInspector()
     if (ambientInspector) {
@@ -952,7 +956,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
         try {
           listener(rejection)
         } catch (err) {
-          reportUnhandledError(err)
+          this._reportUnhandledError(err)
         }
       }
     }
@@ -1083,6 +1087,7 @@ export function createRuntimeSystem<T extends ActorSystemInfo>(
   options: {
     clock: Clock
     logger: (...args: any[]) => void
+    reportUnhandledError?: ((error: unknown) => void) | undefined
     snapshot?: unknown
     createActorRef: ActorSystem<T>['createActorRef']
   },

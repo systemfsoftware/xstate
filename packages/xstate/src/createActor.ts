@@ -3,7 +3,6 @@ import { XSTATE_STOP } from './constants.js'
 import { createDoneActorEvent, createErrorActorEvent, createInitEvent } from './eventUtils.js'
 import type { ActionRecord, SentRecord } from './inspection.js'
 import { Mailbox } from './Mailbox.js'
-import { reportUnhandledError } from './reportUnhandledError.js'
 import { symbolObservable } from './symbolObservable.js'
 import {
   type AnyActorSystem,
@@ -83,11 +82,15 @@ const defaultOptions = Object.freeze({
   logger: console.log.bind(console),
 })
 
-function safeCall<T>(fn: ((arg: T) => void) | undefined, arg?: T) {
+function safeCall<T>(
+  fn: ((arg: T) => void) | undefined,
+  arg: T | undefined,
+  report: (error: unknown) => void,
+) {
   try {
     fn?.(arg as T)
   } catch (err) {
-    reportUnhandledError(err)
+    report(err)
   }
 }
 
@@ -274,6 +277,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
         createRuntimeSystem(this, {
           clock,
           logger,
+          reportUnhandledError: resolvedOptions.reportUnhandledError,
           snapshot: resolvedOptions.snapshot,
           createActorRef,
         }))
@@ -555,7 +559,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
 
   private _next(snapshot: SnapshotFrom<TLogic>) {
     for (const observer of this.observers ?? emptyInspectionRecords) {
-      safeCall(observer.next, snapshot)
+      safeCall(observer.next, snapshot, this.system._reportUnhandledError)
     }
   }
 
@@ -729,17 +733,17 @@ export class Actor<TLogic extends AnyActorLogic> implements
     } else {
       switch ((this._snapshot as Snapshot<unknown>).status) {
         case 'done':
-          safeCall(observer.complete)
+          safeCall(observer.complete, undefined, this.system._reportUnhandledError)
           break
         case 'error': {
           const err = (this._snapshot as Snapshot<unknown>).error
           if (!observer.error) {
-            reportUnhandledError(err)
+            this.system._reportUnhandledError(err)
           } else {
             if (!observer.passive) {
               this._errorObserved = true
             }
-            safeCall(observer.error, err)
+            safeCall(observer.error, err, this.system._reportUnhandledError)
           }
           break
         }
@@ -1030,7 +1034,11 @@ export class Actor<TLogic extends AnyActorLogic> implements
   private _warnedUnhandledTypes?: Set<string>
 
   private _reportUnhandledEvent(event: EventFromLogic<TLogic>): void {
-    safeCall(() => this.options.onUnhandledEvent?.(event, this._snapshot))
+    safeCall(
+      () => this.options.onUnhandledEvent?.(event, this._snapshot),
+      undefined,
+      this.system._reportUnhandledError,
+    )
     if (isDevelopment) {
       const warned = (this._warnedUnhandledTypes ??= new Set())
       if (!warned.has(event.type)) {
@@ -1056,7 +1064,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
     ) {
       if (listeners) {
         for (const handler of listeners) {
-          safeCall(handler, event)
+          safeCall(handler, event, this.system._reportUnhandledError)
         }
       }
     }
@@ -1110,7 +1118,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
   }
   private _complete(): void {
     for (const observer of this.observers ?? emptyInspectionRecords) {
-      safeCall(observer.complete)
+      safeCall(observer.complete, undefined, this.system._reportUnhandledError)
     }
     this.observers?.clear()
     this.eventListeners?.clear()
@@ -1125,7 +1133,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
   private _reportUnlessObserved(err: unknown): void {
     setTimeout(() => {
       if (!this._errorObserved) {
-        reportUnhandledError(err)
+        this.system._reportUnhandledError(err)
       }
     })
   }
@@ -1166,10 +1174,10 @@ export class Actor<TLogic extends AnyActorLogic> implements
         }
         const result = this.system.stopActor(child)
         if (result) {
-          void Promise.resolve(result).catch(reportUnhandledError)
+          void Promise.resolve(result).catch(this.system._reportUnhandledError)
         }
       } catch (error) {
-        reportUnhandledError(error)
+        this.system._reportUnhandledError(error)
       }
     }
     if (!this.observers?.size) {
@@ -1186,7 +1194,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
           reportError ||= !errorListener
           handled ||= !!errorListener
         }
-        safeCall(errorListener, err)
+        safeCall(errorListener, err, this.system._reportUnhandledError)
       }
       reportError ||= !handled
       this.observers.clear()
