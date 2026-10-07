@@ -317,7 +317,7 @@ packages:
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
   '@systemfsoftware/effect-cell-types@file:.sfs-deps/effect-cell-types-7.0.0.tgz':
-    resolution: {integrity: sha512-b94as7oL7Cf1IiI9YV/eY3oBnWIkaiVV6UCxe6Z9XADJXP4FLDEv5Ms/TiVizikx2etjfdGOjaN9Ljn7b4GL+Q==, tarball: file:.sfs-deps/effect-cell-types-7.0.0.tgz}
+    resolution: {integrity: sha512-ongebnJPlxOT85vAh3zKehUvJdgWR7FkWhFCu1+NlQI7vjmXuRiuXHE4LtHyekzNbjfS7GsfrFcC6wDpWD3IGg==, tarball: file:.sfs-deps/effect-cell-types-7.0.0.tgz}
     version: 7.0.0
     peerDependencies:
       effect: 4.0.0-rc.112
