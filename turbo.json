@@ -91,6 +91,8 @@
         "pnpm-lock.yaml",
         "nix/*/pnpm-lock.yaml",
         "nix/from-source/assert-local-sfs.awk",
+        "subtrees.toml",
+        "repos/xstate-upstream/**",
         "dprint.json",
         "packages/*/upstream-tests.json",
         "packages/upstream-tsconfig.json",
