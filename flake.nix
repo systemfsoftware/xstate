@@ -19,9 +19,11 @@
     # The release workflows run pnpm-release-management's main; the Changeset
     # Check runs its changeset-management CLI from this pin of main inside the
     # dev shell, where the .sfs-deps tarballs the install needs exist. The pin
-    # above stays for mkPnpmWorkspacePackages, which main does not carry. It
-    # keeps its own nixpkgs: its deno-compile runtime is pinned to that deno.
-    release-tools.url = "github:systemfsoftware/pnpm-release-management/5432b8b642bbbdb1b03a4b576dff82f3e9083ac5";
+    # above stays for its sandbox launcher, whose commits main does not carry.
+    # This pin keeps its own nixpkgs: its deno-compile runtime is pinned to
+    # that deno. 5432b8b declared a deps hash a sandboxed fetch never produces;
+    # c10c1c4's deps fetch byte-identically under the sandbox.
+    release-tools.url = "github:systemfsoftware/pnpm-release-management/c10c1c47121110b6fc5217251c07e6f7f3eb812d";
     # systemfsoftware#606's merge into main: its workspace tarballs carry
     # per-system integrity, so the macOS leg installs what Linux installs. It
     # keeps its own pnpm-release-management pin, whose mkPnpmConsumerStore the
