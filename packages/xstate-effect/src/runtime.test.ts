@@ -1,7 +1,8 @@
 import { describe } from '@systemfsoftware/vitest'
 import { type AnyActorRef, createActor, createMachine, type EventRejection, setup } from '@systemfsoftware/xstate'
-import { Clock, Context, Deferred, Duration, Effect, Fiber, Stream } from 'effect'
+import { Context, Deferred, Duration, Effect, Fiber, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
+import { until } from '../tests/untilCondition.js'
 import {
   createEffectActor,
   deadLetters,
@@ -13,17 +14,6 @@ import {
   setupEffect,
   withActorScope,
 } from './index.js'
-
-const until = (predicate: () => boolean, timeoutMs = 1000) =>
-  Effect.gen(function*() {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    while (!predicate()) {
-      if ((yield* Clock.currentTimeMillis) > deadline) {
-        return yield* Effect.die(new Error('Timed out waiting for condition'))
-      }
-      yield* Effect.sleep(1)
-    }
-  })
 
 const tagOf = (value: unknown): unknown =>
   value !== null && typeof value === 'object' && '_tag' in value
@@ -710,7 +700,7 @@ const observedProvidedEffectAction = Effect.gen(function*() {
     },
   )
   actor.send({ type: 'AUDIT' })
-  yield* until(() => recorded.length > 0, 50)
+  yield* until(() => recorded.length > 0, { timeoutMs: 50 })
 
   return recorded
 })

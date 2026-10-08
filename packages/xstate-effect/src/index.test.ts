@@ -8,21 +8,9 @@ import {
   types,
 } from '@systemfsoftware/xstate'
 import { standardSchemaValidator } from '@systemfsoftware/xstate/validation'
-import { Clock, Context, Deferred, Effect, Layer, ManagedRuntime, Option, Ref, Schema, Scope, Stream } from 'effect'
+import { Context, Deferred, Effect, Layer, ManagedRuntime, Option, Ref, Schema, Scope, Stream } from 'effect'
+import { until } from '../tests/untilCondition.js'
 import { createEffectActor, fromEffect, fromEffectEventStream, fromEffectStream, setupEffect } from './index.js'
-
-const until = (predicate: () => boolean, timeoutMs = 1000) =>
-  Effect.gen(function*() {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    while (!predicate()) {
-      if ((yield* Clock.currentTimeMillis) > deadline) {
-        return yield* Effect.die(
-          new Error('Timed out waiting for condition'),
-        )
-      }
-      yield* Effect.sleep(1)
-    }
-  })
 
 const rejects = (schema: StandardSchemaV1, value: unknown): boolean => {
   const result = schema['~standard'].validate(value)
