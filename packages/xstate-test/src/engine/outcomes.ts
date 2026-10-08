@@ -71,35 +71,32 @@ export class PropertyOutcomeRegistry {
   }
 }
 
-let activeOutcomeRegistry: PropertyOutcomeRegistry | undefined
-
-/** Makes `registry` the one outcome stubs resolve from. */
-export function setActiveOutcomeRegistry(
-  registry: PropertyOutcomeRegistry,
-): void {
-  activeOutcomeRegistry = registry
-}
-
-/** Clears the active registry, if it is still `registry`. */
-export function releaseActiveOutcomeRegistry(
-  registry: PropertyOutcomeRegistry,
-): void {
-  if (activeOutcomeRegistry === registry) {
-    activeOutcomeRegistry = undefined
-  }
-}
-
 /**
  * Builds the stub {@link ActorLogic} that replaces an invoke source named
- * `src`. The registry is read when the stub starts — always inside the
- * owning runner's step — so one stub built per campaign serves every run.
+ * `src`, resolving its outcome from `registry` — the registry of the campaign
+ * that built the stub. One stub is built per campaign, so concurrent campaigns
+ * never resolve each other's outcomes.
+ *
+ * `registry` is `undefined` for stubs built only so a machine missing an
+ * implementation can be provided for pure-mode traversal, which steps logic
+ * without running it; a run that starts such a stub is a bug.
  */
-export function createOutcomeStub(src: string): ActorLogic<any, any, any> {
+export const createOutcomeStub: {
+  (
+    registry: PropertyOutcomeRegistry | undefined,
+  ): (src: string) => ActorLogic<any, any, any>
+  (
+    src: string,
+    registry: PropertyOutcomeRegistry | undefined,
+  ): ActorLogic<any, any, any>
+} = dual(2, function createOutcomeStub(
+  src: string,
+  registry: PropertyOutcomeRegistry | undefined,
+): ActorLogic<any, any, any> {
   return createAsyncLogic({
     run: () =>
       Effect.runPromise(
         Effect.gen(function*() {
-          const registry = activeOutcomeRegistry
           if (registry === undefined) {
             throw new Error(
               `Property outcome stub for "${src}" ran outside an executed-mode property run`,
@@ -115,7 +112,7 @@ export function createOutcomeStub(src: string): ActorLogic<any, any, any> {
         }),
       ),
   }) as unknown as ActorLogic<any, any, any>
-}
+})
 
 /** Applies `actors` to a machine, rejecting logic that cannot be provided. */
 export const provideActors: {
