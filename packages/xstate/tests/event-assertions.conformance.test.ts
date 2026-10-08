@@ -52,14 +52,14 @@ const Feature = makeFeature({ it })
 const sequences = 32
 const operations = 6
 
-const subjectFor = {
+const callForms = ['event and types', 'types alone, bound to a typed const'] as const
+
+const subjectFor: Record<(typeof callForms)[number], () => AssertionSubject> = {
   'event and types': makeEventAssertionSubject,
   'types alone, bound to a typed const': makeBoundAssertionSubject,
-} as const
+}
 
-const rows = [1, 2, 3].flatMap((seed) =>
-  (['event and types', 'types alone, bound to a typed const'] as const).map((form) => ({ seed, form }))
-)
+const rows = [1, 2, 3].flatMap((seed) => callForms.map((form) => ({ seed, form })))
 
 const checkOver = (subject: AssertionSubject, seed: number) =>
   Conformance.sequential(subject.layer, {
