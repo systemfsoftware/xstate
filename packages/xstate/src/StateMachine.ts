@@ -86,7 +86,8 @@ import type {
   Next_MachineConfig,
   Sources,
 } from './types.v6.js'
-import { matchesEventDescriptor, resolveReferencedActor, toStatePath } from './utils.js'
+import { toStatePath } from './stateMatching.js'
+import { matchesEventDescriptor, resolveReferencedActor } from './utils.js'
 import { assertValid } from './validation.js'
 import type { ActorLogicValidator } from './validation.types.js'
 import { defaultWarn } from './warnSink.js'

@@ -1,6 +1,5 @@
-import { Conformance } from '@systemfsoftware/conformance-spec'
 import { assertEvent, type ExtractEvent } from '@systemfsoftware/xstate'
-import { Context, Effect, Layer, Match, Schema } from 'effect'
+import { Context, Effect, Layer, Match } from 'effect'
 import {
   accepted,
   type AssertionCommand,
@@ -62,14 +61,6 @@ export interface AssertionSubject {
 export class EventAssertion extends Context.Service<EventAssertion, AssertionHandle>()(
   '@systemfsoftware/xstate/tests/event-assertions/EventAssertion',
 ) {}
-
-export class CheckRejected extends Schema.TaggedError<CheckRejected>()('CheckRejected', {
-  rendered: Schema.String,
-}) {
-  override get message(): string {
-    return this.rendered
-  }
-}
 
 type Assertion = (command: AssertionCommand) => AssertionResponse
 
@@ -181,31 +172,3 @@ export const runAssertionCommand = (
     const subject = yield* EventAssertion
     return subject.assert(command)
   })
-
-const described = (report: Conformance.Report<AssertionCommand, AssertionResponse>): string => {
-  try {
-    return Conformance.render(report)
-  } catch {
-    return JSON.stringify(report)
-  }
-}
-
-export const passReportOf = (
-  report: Conformance.Report<AssertionCommand, AssertionResponse>,
-): Conformance.Pass =>
-  Match.value(report).pipe(
-    Match.tag('Pass', (passed) => passed),
-    Match.orElse((): never => {
-      throw new CheckRejected({ rendered: described(report) })
-    }),
-  )
-
-export const failReportOf = (
-  report: Conformance.Report<AssertionCommand, AssertionResponse>,
-): Conformance.Fail<AssertionCommand, AssertionResponse> =>
-  Match.value(report).pipe(
-    Match.tag('Fail', (failed) => failed),
-    Match.orElse((): never => {
-      throw new CheckRejected({ rendered: described(report) })
-    }),
-  )

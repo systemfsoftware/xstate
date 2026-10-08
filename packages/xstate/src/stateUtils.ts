@@ -48,15 +48,9 @@ import type {
   StateValue,
   TransitionDefinition,
 } from './types.js'
+import { toStatePath } from './stateMatching.js'
 import { getEventOutput, isErrorEvent, matchesEvent, matchesEventDescriptor } from './utils.js'
-import {
-  normalizeTarget,
-  resolveOutput,
-  resolveReferencedActor,
-  toArray,
-  toStatePath,
-  toTransitionConfigArray,
-} from './utils.js'
+import { normalizeTarget, resolveOutput, resolveReferencedActor, toArray, toTransitionConfigArray } from './utils.js'
 
 type AnyStateNodeIterable = Iterable<AnyStateNode>
 

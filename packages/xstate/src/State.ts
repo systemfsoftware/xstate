@@ -27,7 +27,8 @@ import type {
   StateValue,
   StateValueMap,
 } from './types.js'
-import { isActorRefLike, matchesState } from './utils.js'
+import { matchesState } from './stateMatching.js'
+import { isActorRefLike } from './utils.js'
 import { defaultWarn } from './warnSink.js'
 
 const emptySnapshotRecord = Object.freeze({})

@@ -195,8 +195,7 @@ export type {
 export {
   checkStateIn,
   getAllOwnEventDescriptors as __unsafe_getAllOwnEventDescriptors,
-  matchesState,
-  pathToStateValue,
   toObserver,
 } from './utils.js'
+export { matchesState, pathToStateValue } from './stateMatching.js'
 export { waitFor } from './waitFor.js'
