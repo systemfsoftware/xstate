@@ -282,6 +282,7 @@ export class Actor<TLogic extends AnyActorLogic> implements
         createRuntimeSystem(this, {
           clock,
           wallClock,
+          crypto: resolvedOptions.crypto,
           logger,
           reportUnhandledError: resolvedOptions.reportUnhandledError,
           warn: warn ?? defaultWarn,
