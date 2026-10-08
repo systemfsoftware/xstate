@@ -1,38 +1,28 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 // @vitest-environment happy-dom
 
+import { Effect } from 'effect'
 import { setTimeout as sleep } from 'node:timers/promises'
 import z from 'zod'
 import { createMachineFromConfig } from '../src/createMachineFromConfig.js'
 import {
   type ActorLogic,
   type AnyActor,
+  type AnyActorRef,
   type AnyEventObject,
+  type AnyStateMachine,
   createActor,
   createAsyncLogic,
   createCallbackLogic,
   createLogic,
   createMachine,
+  type EventRejection,
   setup,
   SimulatedClock,
   type Snapshot,
   stopActor,
 } from '../src/index.js'
 
-// mocked reportUnhandledError due to unknown issue with vitest and global error
-// handlers not catching thrown errors
-// see: https://github.com/vitest-dev/vitest/issues/6292
-vi.mock('../src/reportUnhandledError.js', () => {
-  return {
-    reportUnhandledError: (err: unknown) => {
-      setTimeout(() => {
-        dispatchEvent(new ErrorEvent('error', { error: err }))
-      })
-    },
-  }
-})
-
-const cleanups: (() => void)[] = []
 const getErrorMessage = (error: unknown) =>
   error instanceof Error
     ? error.message
@@ -40,34 +30,37 @@ const getErrorMessage = (error: unknown) =>
     ? String(error.message)
     : String(error)
 
-function installGlobalOnErrorHandler(handler: (ev: ErrorEvent) => void) {
-  window.addEventListener('error', handler)
-  cleanups.push(() => window.removeEventListener('error', handler))
+function recorder<A extends unknown[]>() {
+  const items: A[] = []
+  return {
+    items,
+    record: (...args: A) => {
+      items.push(args)
+    },
+  }
 }
-
-afterEach(() => {
-  cleanups.forEach((cleanup) => cleanup())
-  cleanups.length = 0
-})
 
 describe('error handling', () => {
   it.each(['calculation', 'effect'] as const)(
     'stops descendants after a parent %s fails',
-    (failure) => {
-      const cleanup = vi.fn()
-      const exit = vi.fn()
-      const timer = vi.fn()
+    function*(failure, { expect }) {
+      const cleanup = recorder<[]>()
+      const exit = recorder<[]>()
+      const timer = recorder<[]>()
       const clock = new SimulatedClock()
       const error = new Error('parent failed')
       const childLogic = createMachine({
         initial: 'running',
         states: {
           running: {
-            exit,
-            invoke: { id: 'callback', src: createCallbackLogic(() => cleanup) },
+            exit: exit.record,
+            invoke: {
+              id: 'callback',
+              src: createCallbackLogic(() => cleanup.record),
+            },
             after: {
               10: (_, enq) => {
-                enq(timer)
+                enq(timer.record)
               },
             },
           },
@@ -90,23 +83,33 @@ describe('error handling', () => {
         }),
         { clock },
       )
-      const onError = vi.fn()
-      actor.subscribe({ error: onError })
+      const onError = recorder<[unknown]>()
+      actor.subscribe({ error: onError.record })
       actor.start()
       const child = actor.getSnapshot().children['child']!
       actor.send({ type: 'FAIL' })
       clock.increment(20)
-      expect(actor.getSnapshot().status).toBe('error')
-      expect(child.getSnapshot().status).toBe('stopped')
-      expect(cleanup).toHaveBeenCalledTimes(1)
-      expect(exit).not.toHaveBeenCalled()
-      expect(timer).not.toHaveBeenCalled()
-      expect(onError).toHaveBeenCalledExactlyOnceWith(error)
+
+      yield* expect({
+        actorStatus: actor.getSnapshot().status,
+        childStatus: child.getSnapshot().status,
+        cleanupCalls: cleanup.items,
+        exitCalls: exit.items,
+        timerCalls: timer.items,
+        onErrorCalls: onError.items,
+      }).toEqual({
+        actorStatus: 'error',
+        childStatus: 'stopped',
+        cleanupCalls: [[]],
+        exitCalls: [],
+        timerCalls: [],
+        onErrorCalls: [[error]],
+      })
     },
   )
 
-  it('stops custom-logic children absent from its snapshot after an error', () => {
-    const cleanup = vi.fn()
+  it('stops custom-logic children absent from its snapshot after an error', function*({ expect }) {
+    const cleanup = recorder<[]>()
     const actor = createActor(
       createLogic({
         context: undefined,
@@ -116,7 +119,7 @@ describe('error handling', () => {
           }
           enq.effect('child', () => {
             createActor(
-              createCallbackLogic(() => cleanup),
+              createCallbackLogic(() => cleanup.record),
               { parent: self as AnyActor },
             ).start()
           })
@@ -126,10 +129,11 @@ describe('error handling', () => {
     actor.subscribe({ error: () => {} })
     actor.start()
     actor.send({ type: 'FAIL' })
-    expect(cleanup).toHaveBeenCalledTimes(1)
+
+    yield* expect(cleanup.items).toEqual([[]])
   })
 
-  it('ignores domain children and foreign actors when custom logic errors', () => {
+  it('ignores domain children and foreign actors when custom logic errors', function*({ expect }) {
     const foreign = createActor(createMachine({})).start()
     const error = new Error('custom failure')
     const snapshot = {
@@ -146,23 +150,32 @@ describe('error handling', () => {
       },
       getPersistedSnapshot: (value: typeof snapshot) => value,
     })
-    const onError = vi.fn()
-    actor.subscribe({ error: onError })
+    const onError = recorder<[unknown]>()
+    actor.subscribe({ error: onError.record })
     actor.start()
     actor.send({ type: 'FAIL' })
-    expect(onError).toHaveBeenCalledExactlyOnceWith(error)
-    expect(foreign.getSnapshot().status).toBe('active')
+
+    yield* expect({
+      onErrorCalls: onError.items,
+      foreignStatus: foreign.getSnapshot().status,
+    }).toEqual({
+      onErrorCalls: [[error]],
+      foreignStatus: 'active',
+    })
     foreign.stop()
   })
 
   it.each([false, true])(
     'stops a removed child exactly once when its stop effect ran: %s',
-    (stoppedFirst) => {
-      const cleanup = vi.fn()
+    function*(stoppedFirst, { expect }) {
+      const cleanup = recorder<[]>()
       const error = new Error('effect failed')
       const actor = createActor(
         createMachine({
-          invoke: { id: 'child', src: createCallbackLogic(() => cleanup) },
+          invoke: {
+            id: 'child',
+            src: createCallbackLogic(() => cleanup.record),
+          },
           on: {
             FAIL: ({ children }, enq) => {
               if (stoppedFirst) {
@@ -180,18 +193,30 @@ describe('error handling', () => {
       )
       actor.subscribe({ error: () => {} })
       actor.start()
-      const runtimeStop = vi.fn(stopActor)
-      actor.system.runtime = { stopActor: runtimeStop }
+      const runtimeStop = recorder<[AnyActor]>()
+      actor.system.runtime = {
+        stopActor: (actorRef) => {
+          runtimeStop.record(actorRef)
+          return stopActor(actorRef)
+        },
+      }
       actor.send({ type: 'FAIL' })
-      expect(actor.getSnapshot().children['child']).toBeUndefined()
-      expect(cleanup).toHaveBeenCalledTimes(1)
-      expect(runtimeStop).toHaveBeenCalledTimes(1)
+
+      yield* expect({
+        child: actor.getSnapshot().children['child'],
+        cleanupCalls: cleanup.items,
+        stoppedChildIds: runtimeStop.items.map(([child]) => child.id),
+      }).toEqual({
+        child: undefined,
+        cleanupCalls: [[]],
+        stoppedChildIds: ['child'],
+      })
     },
   )
 
-  it('uses runtime child stops and continues after a child cleanup throws', () => {
+  it('uses runtime child stops and continues after a child cleanup throws', function*({ expect }) {
     const originalError = new Error('parent failed')
-    const cleanup = vi.fn()
+    const cleanup = recorder<[]>()
     const actor = createActor(
       createMachine({
         invoke: [
@@ -201,7 +226,7 @@ describe('error handling', () => {
               throw new Error('cleanup failed')
             }),
           },
-          { id: 'good', src: createCallbackLogic(() => cleanup) },
+          { id: 'good', src: createCallbackLogic(() => cleanup.record) },
         ],
         on: {
           FAIL: () => {
@@ -210,26 +235,35 @@ describe('error handling', () => {
         },
       }),
     )
-    const onError = vi.fn()
-    actor.subscribe({ error: onError })
+    const onError = recorder<[unknown]>()
+    actor.subscribe({ error: onError.record })
     actor.start()
     const { bad, good } = actor.getSnapshot().children
     bad!.subscribe({ error: () => {} })
-    const runtimeStop = vi.fn(stopActor)
-    actor.system.runtime = { stopActor: runtimeStop }
+    const runtimeStop = recorder<[AnyActor]>()
+    actor.system.runtime = {
+      stopActor: (actorRef) => {
+        runtimeStop.record(actorRef)
+        return stopActor(actorRef)
+      },
+    }
     actor.send({ type: 'FAIL' })
-    expect(runtimeStop.mock.calls.map(([child]) => child.id)).toEqual([
-      'bad',
-      'good',
-    ])
-    expect(good!.getSnapshot().status).toBe('stopped')
-    expect(cleanup).toHaveBeenCalledTimes(1)
-    expect(onError).toHaveBeenCalledExactlyOnceWith(originalError)
+
+    yield* expect({
+      stoppedIds: runtimeStop.items.map(([child]) => child.id),
+      goodStatus: good!.getSnapshot().status,
+      cleanupCalls: cleanup.items,
+      onErrorCalls: onError.items,
+    }).toEqual({
+      stoppedIds: ['bad', 'good'],
+      goodStatus: 'stopped',
+      cleanupCalls: [[]],
+      onErrorCalls: [[originalError]],
+    })
   })
 
   // https://github.com/statelyai/xstate/issues/4004
-  it('does not cause an infinite loop when an error is thrown in subscribe', () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
+  it('does not cause an infinite loop when an error is thrown in subscribe', function*({ expect }) {
     const machine = createMachine({
       id: 'machine',
       initial: 'initial',
@@ -249,31 +283,33 @@ describe('error handling', () => {
       },
     })
 
-    const spy = vi.fn().mockImplementation(() => {
-      throw new Error('no_infinite_loop_when_error_is_thrown_in_subscribe')
+    const error = new Error(
+      'no_infinite_loop_when_error_is_thrown_in_subscribe',
+    )
+    const subscriber = recorder<[]>()
+    const reported = recorder<[unknown]>()
+
+    const actor = createActor(machine, {
+      reportUnhandledError: reported.record,
+    }).start()
+
+    actor.subscribe(() => {
+      subscriber.record()
+      throw error
     })
-
-    const actor = createActor(machine).start()
-
-    actor.subscribe(spy)
     actor.send({ type: 'activate' })
 
-    expect(spy).toHaveBeenCalledTimes(1)
-
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      expect(ev.error.message).toEqual(
-        'no_infinite_loop_when_error_is_thrown_in_subscribe',
-      )
-      resolve()
+    yield* expect({
+      spyCalls: subscriber.items.length,
+      reportedMessages: reported.items.map(([err]) => getErrorMessage(err)),
+    }).toEqual({
+      spyCalls: 1,
+      reportedMessages: ['no_infinite_loop_when_error_is_thrown_in_subscribe'],
     })
-
-    return promise
   })
 
-  it(`doesn't crash the actor when an error is thrown in subscribe`, () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
-    const spy = vi.fn()
+  it(`doesn't crash the actor when an error is thrown in subscribe`, function*({ expect }) {
+    const doSpy = recorder<[]>()
 
     const machine = createMachine({
       id: 'machine',
@@ -293,42 +329,54 @@ describe('error handling', () => {
         active: {
           on: {
             do: (_, enq) => {
-              enq(spy)
+              enq(doSpy.record)
             },
           },
         },
       },
     })
 
-    const subscriber = vi.fn().mockImplementationOnce(() => {
-      throw new Error('doesnt_crash_actor_when_error_is_thrown_in_subscribe')
-    })
+    const subscriberError = new Error(
+      'doesnt_crash_actor_when_error_is_thrown_in_subscribe',
+    )
+    let subscriberCalls = 0
+    const subscriber = () => {
+      subscriberCalls++
+      if (subscriberCalls === 1) {
+        throw subscriberError
+      }
+    }
 
-    const actor = createActor(machine).start()
+    const reported = recorder<[unknown]>()
+    const actor = createActor(machine, {
+      reportUnhandledError: reported.record,
+    }).start()
 
     actor.subscribe(subscriber)
     actor.send({ type: 'activate' })
 
-    expect(subscriber).toHaveBeenCalledTimes(1)
-    expect(actor.getSnapshot().status).toEqual('active')
+    const subscriberCallsAfterActivate = subscriberCalls
+    const statusAfterActivate = actor.getSnapshot().status
+    const reportedAfterActivate = reported.items.length
 
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      expect(ev.error.message).toEqual(
-        'doesnt_crash_actor_when_error_is_thrown_in_subscribe',
-      )
+    actor.send({ type: 'do' })
 
-      actor.send({ type: 'do' })
-      expect(spy).toHaveBeenCalledTimes(1)
-
-      resolve()
+    yield* expect({
+      subscriberCallsAfterActivate,
+      statusAfterActivate,
+      reportedAfterActivate,
+      reportedMessages: reported.items.map(([err]) => getErrorMessage(err)),
+      doSpyCalls: doSpy.items.length,
+    }).toEqual({
+      subscriberCallsAfterActivate: 1,
+      statusAfterActivate: 'active',
+      reportedAfterActivate: 1,
+      reportedMessages: ['doesnt_crash_actor_when_error_is_thrown_in_subscribe'],
+      doSpyCalls: 1,
     })
-
-    return promise
   })
 
-  it(`doesn't notify error listener when an error is thrown in subscribe`, () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
+  it(`doesn't notify error listener when an error is thrown in subscribe`, function*({ expect }) {
     const machine = createMachine({
       id: 'machine',
       initial: 'initial',
@@ -348,44 +396,47 @@ describe('error handling', () => {
       },
     })
 
-    const nextSpy = vi.fn().mockImplementation(() => {
-      throw new Error(
-        'doesnt_notify_error_listener_when_error_is_thrown_in_subscribe',
-      )
-    })
-    const errorSpy = vi.fn()
+    const nextError = new Error(
+      'doesnt_notify_error_listener_when_error_is_thrown_in_subscribe',
+    )
+    let nextCalls = 0
+    const nextSpy = () => {
+      nextCalls++
+      throw nextError
+    }
+    const errorSpy = recorder<[unknown]>()
+    const reported = recorder<[unknown]>()
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, {
+      reportUnhandledError: reported.record,
+    }).start()
 
     actor.subscribe({
       next: nextSpy,
-      error: errorSpy,
+      error: errorSpy.record,
     })
     actor.send({ type: 'activate' })
 
-    expect(nextSpy).toHaveBeenCalledTimes(1)
-    expect(errorSpy).toHaveBeenCalledTimes(0)
-
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      expect(ev.error.message).toEqual(
-        'doesnt_notify_error_listener_when_error_is_thrown_in_subscribe',
-      )
-      resolve()
+    yield* expect({
+      nextCalls,
+      errorSpyCalls: errorSpy.items.length,
+      reportedMessages: reported.items.map(([err]) => getErrorMessage(err)),
+    }).toEqual({
+      nextCalls: 1,
+      errorSpyCalls: 0,
+      reportedMessages: ['doesnt_notify_error_listener_when_error_is_thrown_in_subscribe'],
     })
-
-    return promise
   })
 
-  it('unhandled sync errors thrown when starting a child actor should be reported globally', () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
+  it('unhandled sync errors thrown when starting a child actor should be reported globally', function*({ expect }) {
+    const error = new Error('unhandled_sync_error_in_actor_start')
     const machine = createMachine({
       initial: 'pending',
       states: {
         pending: {
           invoke: {
             src: createCallbackLogic(() => {
-              throw new Error('unhandled_sync_error_in_actor_start')
+              throw error
             }),
             onDone: { target: 'success' },
           },
@@ -396,162 +447,184 @@ describe('error handling', () => {
       },
     })
 
-    createActor(machine).start()
+    const reported = recorder<[unknown]>()
+    const { promise, resolve } = Promise.withResolvers<void>()
+    createActor(machine, {
+      reportUnhandledError: (err) => {
+        reported.record(err)
+        resolve()
+      },
+    }).start()
 
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      expect(ev.error.message).toEqual('unhandled_sync_error_in_actor_start')
-      resolve()
-    })
+    yield* Effect.promise(() => promise)
 
-    return promise
+    yield* expect(reported.items.map(([err]) => getErrorMessage(err))).toEqual([
+      'unhandled_sync_error_in_actor_start',
+    ])
   })
 
-  it('unhandled rejection of a promise actor should be reported globally in absence of error listener', () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
-    const machine = createMachine({
-      initial: 'pending',
-      states: {
-        pending: {
-          invoke: {
-            src: createAsyncLogic({
-              run: () =>
-                Promise.reject(
-                  new Error(
-                    'unhandled_rejection_in_promise_actor_without_error_listener',
-                  ),
-                ),
-            }),
-            onDone: { target: 'success' },
-          },
-        },
-        success: {
-          type: 'final',
-        },
-      },
-    })
-
-    createActor(machine).start()
-
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      expect(ev.error.message).toEqual(
+  it(
+    'unhandled rejection of a promise actor should be reported globally in absence of error listener',
+    function*({ expect }) {
+      const reported = recorder<[unknown]>()
+      const { promise, resolve } = Promise.withResolvers<void>()
+      const error = new Error(
         'unhandled_rejection_in_promise_actor_without_error_listener',
       )
-      resolve()
-    })
-
-    return promise
-  })
-
-  it('unhandled rejection of a promise actor should be reported to the existing error listener of its parent', async () => {
-    const errorSpy = vi.fn()
-
-    const machine = createMachine({
-      initial: 'pending',
-      states: {
-        pending: {
-          invoke: {
-            src: createAsyncLogic({
-              run: () =>
-                Promise.reject(
-                  new Error(
-                    'unhandled_rejection_in_promise_actor_with_parent_listener',
-                  ),
-                ),
-            }),
-            onDone: { target: 'success' },
+      const machine = createMachine({
+        initial: 'pending',
+        states: {
+          pending: {
+            invoke: {
+              src: createAsyncLogic({
+                run: () => Promise.reject(error),
+              }),
+              onDone: { target: 'success' },
+            },
+          },
+          success: {
+            type: 'final',
           },
         },
-        success: {
-          type: 'final',
+      })
+
+      createActor(machine, {
+        reportUnhandledError: (err) => {
+          reported.record(err)
+          resolve()
         },
-      },
-    })
+      }).start()
 
-    const actorRef = createActor(machine)
-    actorRef.subscribe({
-      error: errorSpy,
-    })
-    actorRef.start()
+      yield* Effect.promise(() => promise)
 
-    await sleep(0)
+      yield* expect(reported.items.map(([err]) => getErrorMessage(err))).toEqual([
+        'unhandled_rejection_in_promise_actor_without_error_listener',
+      ])
+    },
+  )
 
-    expect(errorSpy.mock.calls).toMatchInlineSnapshot(`
-      [
-        [
-          [Error: unhandled_rejection_in_promise_actor_with_parent_listener],
-        ],
-      ]
-    `)
-  })
+  it(
+    'unhandled rejection of a promise actor should be reported to the existing error listener of its parent',
+    function*({ expect }) {
+      const errorSpy = recorder<[unknown]>()
+      const observed = Promise.withResolvers<void>()
+      const error = new Error(
+        'unhandled_rejection_in_promise_actor_with_parent_listener',
+      )
 
-  it('unhandled rejection of a promise actor should be reported to the existing error listener of its grandparent', async () => {
-    const errorSpy = vi.fn()
-
-    const child = createMachine({
-      initial: 'pending',
-      states: {
-        pending: {
-          invoke: {
-            src: createAsyncLogic({
-              run: () =>
-                Promise.reject(
-                  new Error(
-                    'unhandled_rejection_in_promise_actor_with_grandparent_listener',
-                  ),
-                ),
-            }),
-            onDone: { target: 'success' },
+      const machine = createMachine({
+        initial: 'pending',
+        states: {
+          pending: {
+            invoke: {
+              src: createAsyncLogic({
+                run: () => Promise.reject(error),
+              }),
+              onDone: { target: 'success' },
+            },
+          },
+          success: {
+            type: 'final',
           },
         },
-        success: {
-          type: 'final',
-        },
-      },
-    })
+      })
 
-    const machine = createMachine({
-      initial: 'pending',
-      states: {
-        pending: {
-          invoke: {
-            src: child,
-            onDone: { target: 'success' },
+      const actorRef = createActor(machine)
+      actorRef.subscribe({
+        error: (err) => {
+          errorSpy.record(err)
+          observed.resolve()
+        },
+      })
+      actorRef.start()
+
+      yield* Effect.promise(() => observed.promise)
+
+      yield* expect(errorSpy.items.map(([err]) => ({
+        message: getErrorMessage(err),
+        isError: err instanceof Error,
+      }))).toEqual([
+        {
+          message: 'unhandled_rejection_in_promise_actor_with_parent_listener',
+          isError: true,
+        },
+      ])
+    },
+  )
+
+  it(
+    'unhandled rejection of a promise actor should be reported to the existing error listener of its grandparent',
+    function*({ expect }) {
+      const errorSpy = recorder<[unknown]>()
+      const observed = Promise.withResolvers<void>()
+      const error = new Error(
+        'unhandled_rejection_in_promise_actor_with_grandparent_listener',
+      )
+
+      const child = createMachine({
+        initial: 'pending',
+        states: {
+          pending: {
+            invoke: {
+              src: createAsyncLogic({
+                run: () => Promise.reject(error),
+              }),
+              onDone: { target: 'success' },
+            },
+          },
+          success: {
+            type: 'final',
           },
         },
-        success: {
-          type: 'final',
+      })
+
+      const machine = createMachine({
+        initial: 'pending',
+        states: {
+          pending: {
+            invoke: {
+              src: child,
+              onDone: { target: 'success' },
+            },
+          },
+          success: {
+            type: 'final',
+          },
         },
-      },
-    })
+      })
 
-    const actorRef = createActor(machine)
-    actorRef.subscribe({
-      error: errorSpy,
-    })
-    actorRef.start()
+      const actorRef = createActor(machine)
+      actorRef.subscribe({
+        error: (err) => {
+          errorSpy.record(err)
+          observed.resolve()
+        },
+      })
+      actorRef.start()
 
-    await sleep(0)
+      yield* Effect.promise(() => observed.promise)
 
-    expect(errorSpy.mock.calls).toMatchInlineSnapshot(`
-      [
-        [
-          [Error: unhandled_rejection_in_promise_actor_with_grandparent_listener],
-        ],
-      ]
-    `)
-  })
+      yield* expect(errorSpy.items.map(([err]) => ({
+        message: getErrorMessage(err),
+        isError: err instanceof Error,
+      }))).toEqual([
+        {
+          message: 'unhandled_rejection_in_promise_actor_with_grandparent_listener',
+          isError: true,
+        },
+      ])
+    },
+  )
 
-  it('handled sync errors thrown when starting a child actor should not be reported globally', () => {
-    const { resolve, reject, promise } = Promise.withResolvers<void>()
+  it('handled sync errors thrown when starting a child actor should not be reported globally', function*({ expect }) {
+    const error = new Error('handled_sync_error_in_actor_start')
     const machine = createMachine({
       initial: 'pending',
       states: {
         pending: {
           invoke: {
             src: createCallbackLogic(() => {
-              throw new Error('handled_sync_error_in_actor_start')
+              throw error
             }),
             onError: { target: 'failed' },
           },
@@ -562,146 +635,178 @@ describe('error handling', () => {
       },
     })
 
-    createActor(machine).start()
-
-    installGlobalOnErrorHandler(() => {
-      reject(new Error('Fail'))
+    const reported = recorder<[unknown]>()
+    const settled = Promise.withResolvers<void>()
+    const actor = createActor(machine, {
+      reportUnhandledError: reported.record,
     })
-
-    setTimeout(() => {
-      resolve()
-    }, 10)
-
-    return promise
-  })
-
-  it('handled sync errors thrown when starting a child actor should be reported globally when not all of its own observers come with an error listener', () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
-    const machine = createMachine({
-      initial: 'pending',
-      states: {
-        pending: {
-          invoke: {
-            src: createCallbackLogic(() => {
-              throw new Error('handled_sync_error_in_actor_start')
-            }),
-            onError: { target: 'failed' },
-          },
-        },
-        failed: {
-          type: 'final',
-        },
-      },
-    })
-
-    const actorRef = createActor(machine)
-    const childActorRef = Object.values(actorRef.getSnapshot().children)[0]
-    if (childActorRef === undefined) {
-      throw new Error('expected a child actor')
-    }
-    childActorRef.subscribe({
-      error: function preventUnhandledErrorListener() {},
-    })
-    childActorRef.subscribe(() => {})
-    actorRef.start()
-
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      expect(ev.error.message).toEqual('handled_sync_error_in_actor_start')
-      resolve()
-    })
-
-    return promise
-  })
-
-  it('handled sync errors thrown when starting a child actor should not be reported globally when all of its own observers come with an error listener', () => {
-    const { resolve, reject, promise } = Promise.withResolvers<void>()
-    const machine = createMachine({
-      initial: 'pending',
-      states: {
-        pending: {
-          invoke: {
-            src: createCallbackLogic(() => {
-              throw new Error('handled_sync_error_in_actor_start')
-            }),
-            onError: { target: 'failed' },
-          },
-        },
-        failed: {
-          type: 'final',
-        },
-      },
-    })
-
-    const actorRef = createActor(machine)
-    const childActorRef = Object.values(actorRef.getSnapshot().children)[0]
-    if (childActorRef === undefined) {
-      throw new Error('expected a child actor')
-    }
-    childActorRef.subscribe({
-      error: function preventUnhandledErrorListener() {},
-    })
-    childActorRef.subscribe({
-      error: function preventUnhandledErrorListener() {},
-    })
-    actorRef.start()
-
-    installGlobalOnErrorHandler(() => {
-      reject(new Error('Fail'))
-    })
-
-    setTimeout(() => {
-      resolve()
-    }, 10)
-
-    return promise
-  })
-
-  it('unhandled sync errors thrown when starting a child actor should be reported twice globally when not all of its own observers come with an error listener and when the root has no error listener of its own', () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
-    const machine = createMachine({
-      initial: 'pending',
-      states: {
-        pending: {
-          invoke: {
-            src: createCallbackLogic(() => {
-              throw new Error('handled_sync_error_in_actor_start')
-            }),
-          },
-        },
-      },
-    })
-
-    const actorRef = createActor(machine)
-    const childActorRef = Object.values(actorRef.getSnapshot().children)[0]
-    if (childActorRef === undefined) {
-      throw new Error('expected a child actor')
-    }
-    childActorRef.subscribe({
-      error: function preventUnhandledErrorListener() {},
-    })
-    childActorRef.subscribe({})
-    actorRef.start()
-
-    const actual: string[] = []
-
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      actual.push(ev.error.message)
-
-      if (actual.length === 2) {
-        expect(actual).toEqual([
-          'handled_sync_error_in_actor_start',
-          'handled_sync_error_in_actor_start',
-        ])
-        resolve()
+    actor.subscribe((snapshot) => {
+      if (snapshot.value === 'failed') {
+        settled.resolve()
       }
     })
+    actor.start()
 
-    return promise
+    yield* Effect.promise(() => settled.promise)
+
+    yield* expect({
+      value: actor.getSnapshot().value,
+      reportedCount: reported.items.length,
+    }).toEqual({
+      value: 'failed',
+      reportedCount: 0,
+    })
   })
 
-  it(`handled sync errors shouldn't notify the error listener`, () => {
+  it(
+    'handled sync errors thrown when starting a child actor should be reported globally when not all of its own observers come with an error listener',
+    function*({ expect }) {
+      const error = new Error('handled_sync_error_in_actor_start')
+      const machine = createMachine({
+        initial: 'pending',
+        states: {
+          pending: {
+            invoke: {
+              src: createCallbackLogic(() => {
+                throw error
+              }),
+              onError: { target: 'failed' },
+            },
+          },
+          failed: {
+            type: 'final',
+          },
+        },
+      })
+
+      const reported = recorder<[unknown]>()
+      const { promise, resolve } = Promise.withResolvers<void>()
+      const actorRef = createActor(machine, {
+        reportUnhandledError: (err) => {
+          reported.record(err)
+          resolve()
+        },
+      })
+      const childActorRef = Object.values(actorRef.getSnapshot().children)[0]
+      if (childActorRef === undefined) {
+        throw new Error('expected a child actor')
+      }
+      childActorRef.subscribe({
+        error: function preventUnhandledErrorListener() {},
+      })
+      childActorRef.subscribe(() => {})
+      actorRef.start()
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect(reported.items.map(([err]) => getErrorMessage(err))).toEqual([
+        'handled_sync_error_in_actor_start',
+      ])
+    },
+  )
+
+  it(
+    'handled sync errors thrown when starting a child actor should not be reported globally when all of its own observers come with an error listener',
+    function*({ expect }) {
+      const error = new Error('handled_sync_error_in_actor_start')
+      const machine = createMachine({
+        initial: 'pending',
+        states: {
+          pending: {
+            invoke: {
+              src: createCallbackLogic(() => {
+                throw error
+              }),
+              onError: { target: 'failed' },
+            },
+          },
+          failed: {
+            type: 'final',
+          },
+        },
+      })
+
+      const reported = recorder<[unknown]>()
+      const settled = Promise.withResolvers<void>()
+      const actorRef = createActor(machine, {
+        reportUnhandledError: reported.record,
+      })
+      actorRef.subscribe((snapshot) => {
+        if (snapshot.value === 'failed') {
+          settled.resolve()
+        }
+      })
+      const childActorRef = Object.values(actorRef.getSnapshot().children)[0]
+      if (childActorRef === undefined) {
+        throw new Error('expected a child actor')
+      }
+      childActorRef.subscribe({
+        error: function preventUnhandledErrorListener() {},
+      })
+      childActorRef.subscribe({
+        error: function preventUnhandledErrorListener() {},
+      })
+      actorRef.start()
+
+      yield* Effect.promise(() => settled.promise)
+
+      yield* expect({
+        value: actorRef.getSnapshot().value,
+        reportedCount: reported.items.length,
+      }).toEqual({
+        value: 'failed',
+        reportedCount: 0,
+      })
+    },
+  )
+
+  it(
+    'unhandled sync errors thrown when starting a child actor should be reported twice globally when not all of its own observers come with an error listener and when the root has no error listener of its own',
+    function*({ expect }) {
+      const error = new Error('handled_sync_error_in_actor_start')
+      const machine = createMachine({
+        initial: 'pending',
+        states: {
+          pending: {
+            invoke: {
+              src: createCallbackLogic(() => {
+                throw error
+              }),
+            },
+          },
+        },
+      })
+
+      const reported = recorder<[unknown]>()
+      const { promise, resolve } = Promise.withResolvers<void>()
+      const actorRef = createActor(machine, {
+        reportUnhandledError: (err) => {
+          reported.record(err)
+          if (reported.items.length === 2) {
+            resolve()
+          }
+        },
+      })
+      const childActorRef = Object.values(actorRef.getSnapshot().children)[0]
+      if (childActorRef === undefined) {
+        throw new Error('expected a child actor')
+      }
+      childActorRef.subscribe({
+        error: function preventUnhandledErrorListener() {},
+      })
+      childActorRef.subscribe({})
+      actorRef.start()
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect(reported.items.map(([err]) => getErrorMessage(err))).toEqual([
+        'handled_sync_error_in_actor_start',
+        'handled_sync_error_in_actor_start',
+      ])
+    },
+  )
+
+  it(`handled sync errors shouldn't notify the error listener`, function*({ expect }) {
     const machine = createMachine({
       initial: 'pending',
       states: {
@@ -719,18 +824,18 @@ describe('error handling', () => {
       },
     })
 
-    const errorSpy = vi.fn()
+    const errorSpy = recorder<[unknown]>()
 
     const actorRef = createActor(machine)
     actorRef.subscribe({
-      error: errorSpy,
+      error: errorSpy.record,
     })
     actorRef.start()
 
-    expect(errorSpy).toHaveBeenCalledTimes(0)
+    yield* expect(errorSpy.items).toEqual([])
   })
 
-  it(`unhandled sync errors should notify the root error listener`, () => {
+  it(`unhandled sync errors should notify the root error listener`, function*({ expect }) {
     const machine = createMachine({
       initial: 'pending',
       states: {
@@ -750,67 +855,79 @@ describe('error handling', () => {
       },
     })
 
-    const errorSpy = vi.fn()
+    const errorSpy = recorder<[unknown]>()
 
     const actorRef = createActor(machine)
     actorRef.subscribe({
-      error: errorSpy,
+      error: errorSpy.record,
     })
     actorRef.start()
 
-    expect(errorSpy.mock.calls).toMatchInlineSnapshot(`
-      [
-        [
-          [Error: unhandled_sync_error_in_actor_start_with_root_error_listener],
+    yield* expect(errorSpy.items.map(([err]) => ({
+      message: getErrorMessage(err),
+      isError: err instanceof Error,
+    }))).toEqual([
+      {
+        message: 'unhandled_sync_error_in_actor_start_with_root_error_listener',
+        isError: true,
+      },
+    ])
+  })
+
+  it(
+    `unhandled sync errors should not notify the global listener when the root error listener is present`,
+    function*({ expect }) {
+      const error = new Error(
+        'unhandled_sync_error_in_actor_start_with_root_error_listener',
+      )
+      const machine = createMachine({
+        initial: 'pending',
+        states: {
+          pending: {
+            invoke: {
+              src: createCallbackLogic(() => {
+                throw error
+              }),
+              onDone: { target: 'success' },
+            },
+          },
+          success: {
+            type: 'final',
+          },
+        },
+      })
+
+      const errorSpy = recorder<[unknown]>()
+      const observed = Promise.withResolvers<void>()
+      const reported = recorder<[unknown]>()
+
+      const actorRef = createActor(machine, {
+        reportUnhandledError: reported.record,
+      })
+      actorRef.subscribe({
+        error: (err) => {
+          errorSpy.record(err)
+          observed.resolve()
+        },
+      })
+      actorRef.start()
+
+      yield* Effect.promise(() => observed.promise)
+
+      yield* expect({
+        errorMessages: errorSpy.items.map(([err]) => getErrorMessage(err)),
+        reportedCount: reported.items.length,
+      }).toEqual({
+        errorMessages: [
+          'unhandled_sync_error_in_actor_start_with_root_error_listener',
         ],
-      ]
-    `)
-  })
+        reportedCount: 0,
+      })
+    },
+  )
 
-  it(`unhandled sync errors should not notify the global listener when the root error listener is present`, () => {
-    const { resolve, reject, promise } = Promise.withResolvers<void>()
-    const machine = createMachine({
-      initial: 'pending',
-      states: {
-        pending: {
-          invoke: {
-            src: createCallbackLogic(() => {
-              throw new Error(
-                'unhandled_sync_error_in_actor_start_with_root_error_listener',
-              )
-            }),
-            onDone: { target: 'success' },
-          },
-        },
-        success: {
-          type: 'final',
-        },
-      },
-    })
-
-    const errorSpy = vi.fn()
-
-    const actorRef = createActor(machine)
-    actorRef.subscribe({
-      error: errorSpy,
-    })
-    actorRef.start()
-
-    expect(errorSpy).toHaveBeenCalledTimes(1)
-
-    installGlobalOnErrorHandler(() => {
-      reject(new Error('Fail'))
-    })
-
-    setTimeout(() => {
-      resolve()
-    }, 10)
-
-    return promise
-  })
-
-  it(`handled sync errors thrown when starting an actor shouldn't crash the parent`, () => {
-    const spy = vi.fn()
+  it(`handled sync errors thrown when starting an actor shouldn't crash the parent`, function*({ expect }) {
+    const doSpy = recorder<[]>()
 
     const machine = createMachine({
       initial: 'pending',
@@ -826,7 +943,7 @@ describe('error handling', () => {
         failed: {
           on: {
             do: (_, enq) => {
-              enq(spy)
+              enq(doSpy.record)
             },
           },
         },
@@ -836,181 +953,211 @@ describe('error handling', () => {
     const actorRef = createActor(machine)
     actorRef.start()
 
-    expect(actorRef.getSnapshot().status).toBe('active')
+    const statusAfterStart = actorRef.getSnapshot().status
 
     actorRef.send({ type: 'do' })
-    expect(spy).toHaveBeenCalledTimes(1)
+
+    yield* expect({
+      statusAfterStart,
+      spyCalls: doSpy.items.length,
+    }).toEqual({
+      statusAfterStart: 'active',
+      spyCalls: 1,
+    })
   })
 
-  it(`unhandled sync errors thrown when starting an actor should crash the parent`, () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
+  it(`unhandled sync errors thrown when starting an actor should crash the parent`, function*({ expect }) {
+    const error = new Error('unhandled_sync_error_in_actor_start')
     const machine = createMachine({
       initial: 'pending',
       states: {
         pending: {
           invoke: {
             src: createCallbackLogic(() => {
-              throw new Error('unhandled_sync_error_in_actor_start')
+              throw error
             }),
           },
         },
       },
     })
 
-    const actorRef = createActor(machine)
+    const reported = recorder<[unknown]>()
+    const { promise, resolve } = Promise.withResolvers<void>()
+    const actorRef = createActor(machine, {
+      reportUnhandledError: (err) => {
+        reported.record(err)
+        resolve()
+      },
+    })
     actorRef.start()
 
-    expect(actorRef.getSnapshot().status).toBe('error')
+    const statusAfterStart = actorRef.getSnapshot().status
 
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      expect(ev.error.message).toEqual('unhandled_sync_error_in_actor_start')
-      resolve()
+    yield* Effect.promise(() => promise)
+
+    yield* expect({
+      statusAfterStart,
+      messages: reported.items.map(([err]) => getErrorMessage(err)),
+    }).toEqual({
+      statusAfterStart: 'error',
+      messages: ['unhandled_sync_error_in_actor_start'],
     })
-
-    return promise
   })
 
-  it(`error thrown by the error listener should be reported globally`, () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
+  it(`error thrown by the error listener should be reported globally`, function*({ expect }) {
+    const machineError = new Error('handled_sync_error_in_actor_start')
+    const listenerError = new Error('error_thrown_by_error_listener')
     const machine = createMachine({
       initial: 'pending',
       states: {
         pending: {
           invoke: {
             src: createCallbackLogic(() => {
-              throw new Error('handled_sync_error_in_actor_start')
+              throw machineError
             }),
           },
         },
       },
     })
 
-    const actorRef = createActor(machine)
+    const reported = recorder<[unknown]>()
+    const { promise, resolve } = Promise.withResolvers<void>()
+    const actorRef = createActor(machine, {
+      reportUnhandledError: (err) => {
+        reported.record(err)
+        resolve()
+      },
+    })
     actorRef.subscribe({
       error: () => {
-        throw new Error('error_thrown_by_error_listener')
+        throw listenerError
       },
     })
     actorRef.start()
 
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      expect(ev.error.message).toEqual('error_thrown_by_error_listener')
-      resolve()
-    })
+    yield* Effect.promise(() => promise)
 
-    return promise
+    yield* expect(reported.items.map(([err]) => getErrorMessage(err))).toEqual([
+      'error_thrown_by_error_listener',
+    ])
   })
 
-  it(`error should be reported globally if not every observer comes with an error listener`, () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
+  it(`error should be reported globally if not every observer comes with an error listener`, function*({ expect }) {
+    const error = new Error(
+      'error_thrown_when_not_every_observer_comes_with_an_error_listener',
+    )
     const machine = createMachine({
       initial: 'pending',
       states: {
         pending: {
           invoke: {
             src: createCallbackLogic(() => {
-              throw new Error(
-                'error_thrown_when_not_every_observer_comes_with_an_error_listener',
-              )
+              throw error
             }),
           },
         },
       },
     })
 
-    const actorRef = createActor(machine)
+    const reported = recorder<[unknown]>()
+    const { promise, resolve } = Promise.withResolvers<void>()
+    const actorRef = createActor(machine, {
+      reportUnhandledError: (err) => {
+        reported.record(err)
+        resolve()
+      },
+    })
     actorRef.subscribe({
       error: function preventUnhandledErrorListener() {},
     })
     actorRef.subscribe(() => {})
     actorRef.start()
 
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      expect(ev.error.message).toEqual(
+    yield* Effect.promise(() => promise)
+
+    yield* expect(reported.items.map(([err]) => getErrorMessage(err))).toEqual([
+      'error_thrown_when_not_every_observer_comes_with_an_error_listener',
+    ])
+  })
+
+  it(
+    `uncaught error and an error thrown by the error listener should both be reported globally when not every observer comes with an error listener`,
+    function*({ expect }) {
+      const machineError = new Error(
         'error_thrown_when_not_every_observer_comes_with_an_error_listener',
       )
-      resolve()
-    })
-    return promise
-  })
-
-  it(`uncaught error and an error thrown by the error listener should both be reported globally when not every observer comes with an error listener`, () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
-    const machine = createMachine({
-      initial: 'pending',
-      states: {
-        pending: {
-          invoke: {
-            src: createCallbackLogic(() => {
-              throw new Error(
-                'error_thrown_when_not_every_observer_comes_with_an_error_listener',
-              )
-            }),
+      const listenerError = new Error('error_thrown_by_error_listener')
+      const machine = createMachine({
+        initial: 'pending',
+        states: {
+          pending: {
+            invoke: {
+              src: createCallbackLogic(() => {
+                throw machineError
+              }),
+            },
           },
         },
-      },
-    })
+      })
 
-    const actorRef = createActor(machine)
-    actorRef.subscribe({
-      error: () => {
-        throw new Error('error_thrown_by_error_listener')
-      },
-    })
-    actorRef.subscribe(() => {})
-    actorRef.start()
+      const reported = recorder<[unknown]>()
+      const { promise, resolve } = Promise.withResolvers<void>()
+      const actorRef = createActor(machine, {
+        reportUnhandledError: (err) => {
+          reported.record(err)
+          if (reported.items.length === 2) {
+            resolve()
+          }
+        },
+      })
+      actorRef.subscribe({
+        error: () => {
+          throw listenerError
+        },
+      })
+      actorRef.subscribe(() => {})
+      actorRef.start()
 
-    let actual: string[] = []
+      yield* Effect.promise(() => promise)
 
-    installGlobalOnErrorHandler((ev) => {
-      ev.preventDefault()
-      actual.push(ev.error.message)
+      yield* expect(reported.items.map(([err]) => getErrorMessage(err))).toEqual([
+        'error_thrown_by_error_listener',
+        'error_thrown_when_not_every_observer_comes_with_an_error_listener',
+      ])
+    },
+  )
 
-      if (actual.length === 2) {
-        expect(actual).toEqual([
-          'error_thrown_by_error_listener',
-          'error_thrown_when_not_every_observer_comes_with_an_error_listener',
-        ])
-        resolve()
-      }
-    })
-
-    return promise
-  })
-
-  it('error thrown in initial custom entry action should error the actor', () => {
+  it('error thrown in initial custom entry action should error the actor', function*({ expect }) {
     const machine = createMachine({
       entry: () => {
         throw new Error('error_thrown_in_initial_entry_action')
       },
     })
 
-    const errorSpy = vi.fn()
+    const errorSpy = recorder<[unknown]>()
 
     const actorRef = createActor(machine)
     actorRef.subscribe({
-      error: errorSpy,
+      error: errorSpy.record,
     })
     actorRef.start()
 
     const snapshot = actorRef.getSnapshot()
-    expect(snapshot.status).toBe('error')
-    expect(snapshot.error).toMatchInlineSnapshot(
-      `[Error: error_thrown_in_initial_entry_action]`,
-    )
-    expect(errorSpy.mock.calls).toMatchInlineSnapshot(`
-      [
-        [
-          [Error: error_thrown_in_initial_entry_action],
-        ],
-      ]
-    `)
+
+    yield* expect({
+      status: snapshot.status,
+      errorMessage: snapshot.error instanceof Error
+        ? snapshot.error.message
+        : undefined,
+      errorCalls: errorSpy.items.map(([err]) => getErrorMessage(err)),
+    }).toEqual({
+      status: 'error',
+      errorMessage: 'error_thrown_in_initial_entry_action',
+      errorCalls: ['error_thrown_in_initial_entry_action'],
+    })
   })
 
-  it('error thrown by a custom entry action when transitioning should error the actor', () => {
+  it('error thrown by a custom entry action when transitioning should error the actor', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -1029,38 +1176,39 @@ describe('error handling', () => {
       },
     })
 
-    const errorSpy = vi.fn()
+    const errorSpy = recorder<[unknown]>()
 
     const actorRef = createActor(machine)
     actorRef.subscribe({
-      error: errorSpy,
+      error: errorSpy.record,
     })
     actorRef.start()
     actorRef.send({ type: 'NEXT' })
 
     const snapshot = actorRef.getSnapshot()
-    expect(snapshot.status).toBe('error')
-    expect(snapshot.error).toMatchInlineSnapshot(
-      `[Error: error_thrown_in_a_custom_entry_action_when_transitioning]`,
-    )
-    expect(errorSpy.mock.calls).toMatchInlineSnapshot(`
-      [
-        [
-          [Error: error_thrown_in_a_custom_entry_action_when_transitioning],
-        ],
-      ]
-    `)
+
+    yield* expect({
+      status: snapshot.status,
+      errorMessage: snapshot.error instanceof Error
+        ? snapshot.error.message
+        : undefined,
+      errorCalls: errorSpy.items.map(([err]) => getErrorMessage(err)),
+    }).toEqual({
+      status: 'error',
+      errorMessage: 'error_thrown_in_a_custom_entry_action_when_transitioning',
+      errorCalls: ['error_thrown_in_a_custom_entry_action_when_transitioning'],
+    })
   })
 
-  it(`shouldn't execute deferred initial actions that come after an action that errors`, () => {
-    const spy = vi.fn()
+  it(`shouldn't execute deferred initial actions that come after an action that errors`, function*({ expect }) {
+    const deferredSpy = recorder<[]>()
 
     const machine = createMachine({
       entry: (_, enq) => {
         enq(() => {
           throw new Error('error_thrown_in_initial_entry_action')
         })
-        enq(spy)
+        enq(deferredSpy.record)
       },
     })
 
@@ -1068,13 +1216,13 @@ describe('error handling', () => {
     actorRef.subscribe({ error: function preventUnhandledErrorListener() {} })
     actorRef.start()
 
-    expect(spy).toHaveBeenCalledTimes(0)
+    yield* expect(deferredSpy.items).toEqual([])
   })
 
-  it('error thrown by an initial logic effect should error the actor', () => {
-    const errorSpy = vi.fn()
+  it('error thrown by an initial logic effect should error the actor', function*({ expect }) {
+    const errorSpy = recorder<[unknown]>()
     const logic: ActorLogic<Snapshot<undefined>, AnyEventObject> = {
-      transition: (snapshot: any) => [snapshot, []],
+      transition: (snapshot: Snapshot<undefined>) => [snapshot, []],
       initialTransition: () => [
         {
           status: 'active',
@@ -1099,22 +1247,29 @@ describe('error handling', () => {
         output: undefined,
         error: undefined,
       }),
-      getPersistedSnapshot: (snapshot: any) => snapshot,
+      getPersistedSnapshot: (snapshot: Snapshot<undefined>) => snapshot,
     }
 
     const actorRef = createActor(logic)
-    actorRef.subscribe({ error: errorSpy })
+    actorRef.subscribe({ error: errorSpy.record })
     actorRef.start()
 
     const snapshot = actorRef.getSnapshot()
-    expect(snapshot.status).toBe('error')
-    expect(snapshot.error).toMatchInlineSnapshot(
-      `[Error: error_thrown_in_initial_logic_effect]`,
-    )
-    expect(errorSpy).toHaveBeenCalledWith(snapshot.error)
+
+    yield* expect({
+      status: snapshot.status,
+      errorMessage: snapshot.error instanceof Error
+        ? snapshot.error.message
+        : undefined,
+      onErrorArgIsSnapshotError: errorSpy.items[0]?.[0] === snapshot.error,
+    }).toEqual({
+      status: 'error',
+      errorMessage: 'error_thrown_in_initial_logic_effect',
+      onErrorArgIsSnapshotError: true,
+    })
   })
 
-  it('should error the parent on errored initial state of a child', async () => {
+  it('should error the parent on errored initial state of a child', function*({ expect }) {
     const immediateFailure = createLogic({
       context: undefined,
       run: () => undefined,
@@ -1142,17 +1297,16 @@ describe('error handling', () => {
 
     const snapshot = actorRef.getSnapshot()
 
-    expect(snapshot.status).toBe('error')
-    expect(snapshot.error).toBe('immediate error!')
+    yield* expect({
+      status: snapshot.status,
+      error: snapshot.error,
+    }).toEqual({
+      status: 'error',
+      error: 'immediate error!',
+    })
   })
 
-  it('actor continues to work normally after emit callback errors', async () => {
-    // const machine = setup({
-    //   types: {
-    //     emitted: {} as { type: 'emitted'; foo: string }
-    //   }
-    // }).
-
+  it('actor continues to work normally after emit callback errors', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         emitted: {
@@ -1163,9 +1317,6 @@ describe('error handling', () => {
         },
       },
       on: {
-        // someEvent: {
-        //   actions: emit({ type: 'emitted', foo: 'bar' })
-        // }
         someEvent: (_, enq) => {
           enq.emit({
             type: 'emitted',
@@ -1175,7 +1326,14 @@ describe('error handling', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const reported = recorder<[unknown]>()
+    const firstReport = Promise.withResolvers<void>()
+    const actor = createActor(machine, {
+      reportUnhandledError: (err) => {
+        reported.record(err)
+        firstReport.resolve()
+      },
+    }).start()
     let errorThrown = false
 
     actor.on('emitted', () => {
@@ -1183,29 +1341,41 @@ describe('error handling', () => {
       throw new Error('oops')
     })
 
-    // Send first event - should trigger error but actor should remain active
     actor.send({ type: 'someEvent' })
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    yield* Effect.promise(() => firstReport.promise)
 
-    expect(errorThrown).toBe(true)
-    expect(actor.getSnapshot().status).toEqual('active')
+    const errorThrownAfterFirst = errorThrown
+    const statusAfterFirst = actor.getSnapshot().status
+    const reportedAfterFirst = reported.items.length
 
-    // Send second event - should work normally without error
-    const event = await new Promise<AnyEventObject>((res) => {
-      actor.on('emitted', res)
-      actor.send({ type: 'someEvent' })
+    const emitted = Promise.withResolvers<AnyEventObject>()
+    actor.on('emitted', emitted.resolve)
+    actor.send({ type: 'someEvent' })
+    const event = yield* Effect.promise(() => emitted.promise)
+
+    yield* expect({
+      errorThrown: errorThrownAfterFirst,
+      statusAfterFirst,
+      reportedAfterFirst,
+      reportedMessages: reported.items.map(([err]) => getErrorMessage(err)),
+      emittedFoo: event['foo'],
+      statusAfterSecond: actor.getSnapshot().status,
+    }).toEqual({
+      errorThrown: true,
+      statusAfterFirst: 'active',
+      reportedAfterFirst: 1,
+      reportedMessages: ['oops', 'oops'],
+      emittedFoo: 'bar',
+      statusAfterSecond: 'active',
     })
-
-    expect(event['foo']).toBe('bar')
-    expect(actor.getSnapshot().status).toEqual('active')
   })
 
-  it('state onError catches errors thrown by initial entry actions', () => {
-    const errorSpy = vi.fn()
+  it('state onError catches errors thrown by initial entry actions', function*({ expect }) {
+    const errorSpy = recorder<[unknown]>()
     const machine = createMachine({
       initial: 'active',
       onError: ({ event }) => {
-        errorSpy(getErrorMessage(event.error))
+        errorSpy.record(getErrorMessage(event.error))
         return {
           target: '.failed',
         }
@@ -1222,13 +1392,19 @@ describe('error handling', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().value).toBe('failed')
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(errorSpy).toHaveBeenCalledWith('initial entry failed')
+    yield* expect({
+      value: actor.getSnapshot().value,
+      status: actor.getSnapshot().status,
+      errorCalls: errorSpy.items,
+    }).toEqual({
+      value: 'failed',
+      status: 'active',
+      errorCalls: [['initial entry failed']],
+    })
   })
 
-  it('state onError catches errors thrown by transition actions', () => {
-    const errorSpy = vi.fn()
+  it('state onError catches errors thrown by transition actions', function*({ expect }) {
+    const errorSpy = recorder<[unknown]>()
     const machine = createMachine({
       initial: 'active',
       states: {
@@ -1241,7 +1417,7 @@ describe('error handling', () => {
             },
           },
           onError: ({ event }) => {
-            errorSpy(getErrorMessage(event.error))
+            errorSpy.record(getErrorMessage(event.error))
             return {
               target: 'failed',
             }
@@ -1254,52 +1430,72 @@ describe('error handling', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'NEXT' })
 
-    expect(actor.getSnapshot().value).toBe('failed')
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(errorSpy).toHaveBeenCalledWith('transition action failed')
+    yield* expect({
+      value: actor.getSnapshot().value,
+      status: actor.getSnapshot().status,
+      errorCalls: errorSpy.items,
+    }).toEqual({
+      value: 'failed',
+      status: 'active',
+      errorCalls: [['transition action failed']],
+    })
   })
 
-  it('does not report an error that a subscriber observes before the report runs', async () => {
-    const reported: unknown[] = []
-    installGlobalOnErrorHandler((ev) => {
-      if (getErrorMessage(ev.error) === 'sync failure') {
-        reported.push(ev.error)
-      }
-    })
-    const errorSpy = vi.fn()
+  it.live('does not report an error that a subscriber observes before the report runs', function*({ expect }) {
+    const error = new Error('sync failure')
+    const errorSpy = recorder<[unknown]>()
+    const reported = recorder<[unknown]>()
     const actor = createActor(
       createCallbackLogic(() => {
-        throw new Error('sync failure')
+        throw error
       }),
+      { reportUnhandledError: reported.record },
     )
+
     actor.start()
-    expect(actor.getSnapshot().status).toBe('error')
-    actor.subscribe({ error: errorSpy })
+    const statusAfterStart = actor.getSnapshot().status
+    actor.subscribe({ error: errorSpy.record })
 
-    await sleep(20)
+    yield* Effect.sleep('1 millis')
 
-    expect(errorSpy).toHaveBeenCalledTimes(1)
-    expect(reported).toEqual([])
+    yield* expect({
+      statusAfterStart,
+      errorCalls: errorSpy.items.length,
+      reportedCount: reported.items.length,
+    }).toEqual({
+      statusAfterStart: 'error',
+      errorCalls: 1,
+      reportedCount: 0,
+    })
   })
 
-  it('reports an error that no subscriber observed', async () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
-    installGlobalOnErrorHandler((ev) => {
-      expect(getErrorMessage(ev.error)).toBe('sync failure')
-      resolve()
-    })
+  it('reports an error that no subscriber observed', function*({ expect }) {
+    const error = new Error('sync failure')
+    const reported = recorder<[unknown]>()
+    const { promise, resolve } = Promise.withResolvers<void>()
     const actor = createActor(
       createCallbackLogic(() => {
-        throw new Error('sync failure')
+        throw error
       }),
+      {
+        reportUnhandledError: (err) => {
+          reported.record(err)
+          resolve()
+        },
+      },
     )
+
     actor.start()
 
-    await promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect(reported.items.map(([err]) => getErrorMessage(err))).toEqual([
+      'sync failure',
+    ])
   })
 
-  it('state onError catches rejected transition action promises', async () => {
-    const errorSpy = vi.fn()
+  it('state onError catches rejected transition action promises', function*({ expect }) {
+    const errorSpy = recorder<[unknown]>()
     const machine = createMachine({
       initial: 'active',
       states: {
@@ -1310,7 +1506,7 @@ describe('error handling', () => {
             },
           },
           onError: ({ event }) => {
-            errorSpy(getErrorMessage(event.error))
+            errorSpy.record(getErrorMessage(event.error))
             return {
               target: 'failed',
             }
@@ -1322,79 +1518,98 @@ describe('error handling', () => {
 
     const actor = createActor(machine).start()
     actor.send({ type: 'NEXT' })
-    await Promise.resolve()
+    yield* Effect.promise(() => Promise.resolve())
 
-    expect(actor.getSnapshot().value).toBe('failed')
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(errorSpy).toHaveBeenCalledWith('transition action rejected')
+    yield* expect({
+      value: actor.getSnapshot().value,
+      status: actor.getSnapshot().status,
+      errorCalls: errorSpy.items,
+    }).toEqual({
+      value: 'failed',
+      status: 'active',
+      errorCalls: [['transition action rejected']],
+    })
   })
 
-  it('state onError accepts a cross-state context patch (typed against the target state schema)', () => {
-    const machine = setup({
-      schemas: {
-        context: z.object({
-          error: z.union([z.string(), z.null()]),
-        }),
-      },
-      states: {
-        active: { schemas: { context: z.object({ error: z.null() }) } },
-        failed: { schemas: { context: z.object({ error: z.string() }) } },
-      },
-    }).createMachine({
-      context: { error: null },
-      initial: 'active',
-      states: {
-        active: {
-          on: {
-            NEXT: () => {
-              throw new Error('boom')
+  it(
+    'state onError accepts a cross-state context patch (typed against the target state schema)',
+    function*({ expect }) {
+      const machine = setup({
+        schemas: {
+          context: z.object({
+            error: z.union([z.string(), z.null()]),
+          }),
+        },
+        states: {
+          active: { schemas: { context: z.object({ error: z.null() }) } },
+          failed: { schemas: { context: z.object({ error: z.string() }) } },
+        },
+      }).createMachine({
+        context: { error: null },
+        initial: 'active',
+        states: {
+          active: {
+            on: {
+              NEXT: () => {
+                throw new Error('boom')
+              },
             },
+            onError: ({ event }) => ({
+              target: 'failed',
+              context: { error: getErrorMessage(event.error) },
+            }),
           },
-          onError: ({ event }) => ({
-            target: 'failed',
-            context: { error: getErrorMessage(event.error) },
+          failed: {},
+        },
+      })
+
+      const actor = createActor(machine).start()
+      actor.send({ type: 'NEXT' })
+
+      yield* expect({
+        value: actor.getSnapshot().value,
+        context: actor.getSnapshot().context,
+      }).toEqual({
+        value: 'failed',
+        context: { error: 'boom' },
+      })
+    },
+  )
+
+  it(
+    'state onError rejects a cross-state context patch that does not match the target state schema',
+    function*({ expect }) {
+      const machine = setup({
+        schemas: {
+          context: z.object({
+            error: z.union([z.string(), z.null()]),
           }),
         },
-        failed: {},
-      },
-    })
-
-    const actor = createActor(machine).start()
-    actor.send({ type: 'NEXT' })
-
-    expect(actor.getSnapshot().value).toBe('failed')
-    expect(actor.getSnapshot().context).toEqual({ error: 'boom' })
-  })
-
-  it('state onError rejects a cross-state context patch that does not match the target state schema', () => {
-    setup({
-      schemas: {
-        context: z.object({
-          error: z.union([z.string(), z.null()]),
-        }),
-      },
-      states: {
-        active: { schemas: { context: z.object({ error: z.null() }) } },
-        failed: { schemas: { context: z.object({ error: z.string() }) } },
-      },
-    }).createMachine({
-      context: { error: null },
-      initial: 'active',
-      states: {
-        active: {
-          // @ts-expect-error - `error: null` is not assignable to the target state's context
-          onError: () => ({
-            target: 'failed',
-            context: { error: null },
-          }),
+        states: {
+          active: { schemas: { context: z.object({ error: z.null() }) } },
+          failed: { schemas: { context: z.object({ error: z.string() }) } },
         },
-        failed: {},
-      },
-    })
-  })
+      }).createMachine({
+        context: { error: null },
+        initial: 'active',
+        states: {
+          active: {
+            // @ts-expect-error - `error: null` is not assignable to the target state's context
+            onError: () => ({
+              target: 'failed',
+              context: { error: null },
+            }),
+          },
+          failed: {},
+        },
+      })
 
-  it('state onError catches errors thrown by transition functions', () => {
-    const errorSpy = vi.fn()
+      yield* expect(machine.config.initial).toEqual('active')
+    },
+  )
+
+  it('state onError catches errors thrown by transition functions', function*({ expect }) {
+    const errorSpy = recorder<[unknown]>()
     const machine = createMachine({
       initial: 'active',
       states: {
@@ -1405,7 +1620,7 @@ describe('error handling', () => {
             },
           },
           onError: ({ event }) => {
-            errorSpy(getErrorMessage(event.error))
+            errorSpy.record(getErrorMessage(event.error))
             return {
               target: 'failed',
             }
@@ -1419,13 +1634,19 @@ describe('error handling', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'NEXT' })
 
-    expect(actor.getSnapshot().value).toBe('failed')
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(errorSpy).toHaveBeenCalledWith('transition function failed')
+    yield* expect({
+      value: actor.getSnapshot().value,
+      status: actor.getSnapshot().status,
+      errorCalls: errorSpy.items,
+    }).toEqual({
+      value: 'failed',
+      status: 'active',
+      errorCalls: [['transition function failed']],
+    })
   })
 
-  it('state onError catches errors thrown by target entry actions', () => {
-    const errorSpy = vi.fn()
+  it('state onError catches errors thrown by target entry actions', function*({ expect }) {
+    const errorSpy = recorder<[unknown]>()
     const machine = createMachine({
       initial: 'active',
       states: {
@@ -1436,7 +1657,7 @@ describe('error handling', () => {
             },
           },
           onError: ({ event }) => {
-            errorSpy(getErrorMessage(event.error))
+            errorSpy.record(getErrorMessage(event.error))
             return {
               target: 'failed',
             }
@@ -1454,13 +1675,19 @@ describe('error handling', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'NEXT' })
 
-    expect(actor.getSnapshot().value).toBe('failed')
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(errorSpy).toHaveBeenCalledWith('target entry failed')
+    yield* expect({
+      value: actor.getSnapshot().value,
+      status: actor.getSnapshot().status,
+      errorCalls: errorSpy.items,
+    }).toEqual({
+      value: 'failed',
+      status: 'active',
+      errorCalls: [['target entry failed']],
+    })
   })
 
-  it('state onError catches invoked actor errors', () => {
-    const errorSpy = vi.fn()
+  it('state onError catches invoked actor errors', function*({ expect }) {
+    const errorSpy = recorder<[unknown]>()
     const machine = createMachine({
       initial: 'active',
       states: {
@@ -1471,7 +1698,7 @@ describe('error handling', () => {
             }),
           },
           onError: ({ event }) => {
-            errorSpy(getErrorMessage(event.error))
+            errorSpy.record(getErrorMessage(event.error))
             return {
               target: 'failed',
             }
@@ -1483,13 +1710,19 @@ describe('error handling', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().value).toBe('failed')
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(errorSpy).toHaveBeenCalledWith('invoked actor failed')
+    yield* expect({
+      value: actor.getSnapshot().value,
+      status: actor.getSnapshot().status,
+      errorCalls: errorSpy.items,
+    }).toEqual({
+      value: 'failed',
+      status: 'active',
+      errorCalls: [['invoked actor failed']],
+    })
   })
 
-  it('state onError catches errors from invoked actor initialization', () => {
-    const errorSpy = vi.fn()
+  it('state onError catches errors from invoked actor initialization', function*({ expect }) {
+    const errorSpy = recorder<[unknown]>()
     const childMachine = createMachine({
       context: () => {
         throw new Error('invoked actor initialization failed')
@@ -1501,7 +1734,7 @@ describe('error handling', () => {
         active: {
           invoke: { src: childMachine },
           onError: ({ event }) => {
-            errorSpy(getErrorMessage(event.error))
+            errorSpy.record(getErrorMessage(event.error))
             return { target: 'failed' }
           },
         },
@@ -1511,30 +1744,45 @@ describe('error handling', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().value).toBe('failed')
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(errorSpy).toHaveBeenCalledWith(
-      'invoked actor initialization failed',
-    )
+    yield* expect({
+      value: actor.getSnapshot().value,
+      status: actor.getSnapshot().status,
+      errorCalls: errorSpy.items,
+    }).toEqual({
+      value: 'failed',
+      status: 'active',
+      errorCalls: [['invoked actor initialization failed']],
+    })
   })
 
   describe('missing send targets', () => {
-    function observe(machine: any) {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      cleanups.push(() => warn.mockRestore())
-      const rejections: any[] = []
-      const errorSpy = vi.fn()
-      const onErrorSpy = vi.fn()
+    function observe(machine: AnyStateMachine) {
+      const rejections: EventRejection[] = []
+      const errorSpy = recorder<[unknown]>()
+      const warnings: string[] = []
       const actor = createActor(machine, {
-        onRejectedEvent: (rejection) => rejections.push(rejection),
+        onRejectedEvent: (rejection) => {
+          rejections.push(rejection)
+        },
+        warn: (message) => {
+          warnings.push(message)
+        },
       })
-      actor.subscribe({ error: errorSpy })
+      actor.subscribe({ error: errorSpy.record })
       actor.start()
-      return { actor, warn, rejections, errorSpy, onErrorSpy }
+      return { actor, rejections, errorSpy, warnings }
     }
 
     function machineSending(
-      send: (args: any, enq: any) => void,
+      send: (
+        args: { parent?: AnyActorRef | undefined },
+        enq: {
+          sendTo: (
+            target: AnyActorRef | string | undefined,
+            event: AnyEventObject,
+          ) => void
+        },
+      ) => void,
       onErrorSpy: () => void,
     ) {
       return createMachine({
@@ -1553,77 +1801,111 @@ describe('error handling', () => {
       })
     }
 
-    it('dead-letters a send to an undefined ref without erroring the actor', () => {
-      const onErrorSpy = vi.fn()
-      const { actor, warn, rejections, errorSpy } = observe(
+    it('dead-letters a send to an undefined ref without erroring the actor', function*({ expect }) {
+      let onErrorCalls = 0
+      const { actor, rejections, errorSpy, warnings } = observe(
         machineSending((_, enq) => {
           enq.sendTo(undefined, { type: 'PING' })
-        }, onErrorSpy),
+        }, () => {
+          onErrorCalls++
+        }),
       )
+
       actor.send({ type: 'NEXT' })
 
-      expect(actor.getSnapshot().status).toBe('active')
-      expect(actor.getSnapshot().value).toBe('active')
-      expect(onErrorSpy).not.toHaveBeenCalled()
-      expect(errorSpy).not.toHaveBeenCalled()
-      expect(rejections).toEqual([
-        expect.objectContaining({
-          event: { type: 'PING' },
-          reason: 'missingTarget',
-          sourceRef: actor,
-          targetRef: undefined,
-          targetId: undefined,
-        }),
-      ])
-      expect(warn).toHaveBeenCalledWith(
-        'Actor "sender" sent event "PING" to missing target undefined; the event was not delivered (missingTarget).',
-      )
+      yield* expect({
+        status: actor.getSnapshot().status,
+        value: actor.getSnapshot().value,
+        onErrorCalls,
+        errorCalls: errorSpy.items.length,
+        warnings,
+        rejections,
+      }).toEqual({
+        status: 'active',
+        value: 'active',
+        onErrorCalls: 0,
+        errorCalls: 0,
+        warnings: [
+          'Actor "sender" sent event "PING" to missing target undefined; the event was not delivered (missingTarget).',
+        ],
+        rejections: [
+          expect.objectContaining({
+            event: { type: 'PING' },
+            reason: 'missingTarget',
+            sourceRef: actor,
+            targetRef: undefined,
+            targetId: undefined,
+          }),
+        ],
+      })
     })
 
-    it('dead-letters a send to an unknown child id without erroring the actor', () => {
-      const onErrorSpy = vi.fn()
-      const { actor, warn, rejections, errorSpy } = observe(
+    it('dead-letters a send to an unknown child id without erroring the actor', function*({ expect }) {
+      let onErrorCalls = 0
+      const { actor, rejections, errorSpy, warnings } = observe(
         machineSending((_, enq) => {
           enq.sendTo('worker', { type: 'PING' })
-        }, onErrorSpy),
+        }, () => {
+          onErrorCalls++
+        }),
       )
+
       actor.send({ type: 'NEXT' })
 
-      expect(actor.getSnapshot().status).toBe('active')
-      expect(actor.getSnapshot().value).toBe('active')
-      expect(onErrorSpy).not.toHaveBeenCalled()
-      expect(errorSpy).not.toHaveBeenCalled()
-      expect(rejections).toEqual([
-        expect.objectContaining({
-          reason: 'missingTarget',
-          targetId: 'worker',
-          sourceRef: actor,
-        }),
-      ])
-      expect(warn).toHaveBeenCalledWith(
-        'Actor "sender" sent event "PING" to missing target "worker"; the event was not delivered (missingTarget).',
-      )
+      yield* expect({
+        status: actor.getSnapshot().status,
+        value: actor.getSnapshot().value,
+        onErrorCalls,
+        errorCalls: errorSpy.items.length,
+        warnings,
+        rejections,
+      }).toEqual({
+        status: 'active',
+        value: 'active',
+        onErrorCalls: 0,
+        errorCalls: 0,
+        warnings: [
+          'Actor "sender" sent event "PING" to missing target "worker"; the event was not delivered (missingTarget).',
+        ],
+        rejections: [
+          expect.objectContaining({
+            reason: 'missingTarget',
+            targetId: 'worker',
+            sourceRef: actor,
+          }),
+        ],
+      })
     })
 
-    it('dead-letters a send to the parent of a root actor', () => {
-      const onErrorSpy = vi.fn()
+    it('dead-letters a send to the parent of a root actor', function*({ expect }) {
+      let onErrorCalls = 0
       const { actor, rejections, errorSpy } = observe(
         machineSending(({ parent }, enq) => {
           enq.sendTo(parent, { type: 'PING' })
-        }, onErrorSpy),
+        }, () => {
+          onErrorCalls++
+        }),
       )
+
       actor.send({ type: 'NEXT' })
 
-      expect(actor.getSnapshot().status).toBe('active')
-      expect(onErrorSpy).not.toHaveBeenCalled()
-      expect(errorSpy).not.toHaveBeenCalled()
-      expect(rejections).toEqual([
-        expect.objectContaining({
-          reason: 'missingTarget',
-          sourceRef: actor,
-          targetRef: undefined,
-        }),
-      ])
+      yield* expect({
+        status: actor.getSnapshot().status,
+        onErrorCalls,
+        errorCalls: errorSpy.items.length,
+        rejections,
+      }).toEqual({
+        status: 'active',
+        onErrorCalls: 0,
+        errorCalls: 0,
+        rejections: [
+          expect.objectContaining({
+            reason: 'missingTarget',
+            sourceRef: actor,
+            targetRef: undefined,
+          }),
+        ],
+      })
     })
   })
 })
