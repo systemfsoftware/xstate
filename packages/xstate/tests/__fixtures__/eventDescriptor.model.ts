@@ -31,7 +31,7 @@ export type Descriptor = Schema.Schema.Type<typeof Descriptor>
 
 export const AssertionCommand = Schema.Union([
   Schema.TaggedStruct('Assert', { event: Event, descriptor: Descriptor }),
-  Schema.TaggedStruct('AssertOneOf', { event: Event, descriptors: Schema.NonEmptyArray(Descriptor) }),
+  Schema.TaggedStruct('AssertOneOf', { event: Event, descriptors: Schema.Array(Descriptor) }),
 ])
 export type AssertionCommand = Schema.Schema.Type<typeof AssertionCommand>
 
