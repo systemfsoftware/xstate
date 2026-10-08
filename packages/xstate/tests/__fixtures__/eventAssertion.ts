@@ -172,4 +172,3 @@ export const runAssertionCommand = (
     const subject = yield* EventAssertion
     return subject.assert(command)
   })
-
