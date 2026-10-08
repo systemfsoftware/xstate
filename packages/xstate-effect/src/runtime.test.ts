@@ -2,7 +2,7 @@ import { describe } from '@systemfsoftware/vitest'
 import { type AnyActorRef, createActor, createMachine, type EventRejection, setup } from '@systemfsoftware/xstate'
 import { Context, Deferred, Duration, Effect, Fiber, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
-import { until } from '../tests/untilCondition.js'
+import { untilOnLiveClock } from '../tests/__fixtures__/untilCondition.js'
 import {
   createEffectActor,
   deadLetters,
@@ -45,7 +45,7 @@ const observedTaskCleanup = Effect.gen(function*() {
         (effect) => fromEffect(effect),
         (logic) => createEffectActor(logic),
       )
-      yield* until(() => started.value)
+      yield* untilOnLiveClock(() => started.value)
     }),
   )
   return order
@@ -79,9 +79,9 @@ const observedStreamResources = (kind: 'snapshot' | 'event') =>
       },
     })
     const actor = yield* createEffectActor(machine)
-    yield* until(() => started.value)
+    yield* untilOnLiveClock(() => started.value)
     actor.send({ type: 'CANCEL' })
-    yield* until(() => released.value === 1)
+    yield* untilOnLiveClock(() => released.value === 1)
     return {
       value: actor.getSnapshot().value,
       status: actor.getSnapshot().status,
@@ -129,12 +129,12 @@ const observedActorScopedResources = (outcome: 'success' | 'cancel') =>
     const inside = yield* Effect.scoped(
       Effect.gen(function*() {
         const actor = yield* createEffectActor(machine)
-        yield* until(() => started.value)
+        yield* untilOnLiveClock(() => started.value)
         if (outcome === 'cancel') {
           actor.send({ type: 'CANCEL' })
-          yield* until(() => interrupted.value)
+          yield* untilOnLiveClock(() => interrupted.value)
         }
-        yield* until(() => actor.getSnapshot().matches('idle'))
+        yield* untilOnLiveClock(() => actor.getSnapshot().matches('idle'))
         return {
           releasedAtActive: released.value,
           statusAtActive: actor.getSnapshot().status,
@@ -163,7 +163,7 @@ const observedActionOverride = Effect.gen(function*() {
     }),
   })
   actor.send({ type: 'GO' })
-  yield* until(() => recorded.value)
+  yield* untilOnLiveClock(() => recorded.value)
   return actor.getSnapshot().status
 })
 
@@ -206,10 +206,10 @@ const observedInvocationRelease = (outcome: 'success' | 'failure' | 'cancel') =>
       },
     })
     const actor = yield* createEffectActor(machine)
-    yield* until(() => started.value)
+    yield* untilOnLiveClock(() => started.value)
     if (outcome === 'cancel') actor.send({ type: 'CANCEL' })
-    yield* until(() => actor.getSnapshot().matches('idle'))
-    yield* until(() => released.value === 1)
+    yield* untilOnLiveClock(() => actor.getSnapshot().matches('idle'))
+    yield* untilOnLiveClock(() => released.value === 1)
     const status = actor.getSnapshot().status
     return outcome === 'cancel'
       ? { status, released: released.value }
@@ -241,7 +241,7 @@ const observedAsyncFinalizer = Effect.gen(function*() {
         (effect) => fromEffect(effect),
         (logic) => createEffectActor(logic),
       )
-      yield* until(() => started.value)
+      yield* untilOnLiveClock(() => started.value)
     }),
   )
   return { released: released.value }
@@ -263,7 +263,7 @@ const observedScopeCloseInterrupt = Effect.gen(function*() {
   const whileOpen = yield* Effect.scoped(
     Effect.gen(function*() {
       const actor = yield* createEffectActor(logic)
-      yield* until(() => started.value)
+      yield* untilOnLiveClock(() => started.value)
 
       return {
         actor,
@@ -296,12 +296,12 @@ const observedStopFinalizer = Effect.gen(function*() {
     }),
   )
   const actor = yield* createEffectActor(logic)
-  yield* until(() => started.value)
+  yield* untilOnLiveClock(() => started.value)
 
   const before = released.value
 
   actor.stop()
-  yield* until(() => released.value === 1)
+  yield* untilOnLiveClock(() => released.value === 1)
 
   return { before, after: released.value }
 })
@@ -324,7 +324,7 @@ const observedScopeCloseFinalizer = Effect.gen(function*() {
         (effect) => fromEffect(effect),
         (logic) => createEffectActor(logic),
       )
-      yield* until(() => started.value)
+      yield* untilOnLiveClock(() => started.value)
 
       return released.value
     }),
@@ -356,13 +356,13 @@ const observedCompletedActionFinalizer = Effect.gen(function*() {
   const actor = yield* createEffectActor(machine)
 
   actor.send({ type: 'WORK' })
-  yield* until(() => completed.value)
+  yield* untilOnLiveClock(() => completed.value)
 
   const releasedWhileActive = released.value
   const statusWhileActive = actor.getSnapshot().status
 
   actor.stop()
-  yield* until(() => released.value === 1)
+  yield* untilOnLiveClock(() => released.value === 1)
 
   return {
     releasedWhileActive,
@@ -389,7 +389,7 @@ const observedHostedFinalizerOrder = Effect.gen(function*() {
         (effect) => fromEffect(effect),
         (logic) => createEffectActor(logic),
       )
-      yield* until(() => started.value)
+      yield* untilOnLiveClock(() => started.value)
     }),
   )
   order.push('scope closed')
@@ -413,8 +413,8 @@ const observedErrorFinalizer = Effect.gen(function*() {
   )
   const actor = yield* createEffectActor(logic)
   actor.subscribe({ error: () => {} })
-  yield* until(() => actor.getSnapshot().status === 'error')
-  yield* until(() => released.value === 1)
+  yield* untilOnLiveClock(() => actor.getSnapshot().status === 'error')
+  yield* untilOnLiveClock(() => released.value === 1)
 
   return released.value
 })
@@ -438,11 +438,11 @@ const observedDoubleStop = Effect.gen(function*() {
         (effect) => fromEffect(effect),
         (logic) => createEffectActor(logic),
       )
-      yield* until(() => started.value)
+      yield* untilOnLiveClock(() => started.value)
 
       actor.stop()
       actor.stop()
-      yield* until(() => released.value === 1)
+      yield* untilOnLiveClock(() => released.value === 1)
 
       stopped.value = actor.getSnapshot().status
     }),
@@ -511,7 +511,7 @@ const observedSelfInterruption = Effect.gen(function*() {
     (effect) => fromEffect(effect),
     (logic) => createEffectActor(logic),
   )
-  yield* until(() => actor.getSnapshot().status === 'error')
+  yield* untilOnLiveClock(() => actor.getSnapshot().status === 'error')
 
   const error: unknown = actor.getSnapshot().error
   return {
@@ -524,7 +524,7 @@ const observedTimeout = Effect.gen(function*() {
   const logic = fromEffect(Effect.timeout(Effect.never, Duration.millis(1)))
   const actor = yield* createEffectActor(logic)
   actor.subscribe({ error: () => {} })
-  yield* until(() => actor.getSnapshot().status === 'error')
+  yield* untilOnLiveClock(() => actor.getSnapshot().status === 'error')
 
   const error: unknown = actor.getSnapshot().error
   return {
@@ -539,7 +539,7 @@ const observedDefect = Effect.gen(function*() {
     (effect) => fromEffect(effect),
     (logic) => createEffectActor(logic),
   )
-  yield* until(() => actor.getSnapshot().status === 'error')
+  yield* untilOnLiveClock(() => actor.getSnapshot().status === 'error')
 
   return {
     status: actor.getSnapshot().status,
@@ -567,7 +567,7 @@ const observedInterruptedInvoke = Effect.gen(function*() {
   })
 
   const actor = yield* createEffectActor(machine)
-  yield* until(() => actor.getSnapshot().value === 'failed')
+  yield* untilOnLiveClock(() => actor.getSnapshot().value === 'failed')
 
   return received.value
 })
@@ -597,7 +597,7 @@ const observedInvokeExit = Effect.gen(function*() {
   const child = actor.getSnapshot().children['worker']
 
   actor.send({ type: 'CANCEL' })
-  yield* until(() => interrupted.value)
+  yield* untilOnLiveClock(() => interrupted.value)
 
   return {
     value: actor.getSnapshot().value,
@@ -635,9 +635,9 @@ const observedStopInterruptsAction = Effect.gen(function*() {
   const actor = yield* createEffectActor(machine)
 
   actor.send({ type: 'WORK' })
-  yield* until(() => started.value)
+  yield* untilOnLiveClock(() => started.value)
   actor.stop()
-  yield* until(() => interrupted.value)
+  yield* untilOnLiveClock(() => interrupted.value)
 
   return { interrupted: interrupted.value }
 })
@@ -664,9 +664,9 @@ const observedNonBlockingAction = Effect.gen(function*() {
   const actor = yield* createEffectActor(machine)
 
   actor.send({ type: 'WORK' })
-  yield* until(() => started.value)
+  yield* untilOnLiveClock(() => started.value)
   actor.send({ type: 'PING' })
-  yield* until(() => actor.getSnapshot().context['count'] === 1)
+  yield* untilOnLiveClock(() => actor.getSnapshot().context['count'] === 1)
 
   return { context: actor.getSnapshot().context, finished: finished.value }
 })
@@ -700,7 +700,7 @@ const observedProvidedEffectAction = Effect.gen(function*() {
     },
   )
   actor.send({ type: 'AUDIT' })
-  yield* until(() => recorded.length > 0, { timeoutMs: 50 })
+  yield* untilOnLiveClock(() => recorded.length > 0, { timeoutMs: 50 })
 
   return recorded
 })
@@ -726,7 +726,7 @@ const observedProvidedPlainAction = Effect.gen(function*() {
 
   const actor = yield* createEffectActor(provided)
   actor.send({ type: 'AUDIT' })
-  yield* until(() => recorded.length > 0)
+  yield* untilOnLiveClock(() => recorded.length > 0)
 
   return recorded
 })
@@ -758,9 +758,9 @@ const observedEmittedEvents = Effect.gen(function*() {
         collected.push(event)
       })),
   )
-  yield* until(() => listeners.value > 0)
+  yield* untilOnLiveClock(() => listeners.value > 0)
   yield* Deferred.succeed(gate, void 0)
-  yield* until(() => collected.length === 2)
+  yield* untilOnLiveClock(() => collected.length === 2)
 
   return collected
 })
@@ -771,7 +771,7 @@ const observedStreamFailure = Effect.gen(function*() {
     (stream) => fromEffectStream(stream),
     (logic) => createEffectActor(logic),
   )
-  yield* until(() => actor.getSnapshot().status === 'error')
+  yield* untilOnLiveClock(() => actor.getSnapshot().status === 'error')
 
   return actor.getSnapshot().error
 })
@@ -801,7 +801,7 @@ const observedStreamInterrupt = Effect.gen(function*() {
 
   const actor = yield* createEffectActor(machine)
   actor.send({ type: 'CANCEL' })
-  yield* until(() => interrupted.value)
+  yield* untilOnLiveClock(() => interrupted.value)
 
   return actor.getSnapshot().value
 })
@@ -821,7 +821,7 @@ const observedRaceLoser = Effect.gen(function*() {
   )
 
   const actor = yield* createEffectActor(logic)
-  yield* until(() => actor.getSnapshot().status === 'done')
+  yield* untilOnLiveClock(() => actor.getSnapshot().status === 'done')
 
   return {
     output: actor.getSnapshot().output,
@@ -867,7 +867,7 @@ const observedParentChainHost = Effect.gen(function*() {
   const actor = yield* Effect.provideService(createEffectActor(root), Greeting, {
     value: 'from the root',
   })
-  yield* until(() => actor.getSnapshot().value === 'done')
+  yield* untilOnLiveClock(() => actor.getSnapshot().value === 'done')
 
   return actor.getSnapshot().value
 })
@@ -891,7 +891,7 @@ const observedSpawnedLogic = Effect.gen(function*() {
     value: 'spawned',
   })
   const ref = actor.getSnapshot().context['ref']!
-  yield* until(() => ref.getSnapshot().status === 'done')
+  yield* untilOnLiveClock(() => ref.getSnapshot().status === 'done')
 
   return ref.getSnapshot().output
 })
@@ -906,7 +906,7 @@ const observedInlineSpawnRejected = Effect.gen(function*() {
 
   const actor = yield* createEffectActor(machine)
   const ref = actor.getSnapshot().context['ref']!
-  yield* until(() => ref.getSnapshot().status === 'error')
+  yield* untilOnLiveClock(() => ref.getSnapshot().status === 'error')
 
   return String(ref.getSnapshot().error)
 })
@@ -939,9 +939,9 @@ const observedInlineSpawnDynamicSrc = Effect.gen(function*() {
 
   const actor = yield* createEffectActor(machine)
   const { declared, inline } = actor.getSnapshot().context
-  yield* until(() => declared!.getSnapshot().status === 'done')
-  yield* until(() => inline!.getSnapshot().status === 'error')
-  yield* until(() => actor.getSnapshot().value === 'done')
+  yield* untilOnLiveClock(() => declared!.getSnapshot().status === 'done')
+  yield* untilOnLiveClock(() => inline!.getSnapshot().status === 'error')
+  yield* untilOnLiveClock(() => actor.getSnapshot().value === 'done')
 
   return {
     declaredOutput: declared!.getSnapshot().output,
@@ -973,7 +973,7 @@ const observedActionDefectOnError = Effect.gen(function*() {
 
   const actor = yield* createEffectActor(machine)
   actor.send({ type: 'BOOM' })
-  yield* until(() => actor.getSnapshot().value === 'failed')
+  yield* untilOnLiveClock(() => actor.getSnapshot().value === 'failed')
 
   return { receivedIsDefect: received.value === defect }
 })
@@ -1011,17 +1011,17 @@ const observedDeadLetters = Effect.gen(function*() {
         })
       })),
   )
-  yield* until(() => subscribed.value)
+  yield* untilOnLiveClock(() => subscribed.value)
 
   const child = actor.getSnapshot().children['worker']!
   actor.send({ type: 'CANCEL' })
-  yield* until(() => child.getSnapshot().status === 'stopped')
+  yield* untilOnLiveClock(() => child.getSnapshot().status === 'stopped')
 
   child.send({ type: 'TO_CHILD' })
   actor.stop()
   actor.send({ type: 'TO_ROOT' })
 
-  yield* until(() => letters.length === 2)
+  yield* untilOnLiveClock(() => letters.length === 2)
 
   return letters
 })
@@ -1047,7 +1047,7 @@ const observedRejectionStream = Effect.gen(function*() {
   const fiber = yield* Effect.forkScoped(
     Stream.runCollect(Stream.take(deadLetters(actor), 1)),
   )
-  yield* until(() => active.value === 1)
+  yield* untilOnLiveClock(() => active.value === 1)
   actor.send({ type: 'FIRST' })
   const collected = yield* Fiber.join(fiber)
   const letters: EventRejection[] = Array.from(collected)
@@ -1064,7 +1064,7 @@ const observedConfigWithoutSchemas = Effect.gen(function*() {
   const id = logic.id
 
   const actor = yield* createEffectActor(logic, { input: { id: '42' } })
-  yield* until(() => actor.getSnapshot().status === 'done')
+  yield* untilOnLiveClock(() => actor.getSnapshot().status === 'done')
 
   return { id, output: actor.getSnapshot().output }
 })
@@ -1094,9 +1094,9 @@ const observedSpans = Effect.gen(function*() {
   })
 
   const actor = yield* createEffectActor(machine)
-  yield* until(() => actor.getSnapshot().value === 'done')
+  yield* untilOnLiveClock(() => actor.getSnapshot().value === 'done')
   actor.send({ type: 'AUDIT' })
-  yield* until(() => spans.length === 2)
+  yield* untilOnLiveClock(() => spans.length === 2)
 
   return {
     first: spans[0],

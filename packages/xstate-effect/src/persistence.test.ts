@@ -11,7 +11,7 @@ import { getShortestPaths } from '@systemfsoftware/xstate/graph'
 import { Clock, Duration, Effect, Exit, Layer, Ref, Scope, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
 import fc from 'fast-check'
-import { until } from '../tests/untilCondition.js'
+import { untilOnLiveClock } from '../tests/__fixtures__/untilCondition.js'
 import { createEffectActor, type EffectActor, fromEffect, fromEffectStream, join, waitFor } from './index.js'
 
 const roundTrip = (snapshot: Snapshot<unknown>): Snapshot<unknown> => JSON.parse(JSON.stringify(snapshot))
@@ -212,7 +212,7 @@ const makeWorld = () =>
     type ModelActor = EffectActor<typeof model>
 
     const settle = (actor: ModelActor, clock: Recording) =>
-      until(() => {
+      untilOnLiveClock(() => {
         const snapshot = actor.getSnapshot()
         const sleeping = Number(snapshot.matches({ timer: 'armed' })) +
           Number(snapshot.matches({ report: 'fetching' }))
@@ -362,7 +362,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
       const snapshot = yield* Effect.scoped(
         Effect.gen(function*() {
           const actor = yield* createEffectActor(parent)
-          yield* until(() => clock.state.pending === 1)
+          yield* untilOnLiveClock(() => clock.state.pending === 1)
           yield* TestClock.adjust('600 millis')
           return roundTrip(actor.getPersistedSnapshot())
         }),
@@ -370,11 +370,11 @@ describe('createEffectActor with a persisted snapshot', (it) => {
       return yield* Effect.scoped(
         Effect.gen(function*() {
           const actor = yield* createEffectActor(parent, { snapshot })
-          yield* until(() => clock.state.pending === 1)
+          yield* untilOnLiveClock(() => clock.state.pending === 1)
           const requested = [...clock.state.requested]
           const childStatus = actor.getSnapshot().children['child']?.getSnapshot().status
           yield* TestClock.adjust('400 millis')
-          yield* until(
+          yield* untilOnLiveClock(
             () =>
               actor.getSnapshot().children['child']?.getSnapshot().status ===
                 'done',
@@ -454,7 +454,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
       const persisted = yield* Effect.scoped(
         Effect.gen(function*() {
           const actor = yield* createEffectActor(machine)
-          yield* until(() => clock.state.pending === 1)
+          yield* untilOnLiveClock(() => clock.state.pending === 1)
           yield* TestClock.adjust('600 millis')
           return roundTrip(actor.getPersistedSnapshot())
         }),
@@ -464,7 +464,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
           const actor = yield* createEffectActor(machine, {
             snapshot: persisted,
           })
-          yield* until(() => clock.state.pending === 1)
+          yield* untilOnLiveClock(() => clock.state.pending === 1)
           const requested = [...clock.state.requested]
           yield* TestClock.adjust('400 millis')
           yield* waitFor(actor, (s) => s.matches('yellow'))
@@ -487,7 +487,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
       const persisted = yield* Effect.scoped(
         Effect.gen(function*() {
           const actor = yield* createEffectActor(machine)
-          yield* until(() => clock.state.pending === 1)
+          yield* untilOnLiveClock(() => clock.state.pending === 1)
           return roundTrip(actor.getPersistedSnapshot())
         }),
       )
@@ -513,7 +513,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
       Effect.gen(function*() {
         const actor = yield* createEffectActor(world.model)
         actor.send({ type: 'FETCH' })
-        yield* until(() => clock.state.pending === 2)
+        yield* untilOnLiveClock(() => clock.state.pending === 2)
         return roundTrip(actor.getPersistedSnapshot())
       }),
     ).pipe(Effect.provide(clock.layer))
@@ -524,7 +524,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
         createEffectActor(world.model, { snapshot: persisted }),
         scope,
       )
-      yield* until(() => clock.state.pending === 2)
+      yield* untilOnLiveClock(() => clock.state.pending === 2)
       yield* Scope.close(scope, Exit.void)
 
       const status = actor.getSnapshot().status
@@ -582,7 +582,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
         Effect.scoped(
           Effect.gen(function*() {
             const actor = yield* createEffectActor(logic)
-            yield* until(started)
+            yield* untilOnLiveClock(started)
             return roundTrip(actor.getPersistedSnapshot())
           }),
         ),

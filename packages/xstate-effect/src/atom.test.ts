@@ -2,7 +2,7 @@ import { describe } from '@systemfsoftware/vitest'
 import { createMachine, setup } from '@systemfsoftware/xstate'
 import { Cause, Context, Effect, Layer, Schema } from 'effect'
 import { AsyncResult, Atom, AtomRegistry } from 'effect/reactivity'
-import { until } from '../tests/untilCondition.js'
+import { untilOnLiveClock } from '../tests/__fixtures__/untilCondition.js'
 import { createActorAtoms } from './atom.js'
 import { NotReadyError } from './atom.js'
 import { fromEffect, setupEffect, withActorScope } from './index.js'
@@ -28,7 +28,7 @@ const observedResourceScope = (lifetime: 'invocation' | 'actor') =>
     const atoms = createActorAtoms(Atom.runtime(Layer.empty), logic)
     const unmount = registry.mount(atoms.snapshot)
     try {
-      yield* until(() => {
+      yield* untilOnLiveClock(() => {
         const snapshot = registry.get(atoms.snapshot)
         return (
           released.value &&
@@ -50,7 +50,7 @@ const observedFirstRead = Effect.gen(function*() {
   const atoms = createActorAtoms(runtime, counterMachine)
 
   const unmount = registry.mount(atoms.snapshot)
-  yield* until(() => AsyncResult.isSuccess(registry.get(atoms.snapshot)))
+  yield* untilOnLiveClock(() => AsyncResult.isSuccess(registry.get(atoms.snapshot)))
 
   const snapshot = registry.get(atoms.snapshot)
   unmount()
@@ -72,11 +72,11 @@ const observedSendAtom = Effect.gen(function*() {
     },
     { immediate: true },
   )
-  yield* until(() => counts.length > 0)
+  yield* untilOnLiveClock(() => counts.length > 0)
 
   registry.set(atoms.send, { type: 'INC' })
   registry.set(atoms.send, { type: 'INC' })
-  yield* until(() => counts.at(-1) === 2)
+  yield* untilOnLiveClock(() => counts.at(-1) === 2)
 
   unsubscribe()
   return counts
@@ -110,7 +110,7 @@ const observedRuntimeLayer = Effect.gen(function*() {
   const atoms = createActorAtoms(runtime, machine)
 
   const unmount = registry.mount(atoms.snapshot)
-  yield* until(() => {
+  yield* untilOnLiveClock(() => {
     const result = registry.get(atoms.snapshot)
     return AsyncResult.isSuccess(result) && result.value.value === 'done'
   })
@@ -126,13 +126,13 @@ const observedRelease = Effect.gen(function*() {
   const atoms = createActorAtoms(runtime, counterMachine)
 
   const unmount = registry.mount(atoms.snapshot)
-  yield* until(() => AsyncResult.isSuccess(registry.get(atoms.actor)))
+  yield* untilOnLiveClock(() => AsyncResult.isSuccess(registry.get(atoms.actor)))
   const result = registry.get(atoms.actor)
   const actor = AsyncResult.isSuccess(result) ? result.value : undefined
   const beforeUnmount = actor?.getSnapshot().status
 
   unmount()
-  yield* until(() => actor?.getSnapshot().status === 'stopped')
+  yield* untilOnLiveClock(() => actor?.getSnapshot().status === 'stopped')
 
   return { beforeUnmount, afterUnmount: actor?.getSnapshot().status }
 })
@@ -158,10 +158,10 @@ const observedNotReady = Effect.gen(function*() {
     ? Cause.squash(early.cause)
     : undefined
 
-  yield* until(() => AsyncResult.isSuccess(registry.get(atoms.actor)))
+  yield* untilOnLiveClock(() => AsyncResult.isSuccess(registry.get(atoms.actor)))
   registry.set(atoms.send, { type: 'INC' })
   const late = registry.get(atoms.actor)
-  yield* until(
+  yield* untilOnLiveClock(
     () =>
       AsyncResult.isSuccess(late) &&
       late.value.getSnapshot().context.count === 1,
@@ -180,7 +180,7 @@ const observedErroredResult = Effect.gen(function*() {
   const atoms = createActorAtoms(runtime, fromEffect(Effect.fail(failure)))
 
   const unmount = registry.mount(atoms.result)
-  yield* until(() => AsyncResult.isFailure(registry.get(atoms.result)))
+  yield* untilOnLiveClock(() => AsyncResult.isFailure(registry.get(atoms.result)))
 
   const result = registry.get(atoms.result)
   unmount()
@@ -217,7 +217,7 @@ describe('createActorAtoms', (it) => {
     })
     const unmount = registry.mount(atoms.snapshot)
     try {
-      yield* until(() => {
+      yield* untilOnLiveClock(() => {
         const result = registry.get(atoms.snapshot)
         return AsyncResult.isSuccess(result) && result.value.status === 'done'
       })
