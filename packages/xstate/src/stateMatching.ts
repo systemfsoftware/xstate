@@ -21,7 +21,7 @@ const toStateValue = (stateValue: StateValue): StateValue =>
   typeof stateValue === 'string' ? pathToStateValue(toStatePath(stateValue)) : stateValue
 
 const presentRegionMatches = (parentRegion: StateValue | undefined, childRegion: StateValue): boolean =>
-  parentRegion !== undefined && valueMatches(parentRegion, childRegion)
+  parentRegion !== undefined && regionsMatch(parentRegion, childRegion)
 
 const regionMatches = (parentRegion: StateValue | undefined, childRegion: StateValue | undefined): boolean =>
   childRegion !== undefined && presentRegionMatches(parentRegion, childRegion)
@@ -31,12 +31,12 @@ const matchesRegions = (parent: StateValue, child: StateValueMap): boolean =>
     ? parent in child
     : Object.entries(parent).every(([key, parentRegion]) => regionMatches(parentRegion, child[key]))
 
-const parsedValueMatches = (parent: StateValue, child: StateValue): boolean =>
-  typeof child === 'string' ? parent === child : matchesRegions(parent, child)
-
-function valueMatches(parentStateValue: StateValue, childStateValue: StateValue): boolean {
-  return parsedValueMatches(toStateValue(parentStateValue), toStateValue(childStateValue))
+function regionsMatch(parent: StateValue, child: StateValue): boolean {
+  return typeof child === 'string' ? parent === child : matchesRegions(parent, child)
 }
+
+const valueMatches = (parentStateValue: StateValue, childStateValue: StateValue): boolean =>
+  regionsMatch(toStateValue(parentStateValue), toStateValue(childStateValue))
 
 /** @public */
 export const matchesState: {

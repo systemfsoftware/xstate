@@ -1,6 +1,14 @@
-import { checkStateIn, createActor, createMachine, matchesState, pathToStateValue, type StateValue } from '@systemfsoftware/xstate'
+import {
+  checkStateIn,
+  createActor,
+  createMachine,
+  matchesState,
+  pathToStateValue,
+  type StateValue,
+  type StateValueMap,
+} from '@systemfsoftware/xstate'
 import { Context, Effect, Layer, Match, pipe } from 'effect'
-import { type MatchCommand, type ModelStateValue, stateValueOf, type StateTree, treesOf } from './stateValue.model.js'
+import { type MatchCommand, type ModelStateValue, type StateTree, stateValueOf, treesOf } from './stateValue.model.js'
 
 const escapedKey = (key: string): string => key.replace(/[\\.]/g, '\\$&')
 
@@ -53,6 +61,7 @@ export interface MatchingLedger {
   readonly answers: Record<MatchCommand['call'], { matched: number; unmatched: number }>
   idArguments: number
   escapedIdArguments: number
+  nestedDottedLeafArguments: number
 }
 
 export interface MatchingHandle {
@@ -84,6 +93,25 @@ const splitOnEveryDot = (value: StateValue): StateValue =>
 const escapeBlindMatcher: Matcher = (call, childTree, parent, child) =>
   publishedMatcher(call, childTree, splitOnEveryDot(parent), splitOnEveryDot(child))
 
+const presentRegionsOf = (value: StateValueMap): ReadonlyArray<readonly [string, StateValue]> =>
+  Object.entries(value).flatMap(([key, region]) => region === undefined ? [] : [[key, region] as const])
+
+function leafNamesOf(value: StateValue): string[] {
+  return typeof value === 'string' ? [value] : presentRegionsOf(value).flatMap(([, region]) => leafNamesOf(region))
+}
+
+const nestsADottedLeaf = (value: StateValue): boolean =>
+  typeof value !== 'string' && leafNamesOf(value).some((name) => name.includes('.'))
+
+function leavesAsPaths(value: StateValue): StateValue {
+  return typeof value === 'string'
+    ? value
+    : Object.fromEntries(presentRegionsOf(value).map(([key, region]) => [key, splitOnEveryDot(leavesAsPaths(region))]))
+}
+
+const leafPathMatcher: Matcher = (call, childTree, parent, child) =>
+  publishedMatcher(call, childTree, leavesAsPaths(parent), leavesAsPaths(child))
+
 const subjectOf = (matcher: Matcher): MatchingSubject => {
   const observed: MatchingLedger = {
     answers: {
@@ -93,6 +121,7 @@ const subjectOf = (matcher: Matcher): MatchingSubject => {
     },
     idArguments: 0,
     escapedIdArguments: 0,
+    nestedDottedLeafArguments: 0,
   }
   const match = (command: MatchCommand): boolean => {
     const [parentTree, childTree] = treesOf(command)
@@ -105,6 +134,7 @@ const subjectOf = (matcher: Matcher): MatchingSubject => {
     for (const argument of [parent, child]) {
       observed.idArguments += argument.asId ? 1 : 0
       observed.escapedIdArguments += argument.escapesADot ? 1 : 0
+      observed.nestedDottedLeafArguments += nestsADottedLeaf(argument.value) ? 1 : 0
     }
     return matched
   }
@@ -114,6 +144,8 @@ const subjectOf = (matcher: Matcher): MatchingSubject => {
 export const makeStateMatchingSubject = (): MatchingSubject => subjectOf(publishedMatcher)
 
 export const makeEscapeBlindSubject = (): MatchingSubject => subjectOf(escapeBlindMatcher)
+
+export const makeLeafPathSubject = (): MatchingSubject => subjectOf(leafPathMatcher)
 
 export const runMatchCommand = (command: MatchCommand): Effect.Effect<boolean, never, StateMatching> =>
   Effect.gen(function*() {
