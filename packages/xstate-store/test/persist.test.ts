@@ -217,18 +217,23 @@ describe('persistence lifecycle regressions', (it) => {
     },
   )
 
-  it.each(['snapshot', 'event'] as const)(
+  it.live.each(['snapshot', 'event'] as const)(
     'cancels buffered writes when storage is cleared (%s)',
     function*(strategy, { expect }) {
       const storage = createMockStorage()
       const store = createStore({
         context: { count: 0 },
         on: { inc: (context) => ({ count: context.count + 1 }) },
-      }).with(persist({ name: 'counter', strategy, storage, throttle: 100 }))
+      }).with(persist({ name: 'counter', strategy, storage, throttle: 400 }))
 
       store.trigger.inc()
+      yield* realDelay(300)
+
       const clearResult = clearStorage(store)
-      flushStorage(store)
+      store.trigger.inc()
+
+      yield* realDelay(250)
+
       yield* expect({
         clearResult,
         stored: storage.getItem('counter'),
@@ -1140,16 +1145,20 @@ describe('persist - SSR-safe defaults', (it) => {
   }) {
     const storage = createMockStorage()
 
-    yield* expect(() =>
+    const error = getThrown(() =>
       createStore({
         context: { count: 0 },
         on: {
           ['__persist.rehydrate']: (ctx) => ctx,
         },
       }).with(persist({ name: 'test', storage }))
-    ).toThrow(
-      'The "persist" store extension uses reserved event type(s): "__persist.rehydrate".',
-    )
+    ) as Error
+
+    yield* expect({ name: error.name, message: error.message }).toEqual({
+      name: 'Error',
+      message:
+        'The "persist" store extension uses reserved event type(s): "__persist.rehydrate". Rename the conflicting store event(s) before applying the extension.',
+    })
   })
 })
 
