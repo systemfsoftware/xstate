@@ -1,23 +1,11 @@
 import { describe } from '@systemfsoftware/vitest'
 import { createMachine, setup } from '@systemfsoftware/xstate'
-import { Cause, Clock, Context, Effect, Layer, Schema } from 'effect'
+import { Cause, Context, Effect, Layer, Schema } from 'effect'
 import { AsyncResult, Atom, AtomRegistry } from 'effect/reactivity'
+import { until } from '../tests/untilCondition.js'
 import { createActorAtoms } from './atom.js'
 import { NotReadyError } from './atom.js'
 import { fromEffect, setupEffect, withActorScope } from './index.js'
-
-const until = (predicate: () => boolean, timeoutMs = 1000) =>
-  Effect.gen(function*() {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    while (!predicate()) {
-      if ((yield* Clock.currentTimeMillis) > deadline) {
-        return yield* Effect.die(
-          new Error('Timed out waiting for condition'),
-        )
-      }
-      yield* Effect.sleep('1 millis')
-    }
-  })
 
 const counterMachine = createMachine({
   context: { count: 0 },

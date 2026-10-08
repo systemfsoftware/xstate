@@ -1,6 +1,7 @@
 import { describe, expectTypeOf, it } from '@systemfsoftware/vitest'
 import { type AnyActorRef, createMachine, type SnapshotFrom, types } from '@systemfsoftware/xstate'
-import { Cause, Clock, Deferred, Duration, Effect, Fiber, Stream } from 'effect'
+import { Cause, Deferred, Duration, Effect, Fiber, Stream } from 'effect'
+import { until } from '../tests/untilCondition.js'
 import {
   ActorFailedError,
   ActorStoppedError,
@@ -14,17 +15,6 @@ import {
   snapshots,
   waitFor,
 } from './index.js'
-
-const until = (predicate: () => boolean, timeoutMs = 1000) =>
-  Effect.gen(function*() {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    while (!predicate()) {
-      if ((yield* Clock.currentTimeMillis) > deadline) {
-        return yield* Effect.die(new Error('Timed out waiting for condition'))
-      }
-      yield* Effect.sleep(1)
-    }
-  })
 
 const afterSubscribe = (actor: AnyActorRef, drive: () => void): void => {
   const actorSubscribe = actor.subscribe.bind(actor)

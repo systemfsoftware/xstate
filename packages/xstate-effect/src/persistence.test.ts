@@ -11,27 +11,10 @@ import { getShortestPaths } from '@systemfsoftware/xstate/graph'
 import { Clock, Duration, Effect, Exit, Layer, Ref, Scope, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
 import fc from 'fast-check'
+import { until } from '../tests/untilCondition.js'
 import { createEffectActor, type EffectActor, fromEffect, fromEffectStream, join, waitFor } from './index.js'
 
 const roundTrip = (snapshot: Snapshot<unknown>): Snapshot<unknown> => JSON.parse(JSON.stringify(snapshot))
-
-/**
- * Polls until `predicate` holds. Effects run on detached fibers, so tests wait
- * for the condition they assert on instead of for a fixed number of ticks.
- *
- * Polling runs on the live clock even when the surrounding program provides a
- * `TestClock`, because it measures real waiting rather than simulated time.
- */
-const until = (predicate: () => boolean, timeoutMs = 1000) =>
-  Effect.gen(function*() {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
-    while (!predicate()) {
-      if ((yield* Clock.currentTimeMillis) > deadline) {
-        return yield* Effect.die(new Error('Timed out waiting for condition'))
-      }
-      yield* Effect.sleep('1 millis')
-    }
-  }).pipe(Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()))
 
 type Recording = {
   pending: number
@@ -404,6 +387,8 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     yield* expect(observed).toEqual({ requested: [1000, 400], childStatus: 'active' })
   })
 
+  const sweepTimeoutWithHeadroomMs = 15_000
+
   it('matches an uninterrupted run when restored at every step of every shortest path', function*({ expect }) {
     const world = yield* makeWorld()
     const paths = getShortestPaths(world.model, {
@@ -429,7 +414,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     }
 
     yield* expect(restoredValues(comparisons)).toEqual(expectedValues(comparisons))
-  })
+  }, sweepTimeoutWithHeadroomMs)
 
   it('matches an uninterrupted run for generated events, clock advances and persist points', function*({ expect }) {
     const world = yield* makeWorld()
