@@ -1,3 +1,4 @@
+import { playwright } from '@vitest/browser-playwright'
 import { readFileSync } from 'node:fs'
 import { dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,7 +11,7 @@ const repoRoot = dirname(fileURLToPath(import.meta.url))
 const unguardedList = new URL('./packages/unguarded-tests.json', import.meta.url)
 
 export interface ForkTestOptions {
-  readonly environment: 'node' | 'happy-dom'
+  readonly environment: 'node' | 'happy-dom' | 'chromium'
   readonly inline?: ReadonlyArray<string>
 }
 
@@ -27,7 +28,7 @@ const unguardedFiles = (): ReadonlyArray<string> => {
 export const forkTestConfig = (packageUrl: string, options: ForkTestOptions): ViteUserConfig => {
   const prefix = `${relative(repoRoot, fileURLToPath(new URL('.', packageUrl)))}/`
   const unguarded = unguardedFiles().filter((file) => file.startsWith(prefix)).map((file) => file.slice(prefix.length))
-  const browser = options.environment === 'happy-dom'
+  const browser = options.environment !== 'node'
   return defineConfig({
     resolve: {
       conditions: browser
@@ -37,7 +38,17 @@ export const forkTestConfig = (packageUrl: string, options: ForkTestOptions): Vi
     ssr: { resolve: { conditions: ['module', 'node', 'development|production', sourceCondition] } },
     test: {
       globals: false,
-      environment: options.environment,
+      ...(options.environment === 'chromium'
+        ? {
+          browser: {
+            enabled: true,
+            provider: playwright(),
+            headless: true,
+            screenshotFailures: false,
+            instances: [{ browser: 'chromium' as const }],
+          },
+        }
+        : { environment: options.environment }),
       exclude: excluded,
       passWithNoTests: true,
       ...(options.inline === undefined ? {} : { server: { deps: { inline: [...options.inline] } } }),

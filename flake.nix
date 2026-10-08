@@ -172,7 +172,7 @@
             # change moves this hash. A store that already holds the old output
             # reuses it silently; `nix build --rebuild` on xstate-pnpm-deps.drv
             # refetches and prints the new value.
-            hash = "sha256-KGqMrA+1IHYAz+yAonOgmTT3lbM0tLU9Q5xOqxL3nw4=";
+            hash = "sha256-+ILTaxzdKeOpNm7P2l7ICCe+fjOLtCf2levrt4rzVIE=";
           }) [ "pnpm-store" ];
           unwrapped = pkgs.callPackage ./nix/comment-checker.nix {
             hashes = "${comment-checker}/nix/release-hashes.json";
@@ -214,6 +214,7 @@
         let
           system = pkgs.stdenv.hostPlatform.system;
           own = self.packages.${system};
+          browsers = pkgs.playwright-driver.browsers;
         in {
           default = pkgs.mkShell {
             packages = [
@@ -226,8 +227,12 @@
               pkgs.nodejs_24
               pkgs.pnpm_12
               pkgs.deno
+              # `sandbox` mounts only the closures of PATH entries, so the
+              # browsers reach a sandboxed test run through this command's closure.
+              (pkgs.writeShellScriptBin "playwright-browsers" "echo ${browsers}")
             ];
             SANDBOX_PNPM_STORE = own.pnpm-store;
+            PLAYWRIGHT_BROWSERS_PATH = browsers;
             shellHook = ''
               root="$(git rev-parse --show-toplevel)"
               git config core.hooksPath .husky

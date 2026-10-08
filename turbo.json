@@ -10,7 +10,8 @@
     "http_proxy",
     "no_proxy",
     "NODE_USE_ENV_PROXY",
-    "TMPDIR"
+    "TMPDIR",
+    "PLAYWRIGHT_BROWSERS_PATH"
   ],
   "tasks": {
     "build": {
