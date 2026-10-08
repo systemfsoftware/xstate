@@ -5,7 +5,6 @@
     ".lintstagedrc.js",
     "oxlint.shared.ts",
     "stryker.shared.ts",
-    "tsdown.shared.ts",
-    "vitest.shared.ts"
+    "tsdown.shared.ts"
   ]
 }
