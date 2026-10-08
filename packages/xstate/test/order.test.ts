@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine, StateNode } from '../src/index.js'
 
-describe('document order', () => {
-  it('should specify the correct document order for each state node', () => {
+describe('document order', (it) => {
+  it('should specify the correct document order for each state node', function*({ expect }) {
     const machine = createMachine({
       id: 'order',
       initial: 'one',
@@ -65,7 +65,7 @@ describe('document order', () => {
       sn.order,
     ])
 
-    expect(allStateNodeOrders).toEqual([
+    yield* expect(allStateNodeOrders).toEqual([
       ['order', 0],
       ['one', 1],
       ['two', 2],

@@ -1,110 +1,179 @@
-import { setTimeout as sleep } from 'node:timers/promises'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createActor, createMachine } from '../src/index.js'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Deferred, Effect } from 'effect'
+import { type Actor, createActor, createMachine } from '../src/index.js'
 
-const entry = vi.fn()
-const action = vi.fn()
-const machine = createMachine({
-  initial: 'a',
-  entry: (_, enq) => enq(entry),
-  states: {
-    a: {
-      on: {
-        NEXT: (_, enq) => {
-          enq(action)
-          return { target: 'b' }
+const createRecordedMachine = (
+  recordEntry: () => void,
+  recordAction: () => void,
+) =>
+  createMachine({
+    initial: 'a',
+    entry: (_, enq) => enq(recordEntry),
+    states: {
+      a: {
+        on: {
+          NEXT: (_, enq) => {
+            enq(recordAction)
+            return { target: 'b' }
+          },
         },
       },
+      b: {},
     },
-    b: {},
-  },
-})
-
-function persistedWith(status: 'done' | 'error' | 'stopped') {
-  const persisted = createActor(machine).start().getPersistedSnapshot()
-  entry.mockClear()
-  return {
-    ...persisted,
-    status,
-    ...(status === 'error' && { error: new Error('persisted failure') }),
-  } as typeof persisted
-}
-
-describe('restoring terminal snapshots', () => {
-  beforeEach(() => {
-    entry.mockClear()
-    action.mockClear()
   })
 
+const createRecordedFixture = () => {
+  const entryCalls: string[] = []
+  const actionCalls: string[] = []
+  const machine = createRecordedMachine(
+    () => {
+      entryCalls.push('entry')
+    },
+    () => {
+      actionCalls.push('action')
+    },
+  )
+  const persisted = () => {
+    const snapshot = createActor(machine).start().getPersistedSnapshot()
+    entryCalls.length = 0
+    return snapshot
+  }
+  const persistedWith = (status: 'done' | 'error' | 'stopped') => {
+    const snapshot = persisted()
+    return {
+      ...snapshot,
+      status,
+      ...(status === 'error' && { error: new Error('persisted failure') }),
+    } as typeof snapshot
+  }
+  return { machine, entryCalls, actionCalls, persisted, persistedWith }
+}
+
+function getThrown(fn: () => void): unknown {
+  try {
+    fn()
+  } catch (error) {
+    return error
+  }
+  return undefined
+}
+
+const messages = (errors: unknown[]) => errors.map((error) => (error instanceof Error ? error.message : error))
+
+describe('restoring terminal snapshots', () => {
   it.each(['done', 'error', 'stopped'] as const)(
     'keeps a restored %s snapshot terminal after start() without running transitions',
-    (status) => {
-      const actor = createActor(machine, { snapshot: persistedWith(status) })
+    function*(status, { expect }) {
+      const { machine, entryCalls, actionCalls, persistedWith } = createRecordedFixture()
+      const actor = createActor(machine, {
+        snapshot: persistedWith(status),
+        warn: () => {},
+      })
       actor.subscribe({ error: () => {} })
       actor.start()
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       actor.send({ type: 'NEXT' })
-      warn.mockRestore()
 
-      expect(actor.getSnapshot().status).toBe(status)
-      expect(actor.getSnapshot().value).toBe('a')
-      expect(entry).not.toHaveBeenCalled()
-      expect(action).not.toHaveBeenCalled()
+      yield* expect({
+        status: actor.getSnapshot().status,
+        value: actor.getSnapshot().value,
+        entryCalls,
+        actionCalls,
+      }).toEqual({ status, value: 'a', entryCalls: [], actionCalls: [] })
     },
   )
 
-  it('delivers a restored error to subscribers added before and after start()', () => {
+  it('delivers a restored error to subscribers added before and after start()', function*({ expect }) {
+    const { machine, persistedWith } = createRecordedFixture()
     const actor = createActor(machine, { snapshot: persistedWith('error') })
-    const before = vi.fn()
-    actor.subscribe({ error: before })
+    const before: unknown[] = []
+    actor.subscribe({ error: (error: unknown) => before.push(error) })
     actor.start()
-    const after = vi.fn()
-    actor.subscribe({ error: after })
+    const after: unknown[] = []
+    actor.subscribe({ error: (error: unknown) => after.push(error) })
 
-    expect(before).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: 'persisted failure' }),
-    )
-    expect(after).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: 'persisted failure' }),
-    )
+    yield* expect({ before: messages(before), after: messages(after) }).toEqual({
+      before: ['persisted failure'],
+      after: ['persisted failure'],
+    })
   })
 
-  it('surfaces a restore-time failure as an error snapshot and subscriber error', async () => {
-    const persisted = createActor(machine).start().getPersistedSnapshot()
-    const invalid = { ...persisted, value: 'missing' } as typeof persisted
+  it('surfaces a restore-time failure as an error snapshot and subscriber error', function*({ expect }) {
+    const { machine, persisted } = createRecordedFixture()
+    const persistedSnapshot = persisted()
+    const invalid = {
+      ...persistedSnapshot,
+      value: 'missing',
+    } as typeof persistedSnapshot
 
-    let actor!: ReturnType<typeof createActor<typeof machine>>
-    expect(() => {
+    let actor!: Actor<typeof machine>
+    const createThrown = getThrown(() => {
       actor = createActor(machine, { snapshot: invalid })
-    }).not.toThrow()
-    const error = vi.fn()
-    actor.subscribe({ error })
-    expect(() => actor.start()).not.toThrow()
-    await sleep(0)
+    })
+    const delivered = yield* Deferred.make<void>()
+    const errorCalls: unknown[] = []
+    actor.subscribe({
+      error: (error: unknown) => {
+        errorCalls.push(error)
+        Deferred.doneUnsafe(delivered, Effect.void)
+      },
+    })
+    const startThrown = getThrown(() => {
+      actor.start()
+    })
+    yield* Deferred.await(delivered)
 
     const snapshot = actor.getSnapshot()
-    expect(snapshot.status).toBe('error')
-    expect(snapshot.error).toBeInstanceOf(Error)
-    expect((snapshot.error as Error).message).toBe(
-      "Persisted snapshot references state 'missing' which does not exist on machine '(machine)'.",
-    )
-    expect(error).toHaveBeenCalledExactlyOnceWith(snapshot.error)
+    yield* expect({
+      createThrown: createThrown !== undefined,
+      startThrown: startThrown !== undefined,
+      status: snapshot.status,
+      snapshotErrorIsAnError: snapshot.error instanceof Error,
+      snapshotErrorMessage: (snapshot.error as Error).message,
+      deliveredMessages: messages(errorCalls),
+      deliveredIsSnapshotError: errorCalls.length === 1 &&
+        errorCalls[0] === snapshot.error,
+    }).toEqual({
+      createThrown: false,
+      startThrown: false,
+      status: 'error',
+      snapshotErrorIsAnError: true,
+      snapshotErrorMessage:
+        "Persisted snapshot references state 'missing' which does not exist on machine '(machine)'.",
+      deliveredMessages: [
+        "Persisted snapshot references state 'missing' which does not exist on machine '(machine)'.",
+      ],
+      deliveredIsSnapshotError: true,
+    })
   })
 
-  it('restore failure yields a machine snapshot with matches()', () => {
-    const persisted = createActor(machine).start().getPersistedSnapshot()
-    const invalid = { ...persisted, value: 'missing' } as typeof persisted
+  it('restore failure yields a machine snapshot with matches()', function*({ expect }) {
+    const { machine, persisted } = createRecordedFixture()
+    const persistedSnapshot = persisted()
+    const invalid = {
+      ...persistedSnapshot,
+      value: 'missing',
+    } as typeof persistedSnapshot
     const actor = createActor(machine, { snapshot: invalid })
-    const error = vi.fn()
-    actor.subscribe({ error })
+    const errorCalls: unknown[] = []
+    actor.subscribe({ error: (error: unknown) => errorCalls.push(error) })
     actor.start()
 
     const snapshot = actor.getSnapshot()
-    expect(snapshot.status).toBe('error')
-    expect(typeof snapshot.matches).toBe('function')
-    expect(typeof snapshot.can).toBe('function')
-    expect(snapshot.children).toEqual({})
-    expect(snapshot.nodes).toEqual([machine.root])
-    expect(error).toHaveBeenCalledExactlyOnceWith(snapshot.error)
+    yield* expect({
+      status: snapshot.status,
+      matchesIsFunction: typeof snapshot.matches === 'function',
+      canIsFunction: typeof snapshot.can === 'function',
+      children: snapshot.children,
+      nodes: snapshot.nodes,
+      deliveredIsSnapshotError: errorCalls.length === 1 &&
+        errorCalls[0] === snapshot.error,
+    }).toEqual({
+      status: 'error',
+      matchesIsFunction: true,
+      canIsFunction: true,
+      children: {},
+      nodes: [machine.root],
+      deliveredIsSnapshotError: true,
+    })
   })
 })

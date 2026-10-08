@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine } from '../src/index.js'
 
-describe('parallel state conformance', () => {
+describe('parallel state conformance', (it) => {
   // Bug 1 — #5214: transition targeting one region resets sibling regions
-  it('a transition targeting one region should not reset sibling regions', () => {
+  it('a transition targeting one region should not reset sibling regions', function*({ expect }) {
     const machine = createMachine({
       id: 'p',
       type: 'parallel',
@@ -27,14 +27,14 @@ describe('parallel state conformance', () => {
     actor.send({ type: 'EDIT' })
     actor.send({ type: 'ARCHIVE' })
 
-    expect(actor.getSnapshot().value).toEqual({
+    yield* expect(actor.getSnapshot().value).toEqual({
       phase: 'archive',
       mode: 'edit',
     })
   })
 
   // Bug 2 — #5162: reenter:true in one region re-runs SIBLING region entry actions
-  it('reenter in one region should not re-run sibling region entry actions', () => {
+  it('reenter in one region should not re-run sibling region entry actions', function*({ expect }) {
     const machine = createMachine({
       id: 'reentrytest',
       type: 'parallel',
@@ -56,16 +56,19 @@ describe('parallel state conformance', () => {
     })
 
     const actor = createActor(machine).start()
-    expect(actor.getSnapshot().context.count).toBe(1)
+    const beforeReenter = actor.getSnapshot().context.count
 
     actor.send({ type: 'REENTER_A' })
-    expect(actor.getSnapshot().context.count).toBe(1)
+    yield* expect({
+      beforeReenter: beforeReenter === 1,
+      afterReenter: actor.getSnapshot().context.count === 1,
+    }).toEqual({ beforeReenter: true, afterReenter: true })
   })
 
   // Bug 3 — #4793: after a cross-region transition, subsequent events in
   // sibling regions are dropped. Final states are inert, so the transition
   // lives on a non-final state of the region.
-  it('sibling region events should still be handled after a cross-region transition', () => {
+  it('sibling region events should still be handled after a cross-region transition', function*({ expect }) {
     const machine = createMachine({
       id: 'question-flow',
       type: 'parallel',
@@ -99,26 +102,24 @@ describe('parallel state conformance', () => {
     const actor = createActor(machine).start()
 
     actor.send({ type: 'NEXT' })
-    expect(actor.getSnapshot().value).toEqual({
-      value1: 'x',
-      value2: 'shown',
-      value3: 'hidden',
-    })
+    const afterFirstNext = actor.getSnapshot().value
 
     actor.send({ type: 'NEXT' })
     // A cross-region transition only exits the region containing its
     // targets, so value2 stays 'shown' while value3 advances.
-    expect(actor.getSnapshot().value).toEqual({
-      value1: 'x',
-      value2: 'shown',
-      value3: 'shown',
+    yield* expect({
+      afterFirstNext,
+      afterSecondNext: actor.getSnapshot().value,
+    }).toEqual({
+      afterFirstNext: { value1: 'x', value2: 'shown', value3: 'hidden' },
+      afterSecondNext: { value1: 'x', value2: 'shown', value3: 'shown' },
     })
   })
 
   // Passing guard — a `type: 'final'` region under a parallel root has no
   // outgoing transitions of its own; an event with no matching handler
   // anywhere leaves every region untouched.
-  it('a final region under a parallel root should ignore events it does not handle', () => {
+  it('a final region under a parallel root should ignore events it does not handle', function*({ expect }) {
     const machine = createMachine({
       id: 'g',
       type: 'parallel',
@@ -134,15 +135,12 @@ describe('parallel state conformance', () => {
     })
 
     const actor = createActor(machine).start()
-    expect(actor.getSnapshot().value).toEqual({
-      regionA: {},
-      regionB: 'idle',
-    })
+    const beforeGo = actor.getSnapshot().value
 
     actor.send({ type: 'GO' })
-    expect(actor.getSnapshot().value).toEqual({
-      regionA: {},
-      regionB: 'idle',
+    yield* expect({ beforeGo, afterGo: actor.getSnapshot().value }).toEqual({
+      beforeGo: { regionA: {}, regionB: 'idle' },
+      afterGo: { regionA: {}, regionB: 'idle' },
     })
   })
 })

@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, mapState, setup, types } from '../src/index.js'
 
-describe('mapState', () => {
-  it('should map context from root state', () => {
+describe('mapState', (it) => {
+  it('should map context from root state', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: types<{ count: number }>(),
@@ -21,10 +21,13 @@ describe('mapState', () => {
       map: ({ context }) => context.count,
     })
 
-    expect(results.map((r) => r.result)).toContain(42)
+    yield* expect({
+      keys: results.map((r) => r.stateNode.key),
+      results: results.map((r) => r.result),
+    }).toEqual({ keys: ['(machine)'], results: [42] })
   })
 
-  it('should map context from nested states', () => {
+  it('should map context from nested states', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: types<{ value: string }>(),
@@ -59,18 +62,16 @@ describe('mapState', () => {
       },
     })
 
-    const mapped = results.map((r) => r.result)
-    expect(mapped).toContain('root:test')
-    expect(results.find((r) => r.stateNode.key === '(machine)')?.result).toBe(
-      'root:test',
-    )
-    expect(results.find((r) => r.stateNode.key === 'a')?.result).toBe('a:test')
-    expect(results.find((r) => r.stateNode.key === 'one')?.result).toBe(
-      'one:test',
-    )
+    yield* expect({
+      keys: results.map((r) => r.stateNode.key),
+      results: results.map((r) => r.result),
+    }).toEqual({
+      keys: ['one', 'a', '(machine)'],
+      results: ['one:test', 'a:test', 'root:test'],
+    })
   })
 
-  it('should only call mappers for active states', () => {
+  it('should only call mappers for active states', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: types<{ x: number }>(),
@@ -98,13 +99,13 @@ describe('mapState', () => {
       },
     })
 
-    const mapped = results.map((r) => r.result)
-    expect(mapped).toContain('root')
-    expect(mapped).toContain('a')
-    expect(mapped).not.toContain('b')
+    yield* expect({
+      keys: results.map((r) => r.stateNode.key),
+      results: results.map((r) => r.result),
+    }).toEqual({ keys: ['a', '(machine)'], results: ['a', 'root'] })
   })
 
-  it('should work with parallel states', () => {
+  it('should work with parallel states', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: types<{ val: number }>(),
@@ -154,16 +155,30 @@ describe('mapState', () => {
       },
     })
 
-    const mapped = results.map((r) => r.result)
-    expect(mapped).toContain('root')
-    expect(mapped).toContain('region1')
-    expect(mapped).toContain('x')
-    expect(mapped).toContain('region2')
-    expect(mapped).toContain('p')
-    expect(results).toHaveLength(5)
+    yield* expect({
+      count: results.length,
+      keys: results.map((r) => r.stateNode.key),
+      results: results.map((r) => r.result),
+    }).toEqual({
+      count: 5,
+      keys: expect.arrayContaining([
+        'x',
+        'region1',
+        '(machine)',
+        'p',
+        'region2',
+      ]),
+      results: expect.arrayContaining([
+        'x',
+        'region1',
+        'root',
+        'p',
+        'region2',
+      ]),
+    })
   })
 
-  it('should handle states without mappers', () => {
+  it('should handle states without mappers', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: types<{ n: number }>(),
@@ -197,14 +212,16 @@ describe('mapState', () => {
       },
     })
 
-    const mapped = results.map((r) => r.result)
-    expect(mapped).toContain('root')
-    expect(mapped).toContain('a')
-    expect(mapped).toContain('one')
-    expect(results).toHaveLength(3)
+    yield* expect({
+      keys: results.map((r) => r.stateNode.key),
+      results: results.map((r) => r.result),
+    }).toEqual({
+      keys: ['one', 'a', '(machine)'],
+      results: ['one', 'a', 'root'],
+    })
   })
 
-  it('should work with final states', () => {
+  it('should work with final states', function*({ expect }) {
     const machine = setup({}).createMachine({
       initial: 'active',
       states: {
@@ -231,12 +248,16 @@ describe('mapState', () => {
       },
     })
 
-    const mapped = results.map((r) => r.result)
-    expect(mapped).toContain('root')
-    expect(mapped).toContain('finished')
+    yield* expect({
+      keys: results.map((r) => r.stateNode.key),
+      results: results.map((r) => r.result),
+    }).toEqual({
+      keys: ['finished', '(machine)'],
+      results: ['finished', 'root'],
+    })
   })
 
-  it('should include stateNode in results', () => {
+  it('should include stateNode in results', function*({ expect }) {
     const machine = setup({}).createMachine({
       initial: 'a',
       states: {
@@ -273,16 +294,19 @@ describe('mapState', () => {
       throw new Error('expected three mapped states')
     }
 
-    expect(results[0].stateNode.key).toBe('one')
-    expect(results[0].result).toBe('one')
-    expect(results[1].stateNode.key).toBe('a')
-    expect(results[1].result).toBe('a')
-    expect(results[2].stateNode.path).toEqual([])
-    expect(results[2].result).toBe('root')
+    yield* expect({
+      keys: results.map((r) => r.stateNode.key),
+      results: results.map((r) => r.result),
+      rootPath: results[2].stateNode.path,
+    }).toEqual({
+      keys: ['one', 'a', '(machine)'],
+      results: ['one', 'a', 'root'],
+      rootPath: [],
+    })
   })
 
-  describe('type safety', () => {
-    it('should accept valid state keys', () => {
+  describe('type safety', (it) => {
+    it('should accept valid state keys', function*({ expect }) {
       const machine = setup({
         schemas: {
           context: types<{ foo: string }>(),
@@ -299,8 +323,7 @@ describe('mapState', () => {
 
       const snapshot = createActor(machine).getSnapshot()
 
-      // This should compile without errors
-      mapState(snapshot, {
+      const results = mapState(snapshot, {
         map: ({ context }) => context.foo,
         states: {
           idle: {
@@ -314,9 +337,14 @@ describe('mapState', () => {
           },
         },
       })
+
+      yield* expect({
+        keys: results.map((r) => r.stateNode.key),
+        results: results.map((r) => r.result),
+      }).toEqual({ keys: ['idle', '(machine)'], results: ['bar', 'bar'] })
     })
 
-    it('should error on invalid state keys', () => {
+    it('should error on invalid state keys', function*({ expect }) {
       const machine = setup({
         schemas: {
           context: types<{ foo: string }>(),
@@ -332,7 +360,7 @@ describe('mapState', () => {
 
       const snapshot = createActor(machine).getSnapshot()
 
-      mapState(snapshot, {
+      const results = mapState(snapshot, {
         map: ({ context }) => context.foo,
         states: {
           idle: {
@@ -344,9 +372,14 @@ describe('mapState', () => {
           },
         },
       })
+
+      yield* expect({
+        keys: results.map((r) => r.stateNode.key),
+        results: results.map((r) => r.result),
+      }).toEqual({ keys: ['idle', '(machine)'], results: ['bar', 'bar'] })
     })
 
-    it('should error on invalid nested state keys', () => {
+    it('should error on invalid nested state keys', function*({ expect }) {
       const machine = setup({
         schemas: {
           context: types<{ val: number }>(),
@@ -367,7 +400,7 @@ describe('mapState', () => {
 
       const snapshot = createActor(machine).getSnapshot()
 
-      mapState(snapshot, {
+      const results = mapState(snapshot, {
         map: ({ context }) => context.val,
         states: {
           parent: {
@@ -384,9 +417,17 @@ describe('mapState', () => {
           },
         },
       })
+
+      yield* expect({
+        keys: results.map((r) => r.stateNode.key),
+        results: results.map((r) => r.result),
+      }).toEqual({
+        keys: ['child1', 'parent', '(machine)'],
+        results: [0, 0, 0],
+      })
     })
 
-    it('should infer snapshot type in map function', () => {
+    it('should infer snapshot type in map function', function*({ expect }) {
       const machine = setup({
         schemas: {
           context: types<{ count: number; name: string }>(),
@@ -401,17 +442,22 @@ describe('mapState', () => {
 
       const snapshot = createActor(machine).getSnapshot()
 
-      mapState(snapshot, {
+      const results = mapState(snapshot, {
         map: ({ context }) => {
-          // These should all be valid
           const n: number = context.count
           const s: string = context.name
           return { n, s }
         },
       })
+
+      yield* expect(results.map((r) => r.result)).toEqual([
+        { n: 0, s: 'test' },
+      ])
     })
 
-    it('should enforce consistent TResult type across all map functions', () => {
+    it('should enforce consistent TResult type across all map functions', function*({
+      expect,
+    }) {
       const machine = setup({
         schemas: {
           context: types<{ count: number }>(),
@@ -431,8 +477,7 @@ describe('mapState', () => {
 
       const snapshot = createActor(machine).getSnapshot()
 
-      // All returning number - should work
-      mapState<typeof snapshot, number>(snapshot, {
+      const results = mapState<typeof snapshot, number>(snapshot, {
         map: () => 42,
         states: {
           a: {
@@ -445,9 +490,19 @@ describe('mapState', () => {
           },
         },
       })
+
+      yield* expect({
+        keys: results.map((r) => r.stateNode.key),
+        results: results.map((r) => r.result),
+      }).toEqual({
+        keys: ['one', 'a', '(machine)'],
+        results: [200, 100, 42],
+      })
     })
 
-    it('should error when nested map returns wrong type', () => {
+    it('should error when nested map returns wrong type', function*({
+      expect,
+    }) {
       const machine = setup({
         schemas: {
           context: types<{ count: number }>(),
@@ -462,7 +517,7 @@ describe('mapState', () => {
 
       const snapshot = createActor(machine).getSnapshot()
 
-      mapState<typeof snapshot, number>(snapshot, {
+      const results = mapState<typeof snapshot, number>(snapshot, {
         map: () => 42,
         states: {
           a: {
@@ -471,9 +526,16 @@ describe('mapState', () => {
           },
         },
       })
+
+      yield* expect({
+        keys: results.map((r) => r.stateNode.key),
+        results: results.map((r) => r.result),
+      }).toEqual({ keys: ['a', '(machine)'], results: [true, 42] })
     })
 
-    it('should error when deeply nested map returns wrong type', () => {
+    it('should error when deeply nested map returns wrong type', function*({
+      expect,
+    }) {
       const machine = setup({
         schemas: {
           context: types<{ val: string }>(),
@@ -493,7 +555,7 @@ describe('mapState', () => {
 
       const snapshot = createActor(machine).getSnapshot()
 
-      mapState<typeof snapshot, string>(snapshot, {
+      const results = mapState<typeof snapshot, string>(snapshot, {
         map: () => 'root',
         states: {
           parent: {
@@ -507,9 +569,17 @@ describe('mapState', () => {
           },
         },
       })
+
+      yield* expect({
+        keys: results.map((r) => r.stateNode.key),
+        results: results.map((r) => r.result),
+      }).toEqual({
+        keys: ['child', 'parent', '(machine)'],
+        results: [123, 'parent', 'root'],
+      })
     })
 
-    it('should infer result type in return value', () => {
+    it('should infer result type in return value', function*({ expect }) {
       const machine = setup({}).createMachine({
         initial: 'idle',
         states: {
@@ -527,10 +597,14 @@ describe('mapState', () => {
         throw new Error('expected a first result')
       }
 
-      // result should be typed as number, not unknown
       results[0].result satisfies number
       // @ts-expect-error
       results[0].result satisfies string
+
+      yield* expect({
+        keys: results.map((r) => r.stateNode.key),
+        result: results[0].result,
+      }).toEqual({ keys: ['(machine)'], result: 42 })
     })
   })
 })

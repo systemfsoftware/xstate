@@ -1,9 +1,9 @@
-import { describe, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine, setup, types } from '../src/index.js'
 import type { PersistedSnapshotFrom, Snapshot } from '../src/index.js'
 
-describe('persisted snapshot round-trip types', () => {
-  it('should round-trip getPersistedSnapshot into createActor without a cast', () => {
+describe('persisted snapshot round-trip types', (it) => {
+  it('should round-trip getPersistedSnapshot into createActor without a cast', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: { a: {} },
@@ -11,10 +11,11 @@ describe('persisted snapshot round-trip types', () => {
 
     const snapshot = createActor(machine).getPersistedSnapshot()
 
-    createActor(machine, { snapshot })
+    const restored = createActor(machine, { snapshot })
+    yield* expect(restored.getSnapshot().value).toBe('a')
   })
 
-  it('should round-trip a versioned machine snapshot without a cast', () => {
+  it('should round-trip a versioned machine snapshot without a cast', function*({ expect }) {
     const machine = createMachine({
       id: 'checkout',
       version: '1',
@@ -24,29 +25,34 @@ describe('persisted snapshot round-trip types', () => {
 
     const snapshot = createActor(machine).getPersistedSnapshot()
 
-    createActor(machine, { snapshot })
+    const restored = createActor(machine, { snapshot })
+    yield* expect(restored.getSnapshot().value).toBe('a')
   })
 
-  it('should accept a snapshot persisted from a different version of the same machine (migration path)', () => {
-    const checkoutV1 = createMachine({
-      id: 'checkout',
-      version: '1',
-      initial: 'a',
-      states: { a: {} },
-    })
-    const checkoutV2 = createMachine({
-      id: 'checkout',
-      version: '2',
-      initial: 'a',
-      states: { a: {} },
-    })
+  it(
+    'should accept a snapshot persisted from a different version of the same machine (migration path)',
+    function*({ expect }) {
+      const checkoutV1 = createMachine({
+        id: 'checkout',
+        version: '1',
+        initial: 'a',
+        states: { a: {} },
+      })
+      const checkoutV2 = createMachine({
+        id: 'checkout',
+        version: '2',
+        initial: 'a',
+        states: { a: {} },
+      })
 
-    const snapshot = createActor(checkoutV1).getPersistedSnapshot()
+      const snapshot = createActor(checkoutV1).getPersistedSnapshot()
 
-    createActor(checkoutV2, { snapshot })
-  })
+      const restored = createActor(checkoutV2, { snapshot })
+      yield* expect(restored.getSnapshot().value).toBe('a')
+    },
+  )
 
-  it('should reject a snapshot persisted from a machine with a different ID', () => {
+  it('should reject a snapshot persisted from a machine with a different ID', function*({ expect }) {
     const checkout = createMachine({
       id: 'checkout',
       version: '1',
@@ -66,9 +72,14 @@ describe('persisted snapshot round-trip types', () => {
       // @ts-expect-error
       snapshot,
     })
+
+    yield* expect({ checkout: checkout.id, cart: cart.id }).toEqual({
+      checkout: 'checkout',
+      cart: 'cart',
+    })
   })
 
-  it('should reject a snapshot from an unversioned machine with a different ID', () => {
+  it('should reject a snapshot from an unversioned machine with a different ID', function*({ expect }) {
     const machineA = createMachine({
       id: 'a',
       initial: 'x',
@@ -86,9 +97,11 @@ describe('persisted snapshot round-trip types', () => {
       // @ts-expect-error
       snapshot,
     })
+
+    yield* expect({ a: machineA.id, b: machineB.id }).toEqual({ a: 'a', b: 'b' })
   })
 
-  it('should round-trip a provided machine snapshot without a cast', () => {
+  it('should round-trip a provided machine snapshot without a cast', function*({ expect }) {
     const machine = createMachine({
       id: 'checkout',
       initial: 'a',
@@ -99,12 +112,13 @@ describe('persisted snapshot round-trip types', () => {
     const snapshot = createActor(provided).getPersistedSnapshot()
 
     createActor(machine, { snapshot })
-    createActor(provided, {
+    const restored = createActor(provided, {
       snapshot: createActor(machine).getPersistedSnapshot(),
     })
+    yield* expect(restored.getSnapshot().value).toBe('a')
   })
 
-  it('preserves identity through repeated provision of a versioned setup machine', () => {
+  it('preserves identity through repeated provision of a versioned setup machine', function*({ expect }) {
     const machine = setup().createMachine({
       id: 'checkout',
       version: '1',
@@ -120,9 +134,13 @@ describe('persisted snapshot round-trip types', () => {
     createActor(provided, {
       snapshot: createActor(machine).getPersistedSnapshot(),
     })
+    yield* expect({ id: provided.id, version: provided.version }).toEqual({
+      id: 'checkout',
+      version: '1',
+    })
   })
 
-  it('should accept a revived (unbranded) snapshot', () => {
+  it('should accept a revived (unbranded) snapshot', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: { a: {} },
@@ -132,10 +150,11 @@ describe('persisted snapshot round-trip types', () => {
       JSON.stringify(createActor(machine).getPersistedSnapshot()),
     ) as Snapshot<unknown>
 
-    createActor(machine, { snapshot: revived })
+    const restored = createActor(machine, { snapshot: revived })
+    yield* expect(restored.getSnapshot().value).toBe('a')
   })
 
-  it('should be usable where a plain Snapshot<unknown> is expected', () => {
+  it('should be usable where a plain Snapshot<unknown> is expected', function*({ expect }) {
     const machine = createMachine({
       id: 'checkout',
       version: '1',
@@ -145,9 +164,11 @@ describe('persisted snapshot round-trip types', () => {
 
     const snapshot: Snapshot<unknown> = createActor(machine).getPersistedSnapshot()
     snapshot satisfies Snapshot<unknown>
+    const restored = createActor(machine, { snapshot })
+    yield* expect(restored.getSnapshot().value).toBe('a')
   })
 
-  it('should be assignable to PersistedSnapshotFrom<typeof machine>', () => {
+  it('should be assignable to PersistedSnapshotFrom<typeof machine>', function*({ expect }) {
     const machine = createMachine({
       id: 'counter',
       schemas: { context: types<{ count: number }>() },
@@ -161,9 +182,10 @@ describe('persisted snapshot round-trip types', () => {
     snapshot.context['count'] satisfies number
 
     createActor(machine, { snapshot })
+    yield* expect(snapshot.context).toEqual({ count: 0 })
   })
 
-  it('should be assignable to PersistedSnapshotFrom<typeof machine> for a versioned machine', () => {
+  it('should be assignable to PersistedSnapshotFrom<typeof machine> for a versioned machine', function*({ expect }) {
     const machine = createMachine({
       id: 'counter',
       version: '1',
@@ -176,9 +198,10 @@ describe('persisted snapshot round-trip types', () => {
     const snapshot: PersistedSnapshotFrom<typeof machine> = createActor(machine).getPersistedSnapshot()
 
     createActor(machine, { snapshot })
+    yield* expect(snapshot.context).toEqual({ count: 0 })
   })
 
-  it('should reject a PersistedSnapshotFrom of a machine with a different ID', () => {
+  it('should reject a PersistedSnapshotFrom of a machine with a different ID', function*({ expect }) {
     const checkout = createMachine({
       id: 'checkout',
       initial: 'a',
@@ -193,5 +216,6 @@ describe('persisted snapshot round-trip types', () => {
     // @ts-expect-error
     const snapshot: PersistedSnapshotFrom<typeof cart> = createActor(checkout).getPersistedSnapshot()
     snapshot
+    yield* expect(snapshot.context).toEqual({})
   })
 })

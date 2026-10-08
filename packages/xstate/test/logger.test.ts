@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine } from '../src/index.js'
 
 describe('logger', () => {
-  it('system logger should be default logger for actors (invoked from machine)', () => {
-    expect.assertions(1)
+  it('system logger should be default logger for actors (invoked from machine)', function*({
+    expect,
+  }) {
+    const logged: string[] = []
     const machine = createMachine({
       invoke: {
         src: createMachine({
@@ -16,15 +18,19 @@ describe('logger', () => {
 
     const actor = createActor(machine, {
       logger: (arg) => {
-        expect(arg).toEqual('hello')
+        logged.push(arg)
       },
     }).start()
 
     actor.start()
+
+    yield* expect(logged).toEqual(['hello'])
   })
 
-  it('system logger should be default logger for actors (spawned from machine)', () => {
-    expect.assertions(1)
+  it('system logger should be default logger for actors (spawned from machine)', function*({
+    expect,
+  }) {
+    const logged: string[] = []
     const machine = createMachine({
       entry: (_, enq) =>
         void enq.spawn(
@@ -38,10 +44,12 @@ describe('logger', () => {
 
     const actor = createActor(machine, {
       logger: (arg) => {
-        expect(arg).toEqual('hello')
+        logged.push(arg)
       },
     }).start()
 
     actor.start()
+
+    yield* expect(logged).toEqual(['hello'])
   })
 })

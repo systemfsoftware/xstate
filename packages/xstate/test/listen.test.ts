@@ -1,15 +1,52 @@
-import { describe, expect, it } from 'vitest'
-import { createActor, createAsyncLogic, createCallbackLogic, createLogic, createMachine, types } from '../src/index.js'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
+import {
+  createActor,
+  createAsyncLogic,
+  createCallbackLogic,
+  createLogic,
+  createMachine,
+  toPromise,
+  types,
+} from '../src/index.js'
 import type { AnyActor } from '../src/index.js'
 
+const readField = (value: unknown, key: string): unknown => {
+  if (typeof value !== 'object' || value === null || !(key in value)) {
+    return undefined
+  }
+  return Reflect.get(value, key)
+}
+
+const afterDelay = (ms: number): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, ms)
+  return promise
+}
+
+const pollUntil = (done: () => boolean) =>
+  Effect.promise(() => {
+    const { promise, resolve } = Promise.withResolvers<void>()
+    let attempts = 0
+    const poll = () => {
+      if (done() || attempts >= 500) {
+        resolve()
+        return
+      }
+      attempts += 1
+      setTimeout(poll, 1)
+    }
+    poll()
+    return promise
+  })
+
 describe('enq.listen()', () => {
-  it('listens to emitted events from a spawned actor', async () => {
-    // Use custom logic that emits when it receives an event
+  it.live('listens to emitted events from a spawned actor', function*({ expect }) {
     const childLogic = createLogic<
       { triggered: boolean },
       undefined,
       { type: 'TRIGGER' },
-      any, // TInput
+      unknown,
       { type: 'childEvent'; value: number }
     >({
       context: { triggered: false },
@@ -22,7 +59,7 @@ describe('enq.listen()', () => {
       },
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       initial: 'active',
@@ -32,9 +69,8 @@ describe('enq.listen()', () => {
             const childRef = enq.spawn(childLogic, { id: 'child' })
             enq.listen(childRef, 'childEvent', (ev) => ({
               type: 'CHILD_EMITTED',
-              payload: (ev as any).value,
+              payload: readField(ev, 'value'),
             }))
-            // Send event to child after a short delay
             setTimeout(() => {
               childRef.send({ type: 'TRIGGER' })
             }, 10)
@@ -55,21 +91,22 @@ describe('enq.listen()', () => {
     })
 
     const actor = createActor(parentMachine)
+    const completion = toPromise(actor)
     actor.start()
+    yield* Effect.promise(() => completion)
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    expect(receivedEvents).toHaveLength(1)
-    expect(receivedEvents[0].type).toBe('CHILD_EMITTED')
-    expect(receivedEvents[0].payload).toBe(42)
+    yield* expect(
+      receivedEvents.map((event) => ({ type: readField(event, 'type'), payload: readField(event, 'payload') })),
+    )
+      .toEqual([{ type: 'CHILD_EMITTED', payload: 42 }])
   })
 
-  it('listens to emitted events from a spawned actor during startup', () => {
+  it('listens to emitted events from a spawned actor during startup', function*({ expect }) {
     const childLogic = createCallbackLogic(({ emit }) => {
       emit({ type: 'childEvent' })
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       entry: (_, enq) => {
@@ -85,16 +122,15 @@ describe('enq.listen()', () => {
 
     createActor(parentMachine).start()
 
-    expect(receivedEvents).toHaveLength(1)
-    expect(receivedEvents[0].type).toBe('CHILD_EMITTED')
+    yield* expect(receivedEvents.map((event) => readField(event, 'type'))).toEqual(['CHILD_EMITTED'])
   })
 
-  it('listens to emitted events from an invoked actor during startup', () => {
+  it('listens to emitted events from an invoked actor during startup', function*({ expect }) {
     const childLogic = createCallbackLogic(({ emit }) => {
       emit({ type: 'childEvent' })
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       initial: 'active',
@@ -120,17 +156,16 @@ describe('enq.listen()', () => {
 
     createActor(parentMachine).start()
 
-    expect(receivedEvents).toHaveLength(1)
-    expect(receivedEvents[0].type).toBe('CHILD_EMITTED')
+    yield* expect(receivedEvents.map((event) => readField(event, 'type'))).toEqual(['CHILD_EMITTED'])
   })
 
-  it('listens to emitted events from an actor passed through input', () => {
+  it('listens to emitted events from an actor passed through input', function*({ expect }) {
     const childLogic = createCallbackLogic(({ emit }) => {
       emit({ type: 'childEvent' })
     })
 
     const childRef = createActor(childLogic)
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       schemas: {
@@ -155,14 +190,13 @@ describe('enq.listen()', () => {
     createActor(parentMachine, { input: { childRef } }).start()
     childRef.start()
 
-    expect(receivedEvents).toHaveLength(1)
-    expect(receivedEvents[0].type).toBe('CHILD_EMITTED')
+    yield* expect(receivedEvents.map((event) => readField(event, 'type'))).toEqual(['CHILD_EMITTED'])
   })
 
-  it('supports wildcard event matching', async () => {
+  it.live('supports wildcard event matching', function*({ expect }) {
     const childLogic = createCallbackLogic<
-      any,
-      any,
+      { type: string },
+      unknown,
       { type: string; value: number }
     >(({ emit }) => {
       setTimeout(() => {
@@ -171,7 +205,7 @@ describe('enq.listen()', () => {
       }, 10)
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       initial: 'active',
@@ -181,8 +215,8 @@ describe('enq.listen()', () => {
             const childRef = enq.spawn(childLogic, { id: 'child' })
             enq.listen(childRef, 'data.*', (ev) => ({
               type: 'DATA_EVENT',
-              eventType: ev.type,
-              value: (ev as any).value,
+              eventType: readField(ev, 'type'),
+              value: readField(ev, 'value'),
             }))
           },
           on: {
@@ -194,19 +228,16 @@ describe('enq.listen()', () => {
       },
     })
 
-    const actor = createActor(parentMachine).start()
+    createActor(parentMachine).start()
+    yield* pollUntil(() => receivedEvents.length >= 2)
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    expect(receivedEvents).toHaveLength(2)
-    expect(receivedEvents[0].eventType).toBe('data.update')
-    expect(receivedEvents[1].eventType).toBe('data.delete')
+    yield* expect(receivedEvents.map((event) => readField(event, 'eventType'))).toEqual(['data.update', 'data.delete'])
   })
 
-  it('stops listening when listener is stopped', async () => {
+  it.live('stops listening when listener is stopped', function*({ expect }) {
     const childLogic = createCallbackLogic<
-      any,
-      any,
+      { type: string },
+      unknown,
       { type: 'tick'; count: number }
     >(({ emit }) => {
       let count = 0
@@ -216,7 +247,7 @@ describe('enq.listen()', () => {
       return () => clearInterval(interval)
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
     let listenerRef: AnyActor | undefined
 
     const parentMachine = createMachine({
@@ -227,7 +258,7 @@ describe('enq.listen()', () => {
             const childRef = enq.spawn(childLogic, { id: 'child' })
             listenerRef = enq.listen(childRef, 'tick', (ev) => ({
               type: 'TICK',
-              count: (ev as any).count,
+              count: readField(ev, 'count'),
             }))
           },
           on: {
@@ -251,33 +282,26 @@ describe('enq.listen()', () => {
 
     const actor = createActor(parentMachine).start()
 
-    // Wait for some ticks
-    await new Promise((resolve) => setTimeout(resolve, 35))
+    yield* pollUntil(() => receivedEvents.length > 0)
 
     const countBeforeStop = receivedEvents.length
-    expect(countBeforeStop).toBeGreaterThan(0)
+    yield* expect(countBeforeStop).toBeGreaterThan(0)
 
-    // Stop listening
     actor.send({ type: 'STOP_LISTENING' })
 
-    // Wait more
-    await new Promise((resolve) => setTimeout(resolve, 35))
+    yield* Effect.promise(() => afterDelay(35))
 
-    // Should not have received more events after stopping
-    expect(receivedEvents.length).toBe(countBeforeStop)
+    yield* expect(receivedEvents.length).toBe(countBeforeStop)
   })
 })
 
 describe('enq.subscribeTo()', () => {
-  it('subscribes to done events from a spawned actor', async () => {
+  it.live('subscribes to done events from a spawned actor', function*({ expect }) {
     const childLogic = createAsyncLogic({
-      run: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-        return { result: 'success' }
-      },
+      run: () => afterDelay(10).then(() => ({ result: 'success' })),
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       initial: 'active',
@@ -308,24 +332,25 @@ describe('enq.subscribeTo()', () => {
     })
 
     const actor = createActor(parentMachine)
+    const completion = toPromise(actor)
     actor.start()
+    yield* Effect.promise(() => completion)
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    expect(actor.getSnapshot().value).toBe('done')
-    expect(receivedEvents).toHaveLength(1)
-    expect(receivedEvents[0].output).toEqual({ result: 'success' })
+    yield* expect({
+      value: actor.getSnapshot().value,
+      outputs: receivedEvents.map((event) => readField(event, 'output')),
+    }).toEqual({ value: 'done', outputs: [{ result: 'success' }] })
   })
 
-  it('subscribes to error events from a spawned actor', async () => {
+  it.live('subscribes to error events from a spawned actor', function*({ expect }) {
     const childLogic = createAsyncLogic({
-      run: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-        throw new Error('child error')
-      },
+      run: () =>
+        afterDelay(10).then(() => {
+          throw new Error('child error')
+        }),
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       initial: 'active',
@@ -356,16 +381,26 @@ describe('enq.subscribeTo()', () => {
     })
 
     const actor = createActor(parentMachine)
+    const completion = toPromise(actor)
     actor.start()
+    yield* Effect.promise(() => completion)
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    const errorEvents = receivedEvents.map((event) => {
+      const error = readField(event, 'error')
+      return {
+        type: readField(event, 'type'),
+        isError: error instanceof Error,
+        message: error instanceof Error ? error.message : undefined,
+      }
+    })
 
-    expect(actor.getSnapshot().value).toBe('errored')
-    expect(receivedEvents).toHaveLength(1)
-    expect(receivedEvents[0].error).toBeInstanceOf(Error)
+    yield* expect({ value: actor.getSnapshot().value, errorEvents }).toEqual({
+      value: 'errored',
+      errorEvents: [{ type: 'CHILD_ERROR', isError: true, message: 'child error' }],
+    })
   })
 
-  it('subscribes to snapshot changes using shorthand', async () => {
+  it('subscribes to snapshot changes using shorthand', function*({ expect }) {
     const childLogic = createLogic({
       context: {
         count: 0,
@@ -382,7 +417,7 @@ describe('enq.subscribeTo()', () => {
       },
     })
 
-    const snapshotChanges: any[] = []
+    const snapshotChanges: unknown[] = []
 
     const parentMachine = createMachine({
       initial: 'active',
@@ -390,7 +425,6 @@ describe('enq.subscribeTo()', () => {
         active: {
           entry: (_, enq) => {
             const childRef = enq.spawn(childLogic, { id: 'child' })
-            // Shorthand: single function for snapshot mapper
             enq.subscribeTo(childRef, (snapshot) => ({
               type: 'CHILD_SNAPSHOT',
               status: snapshot.status,
@@ -409,11 +443,10 @@ describe('enq.subscribeTo()', () => {
 
     createActor(parentMachine).start()
 
-    // Should have received at least one snapshot event
-    expect(snapshotChanges.length).toBeGreaterThan(0)
+    yield* expect(snapshotChanges.length).toBeGreaterThan(0)
   })
 
-  it('subscribes to done events from a spawned actor during startup', () => {
+  it('subscribes to done events from a spawned actor during startup', function*({ expect }) {
     const childLogic = createLogic({
       context: undefined,
       run: () => {
@@ -424,7 +457,7 @@ describe('enq.subscribeTo()', () => {
       },
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       entry: (_, enq) => {
@@ -445,7 +478,7 @@ describe('enq.subscribeTo()', () => {
 
     createActor(parentMachine).start()
 
-    expect(receivedEvents).toEqual([
+    yield* expect(receivedEvents).toEqual([
       {
         type: 'CHILD_DONE',
         output: { result: 'success' },
@@ -453,7 +486,7 @@ describe('enq.subscribeTo()', () => {
     ])
   })
 
-  it('subscribes to the initial active snapshot from a spawned actor during startup', () => {
+  it('subscribes to the initial active snapshot from a spawned actor during startup', function*({ expect }) {
     const childLogic = createLogic({
       context: { count: 0 },
       run: ({ context, event }) => {
@@ -466,7 +499,7 @@ describe('enq.subscribeTo()', () => {
       },
     })
 
-    const snapshotChanges: any[] = []
+    const snapshotChanges: unknown[] = []
 
     const parentMachine = createMachine({
       entry: (_, enq) => {
@@ -486,9 +519,7 @@ describe('enq.subscribeTo()', () => {
 
     createActor(parentMachine).start()
 
-    // The subscription is started before the child actor, so it receives the
-    // child's initial active snapshot emitted during startup (count still 0).
-    expect(snapshotChanges).toEqual([
+    yield* expect(snapshotChanges).toEqual([
       {
         type: 'CHILD_SNAPSHOT',
         status: 'active',
@@ -497,13 +528,13 @@ describe('enq.subscribeTo()', () => {
     ])
   })
 
-  it('does not subscribe to a spawned actor stopped before subscribing', () => {
+  it('does not subscribe to a spawned actor stopped before subscribing', function*({ expect }) {
     const childLogic = createLogic({
       context: undefined,
       run: () => {},
     })
 
-    const snapshotChanges: any[] = []
+    const snapshotChanges: unknown[] = []
 
     const parentMachine = createMachine({
       entry: (_, enq) => {
@@ -523,15 +554,12 @@ describe('enq.subscribeTo()', () => {
 
     createActor(parentMachine).start()
 
-    expect(snapshotChanges).toEqual([])
+    yield* expect(snapshotChanges).toEqual([])
   })
 
-  it('stops subscribing when subscription is stopped', async () => {
+  it.live('stops subscribing when subscription is stopped', function*({ expect }) {
     const childLogic = createAsyncLogic({
-      run: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        return { result: 'success' }
-      },
+      run: () => afterDelay(100).then(() => ({ result: 'success' })),
     })
 
     let receivedDone = false
@@ -571,26 +599,20 @@ describe('enq.subscribeTo()', () => {
 
     const actor = createActor(parentMachine).start()
 
-    // Unsubscribe before child completes
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    yield* Effect.promise(() => afterDelay(20))
     actor.send({ type: 'UNSUBSCRIBE' })
 
-    // Wait for child to complete
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    yield* Effect.promise(() => afterDelay(150))
 
-    // Should not have received done event
-    expect(receivedDone).toBe(false)
+    yield* expect({ receivedDone }).toEqual({ receivedDone: false })
   })
 
-  it('subscribes to done events from an actor spawned in a transition', async () => {
+  it.live('subscribes to done events from an actor spawned in a transition', function*({ expect }) {
     const childLogic = createAsyncLogic({
-      run: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-        return { result: 'success' }
-      },
+      run: () => afterDelay(10).then(() => ({ result: 'success' })),
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       initial: 'idle',
@@ -619,25 +641,23 @@ describe('enq.subscribeTo()', () => {
     })
 
     const actor = createActor(parentMachine)
+    const completion = toPromise(actor)
     actor.start()
     actor.send({ type: 'SPAWN' })
+    yield* Effect.promise(() => completion)
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    expect(actor.getSnapshot().value).toBe('done')
-    expect(receivedEvents).toHaveLength(1)
-    expect(receivedEvents[0].output).toEqual({ result: 'success' })
+    yield* expect({
+      value: actor.getSnapshot().value,
+      outputs: receivedEvents.map((event) => readField(event, 'output')),
+    }).toEqual({ value: 'done', outputs: [{ result: 'success' }] })
   })
 
-  it('subscribes to an existing child when the transition has no other effects', async () => {
+  it.live('subscribes to an existing child when the transition has no other effects', function*({ expect }) {
     const childLogic = createAsyncLogic({
-      run: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-        return { result: 'success' }
-      },
+      run: () => afterDelay(10).then(() => ({ result: 'success' })),
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       entry: (_, enq) => {
@@ -668,22 +688,27 @@ describe('enq.subscribeTo()', () => {
     })
 
     const actor = createActor(parentMachine)
+    const completion = toPromise(actor)
     actor.start()
     actor.send({ type: 'SUBSCRIBE' })
+    yield* Effect.promise(() => completion)
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    expect(actor.getSnapshot().value).toBe('done')
-    expect(receivedEvents).toHaveLength(1)
-    expect(receivedEvents[0].output).toEqual({ result: 'success' })
+    yield* expect({
+      value: actor.getSnapshot().value,
+      outputs: receivedEvents.map((event) => readField(event, 'output')),
+    }).toEqual({ value: 'done', outputs: [{ result: 'success' }] })
   })
 
-  it('listens to emitted events from an actor spawned in a transition', async () => {
-    const childLogic = createCallbackLogic(({ emit }) => {
-      emit({ type: 'childEvent', value: 42 } as any)
+  it.live('listens to emitted events from an actor spawned in a transition', function*({ expect }) {
+    const childLogic = createCallbackLogic<
+      { type: string },
+      unknown,
+      { type: 'childEvent'; value: number }
+    >(({ emit }) => {
+      emit({ type: 'childEvent', value: 42 })
     })
 
-    const receivedEvents: any[] = []
+    const receivedEvents: unknown[] = []
 
     const parentMachine = createMachine({
       initial: 'idle',
@@ -692,15 +717,10 @@ describe('enq.subscribeTo()', () => {
           on: {
             SPAWN: (_, enq) => {
               const childRef = enq.spawn(childLogic, { id: 'child' })
-              enq.listen(
-                childRef,
-                'childEvent',
-                (emitted) =>
-                  ({
-                    type: 'FROM_CHILD',
-                    value: (emitted as any).value,
-                  }) as any,
-              )
+              enq.listen(childRef, 'childEvent', (emitted) => ({
+                type: 'FROM_CHILD',
+                value: readField(emitted, 'value'),
+              }))
             },
             FROM_CHILD: ({ event }, enq) => {
               enq(() => receivedEvents.push(event))
@@ -713,10 +733,8 @@ describe('enq.subscribeTo()', () => {
     const actor = createActor(parentMachine)
     actor.start()
     actor.send({ type: 'SPAWN' })
+    yield* pollUntil(() => receivedEvents.length >= 1)
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    expect(receivedEvents).toHaveLength(1)
-    expect(receivedEvents[0].value).toBe(42)
+    yield* expect(receivedEvents.map((event) => readField(event, 'value'))).toEqual([42])
   })
 })

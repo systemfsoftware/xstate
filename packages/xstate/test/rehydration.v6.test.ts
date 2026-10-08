@@ -1,12 +1,12 @@
-import { setTimeout as sleep } from 'node:timers/promises'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { BehaviorSubject } from 'rxjs'
-import { describe, expect, it, vi } from 'vitest'
 import { createActor, createAsyncLogic, createMachine, createObservableLogic } from '../src/index.js'
 import { toSubscribable } from './utils.js'
 
 describe('rehydration', () => {
   describe('using persisted state', () => {
-    it('should be able to use `hasTag` immediately', () => {
+    it('should be able to use `hasTag` immediately', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -24,10 +24,12 @@ describe('rehydration', () => {
         snapshot: JSON.parse(persistedState),
       }).start()
 
-      expect(service.getSnapshot().hasTag('foo')).toBe(true)
+      yield* expect({ hasTagFoo: service.getSnapshot().hasTag('foo') }).toEqual({
+        hasTagFoo: true,
+      })
     })
 
-    it('should not call exit actions when machine gets stopped immediately', () => {
+    it('should not call exit actions when machine gets stopped immediately', function*({ expect }) {
       const actual: string[] = []
       const machine = createMachine({
         exit: (_, enq) => {
@@ -51,10 +53,10 @@ describe('rehydration', () => {
         .start()
         .stop()
 
-      expect(actual).toEqual([])
+      yield* expect(actual).toEqual([])
     })
 
-    it('should get correct result back from `can` immediately', () => {
+    it('should get correct result back from `can` immediately', function*({ expect }) {
       const machine = createMachine({
         on: {
           FOO: (_, enq) => {
@@ -71,12 +73,12 @@ describe('rehydration', () => {
         snapshot: restoredState,
       }).start()
 
-      expect(service.getSnapshot().can({ type: 'FOO' })).toBe(true)
+      yield* expect({ canFoo: service.getSnapshot().can({ type: 'FOO' }) }).toEqual({ canFoo: true })
     })
   })
 
   describe('using state value', () => {
-    it('should be able to use `hasTag` immediately', () => {
+    it('should be able to use `hasTag` immediately', function*({ expect }) {
       const machine = createMachine({
         initial: 'inactive',
         states: {
@@ -96,10 +98,12 @@ describe('rehydration', () => {
 
       service.start()
 
-      expect(service.getSnapshot().hasTag('foo')).toBe(true)
+      yield* expect({ hasTagFoo: service.getSnapshot().hasTag('foo') }).toEqual({
+        hasTagFoo: true,
+      })
     })
 
-    it('should not call exit actions when machine gets stopped immediately', () => {
+    it('should not call exit actions when machine gets stopped immediately', function*({ expect }) {
       const actual: string[] = []
       const machine = createMachine({
         exit: (_, enq) => {
@@ -124,10 +128,10 @@ describe('rehydration', () => {
         .start()
         .stop()
 
-      expect(actual).toEqual([])
+      yield* expect(actual).toEqual([])
     })
 
-    it('should error on incompatible state value (shallow)', () => {
+    it('should error on incompatible state value (shallow)', function*({ expect }) {
       const machine = createMachine({
         initial: 'valid',
         states: {
@@ -135,12 +139,12 @@ describe('rehydration', () => {
         },
       })
 
-      expect(() => {
+      yield* expect(() => {
         machine.resolveState({ value: 'invalid' })
       }).toThrow(/invalid/)
     })
 
-    it('should error on incompatible state value (deep)', () => {
+    it('should error on incompatible state value (deep)', function*({ expect }) {
       const machine = createMachine({
         initial: 'parent',
         states: {
@@ -153,23 +157,25 @@ describe('rehydration', () => {
         },
       })
 
-      expect(() => {
+      yield* expect(() => {
         machine.resolveState({ value: { parent: 'invalid' } })
       }).toThrow(/invalid/)
     })
   })
 
-  it('should not replay actions when starting from a persisted state', () => {
-    const entrySpy = vi.fn()
+  it('should not replay actions when starting from a persisted state', function*({ expect }) {
+    const entryCalls: string[] = []
     const machine = createMachine({
       entry: (_, enq) => {
-        enq(entrySpy)
+        enq(() => {
+          entryCalls.push('entry')
+        })
       },
     })
 
     const actor = createActor(machine).start()
 
-    expect(entrySpy).toHaveBeenCalledTimes(1)
+    const callsAfterFirstStart = [...entryCalls]
 
     const persistedState = actor.getPersistedSnapshot()
 
@@ -177,10 +183,15 @@ describe('rehydration', () => {
 
     createActor(machine, { snapshot: persistedState }).start()
 
-    expect(entrySpy).toHaveBeenCalledTimes(1)
+    const callsAfterRehydrate = [...entryCalls]
+
+    yield* expect({ callsAfterFirstStart, callsAfterRehydrate }).toEqual({
+      callsAfterFirstStart: ['entry'],
+      callsAfterRehydrate: ['entry'],
+    })
   })
 
-  it('should be able to stop a rehydrated child', async () => {
+  it('should be able to stop a rehydrated child', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -206,16 +217,18 @@ describe('rehydration', () => {
       snapshot: persistedState,
     }).start()
 
-    expect(() =>
-      rehydratedActor.send({
-        type: 'NEXT',
-      })
-    ).not.toThrow()
+    const before = rehydratedActor.getSnapshot().value
 
-    expect(rehydratedActor.getSnapshot().value).toBe('c')
+    rehydratedActor.send({
+      type: 'NEXT',
+    })
+
+    const after = rehydratedActor.getSnapshot().value
+
+    yield* expect({ before, after }).toEqual({ before: 'a', after: 'c' })
   })
 
-  it('a rehydrated active child should be registered in the system', () => {
+  it('a rehydrated active child should be registered in the system', function*({ expect }) {
     const machine = createMachine({
       actors: {
         foo: createMachine({}),
@@ -236,10 +249,10 @@ describe('rehydration', () => {
       snapshot: persistedState,
     }).start()
 
-    expect(rehydratedActor.system.get('mySystemId')).not.toBeUndefined()
+    yield* expect(rehydratedActor.system.get('mySystemId')?.getSnapshot()).toMatchObject({ status: 'active' })
   })
 
-  it('a rehydrated done child should not be registered in the system', () => {
+  it('a rehydrated done child should not be registered in the system', function*({ expect }) {
     const machine = createMachine({
       actors: {
         foo: createMachine({ type: 'final' }),
@@ -260,11 +273,11 @@ describe('rehydration', () => {
       snapshot: persistedState,
     }).start()
 
-    expect(rehydratedActor.system.get('mySystemId')).toBeUndefined()
+    yield* expect(rehydratedActor.system.get('mySystemId')).toBe(undefined)
   })
 
-  it('a rehydrated done child should not re-notify the parent about its completion', () => {
-    const spy = vi.fn()
+  it('a rehydrated done child should not re-notify the parent about its completion', function*({ expect }) {
+    const notifications: string[] = []
 
     const machine = createMachine({
       actors: {
@@ -278,7 +291,7 @@ describe('rehydration', () => {
       },
       on: {
         '*': (_, enq) => {
-          enq(spy)
+          enq(() => notifications.push('notified'))
         },
       },
     })
@@ -287,16 +300,16 @@ describe('rehydration', () => {
     const persistedState = actor.getPersistedSnapshot()
     actor.stop()
 
-    spy.mockClear()
+    notifications.length = 0
 
     createActor(machine, {
       snapshot: persistedState,
     }).start()
 
-    expect(spy).not.toHaveBeenCalled()
+    yield* expect(notifications).toEqual([])
   })
 
-  it('should be possible to persist a rehydrated actor that got its children rehydrated', () => {
+  it('should be possible to persist a rehydrated actor that got its children rehydrated', function*({ expect }) {
     const machine = createMachine({
       actors: {
         foo: createAsyncLogic({ run: () => Promise.resolve(42) }),
@@ -312,13 +325,14 @@ describe('rehydration', () => {
       snapshot: actor.getPersistedSnapshot(),
     }).start()
 
-    const persistedChildren = (rehydratedActor.getPersistedSnapshot() as any)
-      .children
-    expect(Object.keys(persistedChildren).length).toBe(1)
-    expect((Object.values(persistedChildren)[0] as any).src).toBe('foo')
+    const persistedChildren = rehydratedActor.getPersistedSnapshot().children
+    yield* expect({
+      childCount: Object.keys(persistedChildren).length,
+      src: Object.values(persistedChildren)[0]?.src,
+    }).toEqual({ childCount: 1, src: 'foo' })
   })
 
-  it('should complete on a rehydrated final state', () => {
+  it('should complete on a rehydrated final state', function*({ expect }) {
     const machine = createMachine({
       initial: 'foo',
       states: {
@@ -335,17 +349,19 @@ describe('rehydration', () => {
     actorRef.send({ type: 'NEXT' })
     const persistedState = actorRef.getPersistedSnapshot()
 
-    const spy = vi.fn()
+    const completions: string[] = []
     const actorRef2 = createActor(machine, { snapshot: persistedState })
     actorRef2.subscribe({
-      complete: spy,
+      complete: () => {
+        completions.push('complete')
+      },
     })
 
     actorRef2.start()
-    expect(spy).toHaveBeenCalled()
+    yield* expect(completions).toEqual(['complete'])
   })
 
-  it('should error on a rehydrated error state', async () => {
+  it('should error on a rehydrated error state', function*({ expect }) {
     const failure = createAsyncLogic({
       run: () => Promise.reject(new Error('failure')),
     })
@@ -363,26 +379,33 @@ describe('rehydration', () => {
     )
 
     const actorRef = createActor(machine)
-    actorRef.subscribe({ error: function preventUnhandledErrorListener() {} })
+    const errorObserved = new Promise<void>((resolve) => {
+      actorRef.subscribe({ error: () => resolve() })
+    })
     actorRef.start()
 
-    // wait a macrotask for the microtask related to the promise to be processed
-    await sleep(0)
+    yield* Effect.promise(() => errorObserved)
 
     const persistedState = actorRef.getPersistedSnapshot()
 
-    const spy = vi.fn()
+    const errors: string[] = []
     const actorRef2 = createActor(machine, { snapshot: persistedState })
     actorRef2.subscribe({
-      error: spy,
+      error: (error) => {
+        errors.push(error instanceof Error ? error.message : String(error))
+      },
     })
     actorRef2.start()
 
-    expect(spy).toHaveBeenCalled()
+    yield* expect(errors).toEqual(['failure'])
   })
 
-  it(`shouldn't re-notify the parent about the error when rehydrating`, async () => {
-    const spy = vi.fn()
+  it(`shouldn't re-notify the parent about the error when rehydrating`, function*({ expect }) {
+    const errorNotifications: string[] = []
+    let signalError: () => void = () => {}
+    const errorObserved = new Promise<void>((resolve) => {
+      signalError = resolve
+    })
     const failure = createAsyncLogic({
       run: () => Promise.reject(new Error('failure')),
     })
@@ -391,7 +414,10 @@ describe('rehydration', () => {
         invoke: {
           src: failure,
           onError: (_, enq) => {
-            enq(spy)
+            enq(() => {
+              errorNotifications.push('error')
+              signalError()
+            })
           },
         },
       },
@@ -405,25 +431,24 @@ describe('rehydration', () => {
     const actorRef = createActor(machine)
     actorRef.start()
 
-    // wait a macrotask for the microtask related to the promise to be processed
-    await sleep(0)
+    yield* Effect.promise(() => errorObserved)
 
     const persistedState = actorRef.getPersistedSnapshot()
-    spy.mockClear()
+    errorNotifications.length = 0
 
     const actorRef2 = createActor(machine, { snapshot: persistedState })
     actorRef2.start()
 
-    expect(spy).not.toHaveBeenCalled()
+    yield* expect(errorNotifications).toEqual([])
   })
 
-  it('should continue syncing snapshots', () => {
+  it('should continue syncing snapshots', function*({ expect }) {
     const subject = new BehaviorSubject(0)
     const subjectLogic = createObservableLogic<number, undefined>(
       () => toSubscribable(subject),
     )
 
-    const spy = vi.fn()
+    const snapshots: number[] = []
 
     const machine = createMachine({
       actors: {
@@ -432,7 +457,7 @@ describe('rehydration', () => {
       invoke: {
         src: 'service',
         onSnapshot: ({ event }, enq) => {
-          enq(() => spy(event.snapshot.context))
+          enq(() => snapshots.push(event.snapshot.context))
         },
       },
     })
@@ -441,19 +466,19 @@ describe('rehydration', () => {
       snapshot: createActor(machine).getPersistedSnapshot(),
     }).start()
 
-    spy.mockClear()
+    snapshots.length = 0
 
     subject.next(42)
     subject.next(100)
 
-    expect(spy.mock.calls).toEqual([[42], [100]])
+    yield* expect(snapshots).toEqual([42, 100])
   })
 
-  it('should be able to rehydrate an actor deep in the tree', () => {
+  it('should be able to rehydrate an actor deep in the tree', function*({ expect }) {
     const grandchild = createMachine({
       context: {
         count: 0,
-      } as any,
+      },
       on: {
         INC: ({ context }) => ({
           context: {
@@ -514,6 +539,6 @@ describe('rehydration', () => {
       throw new Error('expected a grandchild actor')
     }
 
-    expect(grandchildRef.getSnapshot().context.count).toBe(1)
+    yield* expect(grandchildRef.getSnapshot().context.count).toBe(1)
   })
 })

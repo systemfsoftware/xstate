@@ -1,10 +1,23 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { createMachineFromConfig } from '../src/createMachineFromConfig.js'
 import { createActor, initialTransition, transition } from '../src/index.js'
 
+const thrownError = (run: () => unknown): { name: string; message: string } => {
+  try {
+    run()
+  } catch (error) {
+    if (error instanceof Error) {
+      return { name: error.name, message: error.message }
+    }
+    return { name: typeof error, message: String(error) }
+  }
+  return { name: 'no error thrown', message: 'no error thrown' }
+}
+
 describe('createMachineFromConfig ', () => {
-  it('rejects history states without a non-empty default target', () => {
-    expect(() =>
+  it('rejects history states without a non-empty default target', function*({ expect }) {
+    const withoutTarget = thrownError(() =>
       createMachineFromConfig({
         initial: 'on',
         states: {
@@ -17,11 +30,9 @@ describe('createMachineFromConfig ', () => {
           },
         },
       })
-    ).toThrow(
-      'History state at $.states.on.states.history must declare a non-empty target.',
     )
 
-    expect(() =>
+    const withEmptyTarget = thrownError(() =>
       createMachineFromConfig({
         initial: 'on',
         states: {
@@ -38,13 +49,22 @@ describe('createMachineFromConfig ', () => {
           },
         },
       })
-    ).toThrow(
-      'History state at $.states.on.states.history must declare a non-empty target.',
     )
+
+    yield* expect({ withoutTarget, withEmptyTarget }).toEqual({
+      withoutTarget: {
+        name: 'Error',
+        message: 'History state at $.states.on.states.history must declare a non-empty target.',
+      },
+      withEmptyTarget: {
+        name: 'Error',
+        message: 'History state at $.states.on.states.history must declare a non-empty target.',
+      },
+    })
   })
 
-  it('rejects SCXML-illegal multi-target transitions at construction', () => {
-    expect(() =>
+  it('rejects SCXML-illegal multi-target transitions at construction', function*({ expect }) {
+    yield* expect(() =>
       createMachineFromConfig({
         initial: 'idle',
         states: {
@@ -67,7 +87,7 @@ describe('createMachineFromConfig ', () => {
     )
   })
 
-  it('should create a machine from a config', () => {
+  it('should create a machine from a config', function*({ expect }) {
     const machine = createMachineFromConfig({
       initial: 'a',
       states: {
@@ -85,14 +105,17 @@ describe('createMachineFromConfig ', () => {
       },
     })
     const [initialState] = initialTransition(machine)
-    expect(initialState.value).toEqual('a')
     const [nextState] = transition(machine, initialState, { type: 'NEXT' })
-    expect(nextState.value).toEqual('b')
     const [nextState2] = transition(machine, nextState, { type: 'NEXT' })
-    expect(nextState2.value).toEqual('c')
+
+    yield* expect({
+      initial: initialState.value,
+      next: nextState.value,
+      next2: nextState2.value,
+    }).toEqual({ initial: 'a', next: 'b', next2: 'c' })
   })
 
-  it('does not merge actor input into native JSON machine context', () => {
+  it('does not merge actor input into native JSON machine context', function*({ expect }) {
     const machine = createMachineFromConfig({
       context: { count: 0 },
       initial: 'idle',
@@ -102,10 +125,10 @@ describe('createMachineFromConfig ', () => {
       input: { count: 5, extra: true },
     }).start()
 
-    expect(actor.getSnapshot().context).toEqual({ count: 0 })
+    yield* expect(actor.getSnapshot().context).toEqual({ count: 0 })
   })
 
-  it('should handle raise actions', () => {
+  it('should handle raise actions', function*({ expect }) {
     const machine = createMachineFromConfig({
       initial: 'a',
       states: {
@@ -121,12 +144,15 @@ describe('createMachineFromConfig ', () => {
       },
     })
     const [initialState] = initialTransition(machine)
-    expect(initialState.value).toEqual('a')
     const [nextState] = transition(machine, initialState, { type: 'NEXT' })
-    expect(nextState.value).toEqual('b')
+
+    yield* expect({
+      initial: initialState.value,
+      next: nextState.value,
+    }).toEqual({ initial: 'a', next: 'b' })
   })
 
-  it('should handle emit actions', async () => {
+  it('should handle emit actions', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     const machine = createMachineFromConfig({
       initial: 'a',
@@ -146,13 +172,16 @@ describe('createMachineFromConfig ', () => {
       },
     })
 
+    const emitted: unknown[] = []
     const actor = createActor(machine)
     actor.on('EMITTED', (ev) => {
-      expect(ev['msg']).toEqual('hello')
+      emitted.push(ev['msg'])
       resolve()
     })
     actor.start()
     actor.send({ type: 'NEXT' })
-    await promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect(emitted).toEqual(['hello'])
   })
 })

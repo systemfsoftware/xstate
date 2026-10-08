@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
 import { createActor, createMachine, matchesState } from '../src/index.js'
 import { type InferEvents } from '../src/types.v6.js'
@@ -100,39 +100,46 @@ describe('guard conditions', () => {
     },
   })
 
-  it('should transition only if condition is met', () => {
+  it('should transition only if condition is met', function*({ expect }) {
     const actorRef1 = createActor(lightMachine, {
       input: { elapsed: 50 },
     }).start()
     actorRef1.send({ type: 'TIMER' })
-    expect(actorRef1.getSnapshot().value).toEqual('green')
 
     const actorRef2 = createActor(lightMachine, {
       input: { elapsed: 120 },
     }).start()
     actorRef2.send({ type: 'TIMER' })
-    expect(actorRef2.getSnapshot().value).toEqual('yellow')
+
+    yield* expect({
+      first: actorRef1.getSnapshot().value,
+      second: actorRef2.getSnapshot().value,
+    }).toEqual({ first: 'green', second: 'yellow' })
   })
 
-  it('should transition if condition based on event is met', () => {
+  it('should transition if condition based on event is met', function*({
+    expect,
+  }) {
     const actorRef = createActor(lightMachine, { input: {} }).start()
     actorRef.send({
       type: 'EMERGENCY',
       isEmergency: true,
     })
-    expect(actorRef.getSnapshot().value).toEqual('red')
+    yield* expect(actorRef.getSnapshot().value).toEqual('red')
   })
 
-  it('should not transition if condition based on event is not met', () => {
+  it('should not transition if condition based on event is not met', function*({
+    expect,
+  }) {
     const actorRef = createActor(lightMachine, { input: {} }).start()
     actorRef.send({
       type: 'EMERGENCY',
       isEmergency: false,
     })
-    expect(actorRef.getSnapshot().value).toEqual('green')
+    yield* expect(actorRef.getSnapshot().value).toEqual('green')
   })
 
-  it('should not transition if no condition is met', () => {
+  it('should not transition if no condition is met', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -165,39 +172,53 @@ describe('guard conditions', () => {
 
     actor.send({ type: 'TIMER', elapsed: 10 })
 
-    expect(actor.getSnapshot().value).toBe('a')
-    expect(flushTracked()).toEqual([])
+    yield* expect({
+      value: actor.getSnapshot().value,
+      tracked: flushTracked(),
+    }).toEqual({ value: 'a', tracked: [] })
   })
 
-  it('should work with defined string transitions', () => {
+  it('should work with defined string transitions', function*({ expect }) {
     const actorRef = createActor(lightMachine, {
       input: { elapsed: 120 },
     }).start()
     actorRef.send({
       type: 'TIMER',
     })
-    expect(actorRef.getSnapshot().value).toEqual('yellow')
+    const afterFirst = actorRef.getSnapshot().value
     actorRef.send({
       type: 'TIMER',
     })
-    expect(actorRef.getSnapshot().value).toEqual('red')
+    const afterSecond = actorRef.getSnapshot().value
+
+    yield* expect({ afterFirst, afterSecond }).toEqual({
+      afterFirst: 'yellow',
+      afterSecond: 'red',
+    })
   })
 
-  it('should work with guard objects', () => {
+  it('should work with guard objects', function*({ expect }) {
     const actorRef = createActor(lightMachine, {
       input: { elapsed: 150 },
     }).start()
     actorRef.send({
       type: 'TIMER',
     })
-    expect(actorRef.getSnapshot().value).toEqual('yellow')
+    const afterTimer = actorRef.getSnapshot().value
     actorRef.send({
       type: 'TIMER_COND_OBJ',
     })
-    expect(actorRef.getSnapshot().value).toEqual('red')
+    const afterConditionObject = actorRef.getSnapshot().value
+
+    yield* expect({ afterTimer, afterConditionObject }).toEqual({
+      afterTimer: 'yellow',
+      afterConditionObject: 'red',
+    })
   })
 
-  it('should work with defined string transitions (condition not met)', () => {
+  it('should work with defined string transitions (condition not met)', function*({
+    expect,
+  }) {
     const minTimeElapsed = (elapsed: number) => elapsed >= 100 && elapsed < 200
 
     const machine = createMachine({
@@ -273,10 +294,10 @@ describe('guard conditions', () => {
       type: 'TIMER',
     })
 
-    expect(actorRef.getSnapshot().value).toEqual('yellow')
+    yield* expect(actorRef.getSnapshot().value).toEqual('yellow')
   })
 
-  it('should guard against transition', () => {
+  it('should guard against transition', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -328,13 +349,13 @@ describe('guard conditions', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'T1' })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       A: 'A2',
       B: 'B0',
     })
   })
 
-  it('should allow a matching transition', () => {
+  it('should allow a matching transition', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -387,13 +408,13 @@ describe('guard conditions', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'T2' })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       A: 'A2',
       B: 'B2',
     })
   })
 
-  it('should check guards with interim states', () => {
+  it('should check guards with interim states', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -440,7 +461,7 @@ describe('guard conditions', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'A' })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       A: 'A5',
       B: 'B4',
     })
@@ -499,39 +520,46 @@ describe('[function] guard conditions', () => {
     },
   })
 
-  it('should transition only if condition is met', () => {
+  it('should transition only if condition is met', function*({ expect }) {
     const actorRef1 = createActor(lightMachine, {
       input: { elapsed: 50 },
     }).start()
     actorRef1.send({ type: 'TIMER' })
-    expect(actorRef1.getSnapshot().value).toEqual('green')
 
     const actorRef2 = createActor(lightMachine, {
       input: { elapsed: 120 },
     }).start()
     actorRef2.send({ type: 'TIMER' })
-    expect(actorRef2.getSnapshot().value).toEqual('yellow')
+
+    yield* expect({
+      first: actorRef1.getSnapshot().value,
+      second: actorRef2.getSnapshot().value,
+    }).toEqual({ first: 'green', second: 'yellow' })
   })
 
-  it('should transition if condition based on event is met', () => {
+  it('should transition if condition based on event is met', function*({
+    expect,
+  }) {
     const actorRef = createActor(lightMachine, { input: {} }).start()
     actorRef.send({
       type: 'EMERGENCY',
       isEmergency: true,
     })
-    expect(actorRef.getSnapshot().value).toEqual('red')
+    yield* expect(actorRef.getSnapshot().value).toEqual('red')
   })
 
-  it('should not transition if condition based on event is not met', () => {
+  it('should not transition if condition based on event is not met', function*({
+    expect,
+  }) {
     const actorRef = createActor(lightMachine, { input: {} }).start()
     actorRef.send({
       type: 'EMERGENCY',
       isEmergency: false,
     })
-    expect(actorRef.getSnapshot().value).toEqual('green')
+    yield* expect(actorRef.getSnapshot().value).toEqual('green')
   })
 
-  it('should not transition if no condition is met', () => {
+  it('should not transition if no condition is met', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -562,39 +590,53 @@ describe('[function] guard conditions', () => {
 
     actor.send({ type: 'TIMER', elapsed: 10 })
 
-    expect(actor.getSnapshot().value).toBe('a')
-    expect(flushTracked()).toEqual([])
+    yield* expect({
+      value: actor.getSnapshot().value,
+      tracked: flushTracked(),
+    }).toEqual({ value: 'a', tracked: [] })
   })
 
-  it('should work with defined string transitions', () => {
+  it('should work with defined string transitions', function*({ expect }) {
     const actorRef = createActor(lightMachine, {
       input: { elapsed: 120 },
     }).start()
     actorRef.send({
       type: 'TIMER',
     })
-    expect(actorRef.getSnapshot().value).toEqual('yellow')
+    const afterFirst = actorRef.getSnapshot().value
     actorRef.send({
       type: 'TIMER',
     })
-    expect(actorRef.getSnapshot().value).toEqual('red')
+    const afterSecond = actorRef.getSnapshot().value
+
+    yield* expect({ afterFirst, afterSecond }).toEqual({
+      afterFirst: 'yellow',
+      afterSecond: 'red',
+    })
   })
 
-  it('should work with guard objects', () => {
+  it('should work with guard objects', function*({ expect }) {
     const actorRef = createActor(lightMachine, {
       input: { elapsed: 150 },
     }).start()
     actorRef.send({
       type: 'TIMER',
     })
-    expect(actorRef.getSnapshot().value).toEqual('yellow')
+    const afterTimer = actorRef.getSnapshot().value
     actorRef.send({
       type: 'TIMER_COND_OBJ',
     })
-    expect(actorRef.getSnapshot().value).toEqual('red')
+    const afterConditionObject = actorRef.getSnapshot().value
+
+    yield* expect({ afterTimer, afterConditionObject }).toEqual({
+      afterTimer: 'yellow',
+      afterConditionObject: 'red',
+    })
   })
 
-  it('should work with defined string transitions (condition not met)', () => {
+  it('should work with defined string transitions (condition not met)', function*({
+    expect,
+  }) {
     const machine = createMachine({
       // types: {} as { context: LightMachineCtx; events: LightMachineEvents },
       schemas: {
@@ -641,10 +683,10 @@ describe('[function] guard conditions', () => {
       type: 'TIMER',
     })
 
-    expect(actorRef.getSnapshot().value).toEqual('yellow')
+    yield* expect(actorRef.getSnapshot().value).toEqual('yellow')
   })
 
-  it.skip('should allow a matching transition', () => {
+  it.skip('should allow a matching transition', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -697,13 +739,13 @@ describe('[function] guard conditions', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'T2' })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       A: 'A2',
       B: 'B2',
     })
   })
 
-  it.skip('should check guards with interim states', () => {
+  it.skip('should check guards with interim states', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -750,7 +792,7 @@ describe('[function] guard conditions', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'A' })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       A: 'A5',
       B: 'B4',
     })
@@ -758,7 +800,7 @@ describe('[function] guard conditions', () => {
 })
 
 describe('custom guards', () => {
-  it('should evaluate custom guards', () => {
+  it('should evaluate custom guards', function*({ expect }) {
     const contextSchema = z.object({
       count: z.number(),
     })
@@ -833,20 +875,23 @@ describe('custom guards', () => {
 
     const actorRef1 = createActor(machine).start()
     actorRef1.send({ type: 'EVENT', value: 4 })
-    const passState = actorRef1.getSnapshot()
-
-    expect(passState.value).toEqual('active')
+    const passValue = actorRef1.getSnapshot().value
 
     const actorRef2 = createActor(machine).start()
     actorRef2.send({ type: 'EVENT', value: 3 })
-    const failState = actorRef2.getSnapshot()
+    const failValue = actorRef2.getSnapshot().value
 
-    expect(failState.value).toEqual('inactive')
+    yield* expect({ passValue, failValue }).toEqual({
+      passValue: 'active',
+      failValue: 'inactive',
+    })
   })
 })
 
 describe('guards - other', () => {
-  it('should allow for a fallback target to be a simple string', () => {
+  it('should allow for a fallback target to be a simple string', function*({
+    expect,
+  }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -869,12 +914,14 @@ describe('guards - other', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'EVENT' })
 
-    expect(actor.getSnapshot().value).toBe('c')
+    yield* expect(actor.getSnapshot().value).toBe('c')
   })
 })
 
 describe('guards - unknown references', () => {
-  it('should throw on a guard reference that is not implemented', () => {
+  it('should throw on a guard reference that is not implemented', function*({
+    expect,
+  }) {
     const machine = createMachine({
       context: { ready: false },
       guards: {
@@ -904,15 +951,22 @@ describe('guards - unknown references', () => {
     actor.start()
 
     const snapshot = actor.getSnapshot()
-    expect(snapshot.status).toBe('error')
-    expect((snapshot as any).error.message).toMatch(
-      /guards.isRedy is not a function/,
-    )
+    const errorMessage = snapshot.status === 'error' &&
+        snapshot.error instanceof Error
+      ? snapshot.error.message
+      : undefined
+
+    yield* expect({ status: snapshot.status, errorMessage }).toEqual({
+      status: 'error',
+      errorMessage: 'guards.isRedy is not a function',
+    })
   })
 })
 
 describe('guards - plain function sources', () => {
-  it('passes only the caller-supplied params to the source', () => {
+  it('passes only the caller-supplied params to the source', function*({
+    expect,
+  }) {
     const received: unknown[][] = []
     const machine = createMachine({
       context: { count: 5 },
@@ -941,11 +995,13 @@ describe('guards - plain function sources', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'EV' })
 
-    expect(actor.getSnapshot().value).toBe('b')
-    expect(received).toEqual([[5, 3]])
+    yield* expect({ value: actor.getSnapshot().value, received }).toEqual({
+      value: 'b',
+      received: [[5, 3]],
+    })
   })
 
-  it('supports zero-param guards', () => {
+  it('supports zero-param guards', function*({ expect }) {
     const machine = createMachine({
       guards: {
         isEnabled: () => true,
@@ -968,6 +1024,6 @@ describe('guards - plain function sources', () => {
 
     const actor = createActor(machine).start()
     actor.send({ type: 'EV' })
-    expect(actor.getSnapshot().value).toBe('b')
+    yield* expect(actor.getSnapshot().value).toBe('b')
   })
 })

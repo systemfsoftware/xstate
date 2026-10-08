@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import {
   type ActorLogic,
   type AnyActorSystem,
@@ -7,9 +8,10 @@ import {
   type Snapshot,
   transition,
 } from '../src/index.js'
+import { Mailbox } from '../src/Mailbox.js'
 
 describe('runtime allocation lifecycle', () => {
-  it('keeps idle-only storage lazy', () => {
+  it('keeps idle-only storage lazy', function*({ expect }) {
     const actor = createActor(createMachine({})).start()
     const runtime = actor as unknown as {
       mailbox?: unknown
@@ -26,19 +28,20 @@ describe('runtime allocation lifecycle', () => {
       _reverseKeyedActors?: unknown
     }
 
-    expect(runtime.mailbox).toBeUndefined()
-    expect(runtime.observers).toBeUndefined()
-    expect(runtime.eventListeners).toBeUndefined()
-    expect(runtime._trigger).toBeUndefined()
-    expect(runtime._boundSend).toBeUndefined()
-    expect(runtimeSystem._inspectionObservers).toBeUndefined()
-    expect(runtimeSystem._children).toBeUndefined()
-    expect(runtimeSystem._timerMap).toBeUndefined()
-    expect(runtimeSystem._keyedActors).toBeUndefined()
-    expect(runtimeSystem._reverseKeyedActors).toBeUndefined()
-
-    expect(actor.system.get('missing')).toBeUndefined()
-    expect(runtimeSystem._keyedActors).toBeUndefined()
+    const before = {
+      mailbox: runtime.mailbox,
+      observers: runtime.observers,
+      eventListeners: runtime.eventListeners,
+      trigger: runtime._trigger,
+      boundSend: runtime._boundSend,
+      inspectionObservers: runtimeSystem._inspectionObservers,
+      children: runtimeSystem._children,
+      timerMap: runtimeSystem._timerMap,
+      keyedActors: runtimeSystem._keyedActors,
+      reverseKeyedActors: runtimeSystem._reverseKeyedActors,
+      systemGetMissing: actor.system.get('missing'),
+    }
+    const keyedActorsAfterMissing = runtimeSystem._keyedActors
 
     actor.subscribe(() => {})
     actor.send({ type: 'event' })
@@ -49,14 +52,36 @@ describe('runtime allocation lifecycle', () => {
     triggerEvent()
     actor.system.inspect(() => {})
 
-    expect(runtime.mailbox).toBeDefined()
-    expect(runtime.observers).toBeDefined()
-    expect(runtime._trigger).toBeDefined()
-    expect(runtime._boundSend).toBeDefined()
-    expect(runtimeSystem._inspectionObservers).toBeDefined()
+    yield* expect({
+      ...before,
+      keyedActorsAfterMissing,
+      mailboxAfter: runtime.mailbox,
+      observersAfter: runtime.observers,
+      inspectionObserversAfter: runtimeSystem._inspectionObservers,
+      triggerIsActorTrigger: runtime._trigger === actor.trigger,
+      boundSendIsActorSend: runtime._boundSend === actor.send,
+    }).toEqual({
+      mailbox: undefined,
+      observers: undefined,
+      eventListeners: undefined,
+      trigger: undefined,
+      boundSend: undefined,
+      inspectionObservers: undefined,
+      children: undefined,
+      timerMap: undefined,
+      keyedActors: undefined,
+      reverseKeyedActors: undefined,
+      systemGetMissing: undefined,
+      keyedActorsAfterMissing: undefined,
+      mailboxAfter: expect.any(Mailbox),
+      observersAfter: expect.any(Set),
+      inspectionObserversAfter: expect.any(Set),
+      triggerIsActorTrigger: true,
+      boundSendIsActorSend: true,
+    })
   })
 
-  it('keeps the running root inline until registered actors are requested', () => {
+  it('keeps the running root inline until registered actors are requested', function*({ expect }) {
     let transitionSawRoot = false
     let actor: ReturnType<typeof createActor>
     const machine = createMachine({
@@ -71,35 +96,61 @@ describe('runtime allocation lifecycle', () => {
       _children?: Map<string, unknown>
     }
 
-    expect(runtimeSystem._children).toBeUndefined()
+    const childrenBefore = runtimeSystem._children
     transition(machine, actor.getSnapshot(), { type: 'CHECK' })
-    expect(transitionSawRoot).toBe(true)
-    expect(runtimeSystem._children).toBeUndefined()
-    expect(actor.system.children.get(actor.sessionId)).toBe(actor)
-    expect(runtimeSystem._children?.size).toBe(1)
+    const sawRoot = transitionSawRoot
+    const childrenAfterTransition = runtimeSystem._children
+    const registeredIsActor = actor.system.children.get(actor.sessionId) === actor
+    const childrenSize = runtimeSystem._children?.size
+
+    yield* expect({
+      childrenBefore,
+      sawRoot,
+      childrenAfterTransition,
+      registeredIsActor,
+      childrenSize,
+    }).toEqual({
+      childrenBefore: undefined,
+      sawRoot: true,
+      childrenAfterTransition: undefined,
+      registeredIsActor: true,
+      childrenSize: 1,
+    })
   })
 
-  it('shares runtime operations between independent systems', () => {
+  it('shares runtime operations between independent systems', function*({ expect }) {
     const first = createActor(createMachine({}))
     const second = createActor(createMachine({}))
 
-    expect(first.system.sendEvent).toBe(second.system.sendEvent)
-    expect(Object.hasOwn(first.system, 'sendEvent')).toBe(false)
+    yield* expect({
+      sameSendEvent: first.system.sendEvent === second.system.sendEvent,
+      hasOwnSendEvent: Object.hasOwn(first.system, 'sendEvent'),
+    }).toEqual({
+      sameSendEvent: true,
+      hasOwnSendEvent: false,
+    })
   })
 
-  it('shares enumerable default actor options but copies explicit options', () => {
+  it('shares enumerable default actor options but copies explicit options', function*({ expect }) {
     const logic = createMachine({})
     const first = createActor(logic)
     const second = createActor(logic)
     const explicit = createActor(logic, {})
 
-    expect(first.options).toBe(second.options)
-    expect(Object.keys(first.options)).toEqual(['clock', 'logger'])
-    expect(explicit.options).not.toBe(first.options)
-    expect(Object.keys(explicit.options)).toEqual(['clock', 'logger'])
+    yield* expect({
+      sameDefaultOptions: first.options === second.options,
+      defaultOptionKeys: Object.keys(first.options),
+      explicitDiffers: explicit.options !== first.options,
+      explicitOptionKeys: Object.keys(explicit.options),
+    }).toEqual({
+      sameDefaultOptions: true,
+      defaultOptionKeys: ['clock', 'logger'],
+      explicitDiffers: true,
+      explicitOptionKeys: ['clock', 'logger'],
+    })
   })
 
-  it('keeps detachable actor-scope operations lazy', () => {
+  it('keeps detachable actor-scope operations lazy', function*({ expect }) {
     type ScopeMethods = {
       defer: (fn: () => void) => void
       stopChild: (child: never) => void
@@ -113,19 +164,31 @@ describe('runtime allocation lifecycle', () => {
     const secondScope = (second as unknown as { _actorScope: ScopeMethods })
       ._actorScope
 
-    expect(Object.hasOwn(firstScope, 'defer')).toBe(false)
-    expect(Object.hasOwn(firstScope, 'stopChild')).toBe(false)
-    expect(Object.hasOwn(firstScope, 'actionExecutor')).toBe(false)
+    const ownsDeferBefore = Object.hasOwn(firstScope, 'defer')
+    const ownsStopChildBefore = Object.hasOwn(firstScope, 'stopChild')
+    const ownsActionExecutorBefore = Object.hasOwn(firstScope, 'actionExecutor')
 
     const detachedDefer = firstScope.defer
     detachedDefer(() => {})
 
-    expect(firstScope.defer).toBe(detachedDefer)
-    expect(Object.hasOwn(firstScope, 'defer')).toBe(true)
-    expect(Object.hasOwn(secondScope, 'defer')).toBe(false)
+    yield* expect({
+      ownsDeferBefore,
+      ownsStopChildBefore,
+      ownsActionExecutorBefore,
+      deferSame: firstScope.defer === detachedDefer,
+      ownsDeferAfter: Object.hasOwn(firstScope, 'defer'),
+      ownsDeferSecond: Object.hasOwn(secondScope, 'defer'),
+    }).toEqual({
+      ownsDeferBefore: false,
+      ownsStopChildBefore: false,
+      ownsActionExecutorBefore: false,
+      deferSame: true,
+      ownsDeferAfter: true,
+      ownsDeferSecond: false,
+    })
   })
 
-  it('keeps detached actor-scope operations callable asynchronously', async () => {
+  it('keeps detached actor-scope operations callable asynchronously', function*({ expect }) {
     const childLogic = createMachine({})
     const actor = createActor(
       createMachine({
@@ -152,7 +215,7 @@ describe('runtime allocation lifecycle', () => {
     actor.on('scope-event' as never, () => {
       emitted = true
     })
-    await Promise.resolve()
+    yield* Effect.promise(() => Promise.resolve())
     defer(() => {
       deferred = true
     })
@@ -167,25 +230,40 @@ describe('runtime allocation lifecycle', () => {
     actor.send({ type: 'FLUSH' })
     stopChild(child as typeof actor)
 
-    expect(deferred).toBe(true)
-    expect(emitted).toBe(true)
-    expect(executed).toBe(true)
-    expect(child.getSnapshot().status).toBe('stopped')
+    yield* expect({
+      deferred,
+      emitted,
+      executed,
+      childStatusIsStopped: child.getSnapshot().status === 'stopped',
+    }).toEqual({
+      deferred: true,
+      emitted: true,
+      executed: true,
+      childStatusIsStopped: true,
+    })
   })
 
-  it('shares frozen empty snapshot records', () => {
+  it('shares frozen empty snapshot records', function*({ expect }) {
     const machine = createMachine({})
     const first = createActor(machine).getSnapshot()
     const second = createActor(machine).getSnapshot()
 
-    expect(first.children).toBe(second.children)
-    expect(first.timers).toBe(second.timers)
-    expect(first.historyValue).toBe(second.historyValue)
-    expect(first._stateInputs).toBe(second._stateInputs)
-    expect(Object.isFrozen(first.children)).toBe(true)
+    yield* expect({
+      sameChildren: first.children === second.children,
+      sameTimers: first.timers === second.timers,
+      sameHistoryValue: first.historyValue === second.historyValue,
+      sameStateInputs: first._stateInputs === second._stateInputs,
+      childrenFrozen: Object.isFrozen(first.children),
+    }).toEqual({
+      sameChildren: true,
+      sameTimers: true,
+      sameHistoryValue: true,
+      sameStateInputs: true,
+      childrenFrozen: true,
+    })
   })
 
-  it('queues start-time events until logic start returns', () => {
+  it('queues start-time events until logic start returns', function*({ expect }) {
     const order: string[] = []
     type QueuedEvent = { type: 'queued' }
     const initialSnapshot: Snapshot<never> = {
@@ -215,6 +293,6 @@ describe('runtime allocation lifecycle', () => {
 
     createActor(logic).start()
 
-    expect(order).toEqual(['start:before', 'start:after', 'transition'])
+    yield* expect(order).toEqual(['start:before', 'start:after', 'transition'])
   })
 })

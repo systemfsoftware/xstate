@@ -1,9 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import {
   type ActorSystemRuntime,
+  type AnyEventObject,
   createActor,
   createCallbackLogic,
   createMachine,
+  type ExecutableActionObject,
   getMicrosteps,
   initialTransition,
   isBuiltInExecutableAction,
@@ -11,8 +14,12 @@ import {
   transition,
 } from '../src/index.js'
 
+const internalEvent = <TEvent>(event: AnyEventObject): TEvent => event as unknown as TEvent
+
+const effectId = (effect: ExecutableActionObject): string | undefined => 'id' in effect ? effect.id : undefined
+
 describe('logical snapshot timers', () => {
-  it('declares a pending timer in the pure initial snapshot', async () => {
+  it('declares a pending timer in the pure initial snapshot', function*({ expect }) {
     const machine = createMachine({
       initial: 'red',
       states: {
@@ -26,29 +33,42 @@ describe('logical snapshot timers', () => {
       (effect) => isBuiltInExecutableAction(effect) && effect.type === '@xstate.raise',
     )!
     const timer = snapshot.timers[schedule.id!]
+    if (timer === undefined) {
+      throw new Error('expected a pending timer')
+    }
 
-    expect(timer).toEqual({
-      id: schedule.id,
-      delay: 100,
-      type: '@xstate.raise',
-      event: schedule.event,
-      target: 'self',
+    yield* expect({
+      timer,
+      hasStartedAt: 'startedAt' in timer,
+      hasDueAt: 'dueAt' in timer,
+      hasElapsed: 'elapsed' in timer,
+    }).toEqual({
+      timer: {
+        id: schedule.id,
+        delay: 100,
+        type: '@xstate.raise',
+        event: schedule.event,
+        target: 'self',
+      },
+      hasStartedAt: false,
+      hasDueAt: false,
+      hasElapsed: false,
     })
-    expect(timer).not.toHaveProperty('startedAt')
-    expect(timer).not.toHaveProperty('dueAt')
-    expect(timer).not.toHaveProperty('elapsed')
 
-    const scheduleTimer = vi.fn<ActorSystemRuntime['scheduleTimer']>()
-    await schedule.exec({ scheduleTimer })
+    const calls: Array<Parameters<ActorSystemRuntime['scheduleTimer']>> = []
+    const scheduleTimer: ActorSystemRuntime['scheduleTimer'] = (
+      source,
+      id,
+      delay,
+    ) => {
+      calls.push([source, id, delay])
+    }
+    yield* Effect.promise(() => Promise.resolve(schedule.exec({ scheduleTimer })))
 
-    expect(scheduleTimer).toHaveBeenCalledWith(
-      schedule.source,
-      schedule.id,
-      100,
-    )
+    yield* expect(calls).toEqual([[schedule.source, schedule.id!, 100]])
   })
 
-  it('keeps wall-clock bookkeeping in the runtime', () => {
+  it('keeps wall-clock bookkeeping in the runtime', function*({ expect }) {
     const machine = createMachine({
       initial: 'waiting',
       states: {
@@ -63,20 +83,29 @@ describe('logical snapshot timers', () => {
     if (timer === undefined) {
       throw new Error('expected a scheduled timer')
     }
+    const snapshotTimer = actor.getSnapshot().timers[timer.id]
+    if (snapshotTimer === undefined) {
+      throw new Error('expected a snapshot timer')
+    }
 
-    expect(timer).toMatchObject({
+    yield* expect({
+      id: timer.id,
+      delay: timer.delay,
+      scheduledAt: timer.scheduledAt,
+      dueAt: timer.dueAt,
+      snapshotHasScheduledAt: 'scheduledAt' in snapshotTimer,
+      snapshotHasDueAt: 'dueAt' in snapshotTimer,
+    }).toEqual({
       id: expect.any(String),
       delay: 100,
       scheduledAt: expect.any(Number),
       dueAt: expect.any(Number),
+      snapshotHasScheduledAt: false,
+      snapshotHasDueAt: false,
     })
-    expect(actor.getSnapshot().timers[timer.id]).not.toHaveProperty(
-      'scheduledAt',
-    )
-    expect(actor.getSnapshot().timers[timer.id]).not.toHaveProperty('dueAt')
   })
 
-  it('consumes a delayed raise in the same macrostep', () => {
+  it('consumes a delayed raise in the same macrostep', function*({ expect }) {
     const machine = createMachine({
       initial: 'red',
       states: {
@@ -87,22 +116,24 @@ describe('logical snapshot timers', () => {
     const [red] = initialTransition(machine)
     const [id] = Object.keys(red.timers)
 
-    const [timerConsumed, effects] = transition(machine, red, {
-      type: 'xstate.timer',
-      id,
-    } as any)
+    const [timerConsumed, effects] = transition(
+      machine,
+      red,
+      internalEvent({ type: 'xstate.timer', id }),
+    )
 
-    expect(timerConsumed.value).toBe('green')
-    expect(timerConsumed.timers).toEqual({})
-    expect(effects).toEqual([
-      expect.objectContaining({
-        type: '@xstate.cancel',
-        id,
-      }),
-    ])
+    yield* expect({
+      value: timerConsumed.value,
+      timers: timerConsumed.timers,
+      effects,
+    }).toEqual({
+      value: 'green',
+      timers: {},
+      effects: [expect.objectContaining({ type: '@xstate.cancel', id })],
+    })
   })
 
-  it('removes cancelled timers and ignores stale timer inputs', () => {
+  it('removes cancelled timers and ignores stale timer inputs', function*({ expect }) {
     const machine = createMachine({
       initial: 'waiting',
       states: {
@@ -118,20 +149,27 @@ describe('logical snapshot timers', () => {
     const [id] = Object.keys(waiting.timers)
 
     const [done, exitEffects] = transition(machine, waiting, { type: 'EXIT' })
-    expect(done.timers).toEqual({})
-    expect(exitEffects.map((effect) => effect.type)).toEqual([
-      '@xstate.cancel',
-    ])
 
-    const [unchanged, staleEffects] = transition(machine, done, {
-      type: 'xstate.timer',
-      id,
-    } as any)
-    expect(unchanged).toBe(done)
-    expect(staleEffects).toEqual([])
+    const [unchanged, staleEffects] = transition(
+      machine,
+      done,
+      internalEvent({ type: 'xstate.timer', id }),
+    )
+
+    yield* expect({
+      doneTimers: done.timers,
+      exitEffectTypes: exitEffects.map((effect) => effect.type),
+      staleIsUnchanged: unchanged === done,
+      staleEffects,
+    }).toEqual({
+      doneTimers: {},
+      exitEffectTypes: ['@xstate.cancel'],
+      staleIsUnchanged: true,
+      staleEffects: [],
+    })
   })
 
-  it('uses the same timer mechanism for delayed sends to children', () => {
+  it('uses the same timer mechanism for delayed sends to children', function*({ expect }) {
     const childLogic = createCallbackLogic(() => {})
     const machine = createMachine({
       actors: { childLogic },
@@ -154,38 +192,47 @@ describe('logical snapshot timers', () => {
     const [scheduled, scheduleEffects] = transition(machine, active, {
       type: 'SCHEDULE',
     })
-    expect(scheduled.timers['ping']).toEqual({
-      id: 'ping',
-      delay: 100,
-      type: '@xstate.sendTo',
-      event: { type: 'PING' },
-      target: active.children['child'],
-    })
-    expect(scheduleEffects).toEqual([
-      expect.objectContaining({
-        type: '@xstate.sendTo',
+
+    const [consumed, deliveryEffects] = transition(
+      machine,
+      scheduled,
+      internalEvent({ type: 'xstate.timer', id: 'ping' }),
+    )
+
+    yield* expect({
+      scheduledTimer: scheduled.timers['ping'],
+      scheduleEffects,
+      consumedTimers: consumed.timers,
+      deliveryEffects,
+    }).toEqual({
+      scheduledTimer: {
         id: 'ping',
         delay: 100,
-      }),
-    ])
-
-    const [consumed, deliveryEffects] = transition(machine, scheduled, {
-      type: 'xstate.timer',
-      id: 'ping',
-    } as any)
-    expect(consumed.timers).toEqual({})
-    expect(deliveryEffects).toEqual([
-      expect.objectContaining({
         type: '@xstate.sendTo',
-        id: undefined,
-        delay: undefined,
-        target: active.children['child'],
         event: { type: 'PING' },
-      }),
-    ])
+        target: active.children['child'],
+      },
+      scheduleEffects: [
+        expect.objectContaining({
+          type: '@xstate.sendTo',
+          id: 'ping',
+          delay: 100,
+        }),
+      ],
+      consumedTimers: {},
+      deliveryEffects: [
+        expect.objectContaining({
+          type: '@xstate.sendTo',
+          id: undefined,
+          delay: undefined,
+          target: active.children['child'],
+          event: { type: 'PING' },
+        }),
+      ],
+    })
   })
 
-  it('allocates deterministic ids for anonymous delayed effects', () => {
+  it('allocates deterministic ids for anonymous delayed effects', function*({ expect }) {
     const machine = createMachine({
       on: {
         SCHEDULE: (_, enq) => {
@@ -203,17 +250,18 @@ describe('logical snapshot timers', () => {
       type: 'SCHEDULE',
     })
 
-    expect(Object.keys(left.timers)).toEqual([
-      'xstate.timer.auto.0',
-      'xstate.timer.auto.1',
-    ])
-    expect(Object.keys(right.timers)).toEqual(Object.keys(left.timers))
-    expect(leftEffects.map((effect) => (effect as any).id)).toEqual(
-      rightEffects.map((effect) => (effect as any).id),
-    )
+    yield* expect({
+      leftTimerIds: Object.keys(left.timers),
+      rightTimerIds: Object.keys(right.timers),
+      leftEffectIds: leftEffects.map(effectId),
+    }).toEqual({
+      leftTimerIds: ['xstate.timer.auto.0', 'xstate.timer.auto.1'],
+      rightTimerIds: ['xstate.timer.auto.0', 'xstate.timer.auto.1'],
+      leftEffectIds: rightEffects.map(effectId),
+    })
   })
 
-  it('exposes timer consumption as its own microstep', () => {
+  it('exposes timer consumption as its own microstep', function*({ expect }) {
     const machine = createMachine({
       initial: 'waiting',
       states: {
@@ -224,24 +272,32 @@ describe('logical snapshot timers', () => {
     const [waiting] = initialTransition(machine)
     const [id] = Object.keys(waiting.timers)
 
-    const microsteps = getMicrosteps(machine, waiting, {
-      type: 'xstate.timer',
-      id,
-    } as any)
+    const microsteps = getMicrosteps(
+      machine,
+      waiting,
+      internalEvent({ type: 'xstate.timer', id }),
+    )
 
-    expect(microsteps).toHaveLength(2)
     if (microsteps[0] === undefined || microsteps[1] === undefined) {
       throw new Error('expected two microsteps')
     }
-    expect(microsteps[0][0].timers).toEqual({})
-    expect(microsteps[0][1]).toEqual([])
-    expect(microsteps[1][0].value).toBe('done')
-    expect(microsteps[1][1]).toEqual([
-      expect.objectContaining({ type: '@xstate.cancel', id }),
-    ])
+
+    yield* expect({
+      count: microsteps.length,
+      firstTimers: microsteps[0][0].timers,
+      firstEffects: microsteps[0][1],
+      secondValue: microsteps[1][0].value,
+      secondEffects: microsteps[1][1],
+    }).toEqual({
+      count: 2,
+      firstTimers: {},
+      firstEffects: [],
+      secondValue: 'done',
+      secondEffects: [expect.objectContaining({ type: '@xstate.cancel', id })],
+    })
   })
 
-  it('cancels remaining timers after child stops when reaching final', () => {
+  it('cancels remaining timers after child stops when reaching final', function*({ expect }) {
     const child = createCallbackLogic(() => {})
     const machine = createMachine({
       actors: { child },
@@ -263,18 +319,25 @@ describe('logical snapshot timers', () => {
 
     const [done, effects] = transition(machine, active, { type: 'FINISH' })
 
-    expect(done.status).toBe('done')
-    expect(done.children).toEqual({})
-    expect(done.timers).toEqual({})
-    expect(effects.map(({ type }) => type)).toEqual([
-      '@xstate.stop',
-      '@xstate.raise',
-      '@xstate.cancel',
-      '@xstate.terminate',
-    ])
+    yield* expect({
+      status: done.status,
+      children: done.children,
+      timers: done.timers,
+      effectTypes: effects.map(({ type }) => type),
+    }).toEqual({
+      status: 'done',
+      children: {},
+      timers: {},
+      effectTypes: [
+        '@xstate.stop',
+        '@xstate.raise',
+        '@xstate.cancel',
+        '@xstate.terminate',
+      ],
+    })
   })
 
-  it('cancels remaining timers after child stops when explicitly stopped', () => {
+  it('cancels remaining timers after child stops when explicitly stopped', function*({ expect }) {
     const child = createCallbackLogic(() => {})
     const machine = createMachine({
       actors: { child },
@@ -286,16 +349,22 @@ describe('logical snapshot timers', () => {
     const [active] = initialTransition(machine)
     const [scheduled] = transition(machine, active, { type: 'SCHEDULE' })
 
-    const [stopped, effects] = transition(machine, scheduled, {
-      type: '@xstate.stop',
-    } as any)
+    const [stopped, effects] = transition(
+      machine,
+      scheduled,
+      internalEvent({ type: '@xstate.stop' }),
+    )
 
-    expect(stopped.status).toBe('stopped')
-    expect(stopped.children).toEqual({})
-    expect(stopped.timers).toEqual({})
-    expect(effects.map(({ type }) => type)).toEqual([
-      '@xstate.stop',
-      '@xstate.cancel',
-    ])
+    yield* expect({
+      status: stopped.status,
+      children: stopped.children,
+      timers: stopped.timers,
+      effectTypes: effects.map(({ type }) => type),
+    }).toEqual({
+      status: 'stopped',
+      children: {},
+      timers: {},
+      effectTypes: ['@xstate.stop', '@xstate.cancel'],
+    })
   })
 })

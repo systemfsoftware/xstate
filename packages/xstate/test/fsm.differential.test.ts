@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine } from '../src/createMachine.js'
 import { createFSM } from '../src/fsm.js'
 import { initialTransition, transition } from '../src/transition.js'
@@ -21,7 +21,9 @@ function eventSequences<TEvent>(events: readonly TEvent[], maxLength: number) {
 }
 
 describe('createFSM differential behavior', () => {
-  it('matches equivalent flat createMachine transitions', () => {
+  it('matches equivalent flat createMachine transitions', function*({
+    expect,
+  }) {
     const config = {
       initial: 'inactive' as const,
       states: {
@@ -37,12 +39,10 @@ describe('createFSM differential behavior', () => {
     const fsm = createFSM<{}, ToggleEvent>(config)
     const machine = createMachine(config)
 
-    for (
-      const events of eventSequences<ToggleEvent>(
-        [{ type: 'toggle' }, { type: 'reset' }, { type: 'unknown' }],
-        5,
-      )
-    ) {
+    const observations = eventSequences<ToggleEvent>(
+      [{ type: 'toggle' }, { type: 'reset' }, { type: 'unknown' }],
+      5,
+    ).map((events) => {
       let fsmSnapshot = fsm.initialState
       let [machineSnapshot] = initialTransition(machine)
 
@@ -51,15 +51,25 @@ describe('createFSM differential behavior', () => {
         ;[machineSnapshot] = transition(machine, machineSnapshot, event)
       }
 
-      expect(fsmSnapshot).toEqual({
+      return { fsm: fsmSnapshot, machine: machineSnapshot }
+    })
+
+    yield* expect(
+      observations.map(({ fsm: snapshot }) => ({
+        status: snapshot.status,
+        value: snapshot.value,
+        context: snapshot.context,
+      })),
+    ).toEqual(
+      observations.map(({ machine: snapshot }) => ({
         status: 'active',
-        value: machineSnapshot.value,
-        context: machineSnapshot.context,
-      })
-    }
+        value: snapshot.value,
+        context: snapshot.context,
+      })),
+    )
   })
 
-  it('matches pure context updates', () => {
+  it('matches pure context updates', function*({ expect }) {
     type Event = { type: 'increment'; by: number } | { type: 'reset' }
     const config = {
       initial: 'active' as const,
@@ -84,16 +94,14 @@ describe('createFSM differential behavior', () => {
     const fsm = createFSM<{ count: number }, Event>(config)
     const machine = createMachine(config)
 
-    for (
-      const events of eventSequences<Event>(
-        [
-          { type: 'increment', by: 1 },
-          { type: 'increment', by: 2 },
-          { type: 'reset' },
-        ],
-        4,
-      )
-    ) {
+    const observations = eventSequences<Event>(
+      [
+        { type: 'increment', by: 1 },
+        { type: 'increment', by: 2 },
+        { type: 'reset' },
+      ],
+      4,
+    ).map((events) => {
       let fsmSnapshot = fsm.initialState
       let [machineSnapshot] = initialTransition(machine)
 
@@ -102,11 +110,21 @@ describe('createFSM differential behavior', () => {
         ;[machineSnapshot] = transition(machine, machineSnapshot, event)
       }
 
-      expect(fsmSnapshot).toEqual({
+      return { fsm: fsmSnapshot, machine: machineSnapshot }
+    })
+
+    yield* expect(
+      observations.map(({ fsm: snapshot }) => ({
+        status: snapshot.status,
+        value: snapshot.value,
+        context: snapshot.context,
+      })),
+    ).toEqual(
+      observations.map(({ machine: snapshot }) => ({
         status: 'active',
-        value: machineSnapshot.value,
-        context: machineSnapshot.context,
-      })
-    }
+        value: snapshot.value,
+        context: snapshot.context,
+      })),
+    )
   })
 })

@@ -1,4 +1,4 @@
-import { describe, expectTypeOf, it } from 'vitest'
+import { describe, expectTypeOf, it } from '@systemfsoftware/vitest'
 import { createActor } from '../src/createActor.js'
 import { createFSM, type FSMSnapshot, setup } from '../src/fsm.js'
 import { types } from '../src/schema.types.js'
@@ -12,7 +12,7 @@ type Context =
 type Event = { type: 'finish'; result: string } | { type: 'reset' }
 
 describe('createFSM types', () => {
-  it('types context, event payloads, and state targets', () => {
+  it('types context, event payloads, and state targets', function*({ expect }) {
     const machine = createFSM<Context, Event, { idle: unknown; done: unknown }>(
       {
         initial: 'idle',
@@ -36,7 +36,7 @@ describe('createFSM types', () => {
       },
     )
 
-    machine.transition(machine.initialState, {
+    const [finished] = machine.transition(machine.initialState, {
       type: 'finish',
       result: 'ok',
     })
@@ -71,9 +71,15 @@ describe('createFSM types', () => {
     machine.transition(machine.initialState, { type: 'unknown' })
     // @ts-expect-error event payload must be a string
     machine.transition(machine.initialState, { type: 'finish', result: 1 })
+
+    yield* expect(finished).toEqual({
+      status: 'active',
+      value: 'done',
+      context: { status: 'done', count: 1, result: 'ok' },
+    })
   })
 
-  it('satisfies ActorLogic', () => {
+  it('satisfies ActorLogic', function*({ expect }) {
     const machine = createFSM<
       { count: number },
       { type: 'inc' },
@@ -111,11 +117,17 @@ describe('createFSM types', () => {
     const [next] = transition(machine, machine.initialState, { type: 'inc' })
     next.context.count satisfies number
 
+    yield* expect(next).toEqual({
+      status: 'active',
+      value: 'active',
+      context: { count: 1 },
+    })
+
     const [initial] = initialTransition(machine)
     initial.value satisfies 'active'
   })
 
-  it('keeps setup snapshot unions for actors', () => {
+  it('keeps setup snapshot unions for actors', function*({ expect }) {
     const machine = setup({
       schemas: {
         events: { load: types<{ id: string }>() },
@@ -144,5 +156,7 @@ describe('createFSM types', () => {
     if (snapshot.value === 'loaded') {
       snapshot.context.id satisfies string
     }
+
+    yield* expect(snapshot.value).toEqual('idle')
   })
 })

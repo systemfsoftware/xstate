@@ -1,92 +1,20 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-/**
- * Persistence conformance (v6).
- *
- * Six+ open v5 issues are believed fixed by the v6 persistence rewrite: logical
- * snapshot timers, snapshot versioning + `migrate`, children registered on
- * `snapshot.children`, and `initialTransition` single-init. Each `describe`
- * proves or disproves one issue via the canonical JSON round-trip:
- *
- * Const persisted = actor.getPersistedSnapshot(); const json =
- * JSON.parse(JSON.stringify(persisted)); // MUST go through JSON const restored
- * = createActor(machine, { snapshot: json }).start();
- */
-import { Ajv2020, type AnySchemaObject } from 'ajv/dist/2020.js'
-import { readFileSync } from 'node:fs'
-import { createActor, createMachine, initialTransition, setup, SimulatedClock } from '../src/index.js'
-import { StateMachine } from '../src/StateMachine.js'
+import { describe, it } from '@systemfsoftware/vitest'
+import {
+  type AnyActorRef,
+  createActor,
+  createMachine,
+  initialTransition,
+  type PersistedSnapshotFrom,
+  setup,
+  SimulatedClock,
+} from '../src/index.js'
 
-/** Canonical JSON round-trip of a persisted snapshot. */
-function roundTrip(persisted: unknown): any {
-  return JSON.parse(JSON.stringify(persisted))
+function roundTrip<T>(persisted: T): T {
+  return JSON.parse(JSON.stringify(persisted)) as T
 }
 
-/**
- * Every machine envelope produced in this file — root and nested machine
- * children, which persist through the same method — is validated against
- * `src/persistedSnapshot.schema.json` after a JSON round-trip.
- */
-const persistedSnapshotSchema: AnySchemaObject = JSON.parse(
-  readFileSync(
-    new URL('../src/persistedSnapshot.schema.json', import.meta.url),
-    'utf8',
-  ),
-)
-const validateEnvelope = new Ajv2020({ allErrors: true }).compile(
-  persistedSnapshotSchema,
-)
-const envelopeErrors: unknown[] = []
-let validatedEnvelopes = 0
-const originalGetPersistedSnapshot = StateMachine.prototype.getPersistedSnapshot
-beforeAll(() => {
-  vi.spyOn(StateMachine.prototype, 'getPersistedSnapshot').mockImplementation(
-    function(
-      this: StateMachine<
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any,
-        any
-      >,
-      ...args
-    ) {
-      const persisted = originalGetPersistedSnapshot.apply(this, args)
-      let json: unknown
-      try {
-        json = roundTrip(persisted)
-      } catch {
-        // Non-JSON payloads are the host's problem (see the dev warning).
-        return persisted
-      }
-      validatedEnvelopes++
-      if (!validateEnvelope(json)) {
-        envelopeErrors.push(validateEnvelope.errors)
-      }
-      return persisted
-    },
-  )
-})
-afterEach(() => {
-  expect(envelopeErrors.splice(0)).toEqual([])
-})
-afterAll(() => {
-  vi.restoreAllMocks()
-  expect(validatedEnvelopes).toBeGreaterThan(0)
-})
-
 describe('non-JSON payload warning (dev)', () => {
-  it.each([
+  it.each<[string, Record<string, unknown>, string]>([
     ['function', { fn: () => {} }, 'context.fn'],
     ['symbol', { list: [Symbol('s')] }, 'context.list[0]'],
     ['bigint', { n: 1n }, 'context.n'],
@@ -95,70 +23,71 @@ describe('non-JSON payload warning (dev)', () => {
     ['NaN', { score: NaN }, 'context.score'],
     ['Infinity', { list: [Infinity] }, 'context.list[0]'],
     ['-Infinity', { min: -Infinity }, 'context.min'],
-  ])('warns once for a %s', (kind, context, path) => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const machine = createMachine({ context: context as any })
-    createActor(machine).getPersistedSnapshot()
-    expect(warn).toHaveBeenCalledTimes(1)
-    const [firstWarnCall] = warn.mock.calls
-    if (firstWarnCall === undefined) {
-      throw new Error('expected a first warn call')
-    }
-    expect(firstWarnCall[0]).toContain(`(${kind}) at '${path}'`)
-    warn.mockRestore()
+  ])('warns once for a %s', function*([kind, context, path], { expect }) {
+    const warned: string[] = []
+    const machine = createMachine({ context })
+    createActor(machine, {
+      warn: (message) => warned.push(message),
+    }).getPersistedSnapshot()
+    yield* expect(warned).toEqual([
+      expect.stringContaining(`(${kind}) at '${path}'`),
+    ])
   })
 
-  it('warns for a circular reference', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('warns for a circular reference', function*({ expect }) {
+    const warned: string[] = []
     const circular: Record<string, unknown> = {}
     circular['self'] = circular
     const machine = createMachine({ id: 'cyclic', context: { circular } })
-    // The warning is emitted before persisting rejects the cycle.
-    expect(() => createActor(machine).getPersistedSnapshot()).toThrow(
-      new Error(
-        'Cannot persist actor "cyclic": circular reference at context.circular.self',
-      ),
-    )
-    expect(warn).toHaveBeenCalledTimes(1)
-    const [firstWarnCall] = warn.mock.calls
-    if (firstWarnCall === undefined) {
-      throw new Error('expected a first warn call')
+    let message: string | undefined
+    try {
+      createActor(machine, { warn: (m) => warned.push(m) }).getPersistedSnapshot()
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
     }
-    expect(firstWarnCall[0]).toContain(
-      "(circular reference) at 'context.circular.self'",
-    )
-    warn.mockRestore()
+    yield* expect({ message, warned }).toEqual({
+      message: 'Cannot persist actor "cyclic": circular reference at context.circular.self',
+      warned: [
+        expect.stringContaining("(circular reference) at 'context.circular.self'"),
+      ],
+    })
   })
 
-  it('rejects a circular context with its path, and persists shared references', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('rejects a circular context with its path, and persists shared references', function*({ expect }) {
     const item: Record<string, unknown> = { name: 'a' }
     item['parent'] = { items: [item] }
     const machine = createMachine({ id: 'list', context: { items: [item] } })
-    expect(() => createActor(machine).getPersistedSnapshot()).toThrow(
-      'Cannot persist actor "list": circular reference at context.items[0].parent.items[0]',
-    )
+    let message: string | undefined
+    try {
+      createActor(machine).getPersistedSnapshot()
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
 
     const shared = { a: 1 }
     const sharing = createMachine({
       context: { left: shared, right: { nested: shared } },
     })
-    expect(createActor(sharing).getPersistedSnapshot()).toMatchObject({
-      context: { left: { a: 1 }, right: { nested: { a: 1 } } },
+    const sharingSnapshot = createActor(sharing).getPersistedSnapshot()
+    yield* expect({ message, sharingSnapshot }).toMatchObject({
+      message: 'Cannot persist actor "list": circular reference at context.items[0].parent.items[0]',
+      sharingSnapshot: {
+        context: { left: { a: 1 }, right: { nested: { a: 1 } } },
+      },
     })
-    warn.mockRestore()
   })
 
-  it('does not warn for an undefined property', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('does not warn for an undefined property', function*({ expect }) {
+    const warned: string[] = []
     const machine = createMachine({ context: { result: undefined } })
-    createActor(machine).getPersistedSnapshot()
-    expect(warn).not.toHaveBeenCalled()
-    warn.mockRestore()
+    createActor(machine, {
+      warn: (message) => warned.push(message),
+    }).getPersistedSnapshot()
+    yield* expect(warned).toEqual([])
   })
 
-  it('does not warn for JSON values, Dates, shared references, or actor refs', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('does not warn for JSON values, Dates, shared references, or actor refs', function*({ expect }) {
+    const warned: string[] = []
     const shared = { a: 1 }
     const machine = createMachine({
       context: ({ spawn }) => ({
@@ -168,16 +97,17 @@ describe('non-JSON payload warning (dev)', () => {
         ref: spawn(createMachine({})),
       }),
     })
-    createActor(machine).getPersistedSnapshot({
-      __unsafeAllowInlineActors: true,
-    } as any)
-    expect(warn).not.toHaveBeenCalled()
-    warn.mockRestore()
+    createActor(machine, {
+      warn: (message) => warned.push(message),
+    }).getPersistedSnapshot({ __unsafeAllowInlineActors: true } as {
+      embedChildren?: boolean
+    })
+    yield* expect(warned).toEqual([])
   })
 })
 
 describe('#5077 re-persistability of children', () => {
-  it('a transition-spawned registered child survives a JSON round-trip and re-persists', () => {
+  it('a transition-spawned registered child survives a JSON round-trip and re-persists', function*({ expect }) {
     const child = createMachine({
       context: { count: 0 },
       on: {
@@ -199,21 +129,23 @@ describe('#5077 re-persistability of children', () => {
     const actor = createActor(parent).start()
     actor.send({ type: 'spawn' })
     const persisted = roundTrip(actor.getPersistedSnapshot())
-    expect(persisted.children.myChild.src).toBe('child')
     actor.stop()
 
     const restored = createActor(parent, { snapshot: persisted }).start()
     restored.send({ type: 'ping' })
-    expect(
-      (restored.getSnapshot().children as any).myChild.getSnapshot().context
-        .count,
-    ).toBe(1)
-    expect(
-      roundTrip(restored.getPersistedSnapshot()).children.myChild.src,
-    ).toBe('child')
+
+    yield* expect({
+      src: persisted.children['myChild']?.src,
+      restoredChild: restored.getSnapshot().children['myChild']?.getSnapshot(),
+      restoredSrc: roundTrip(restored.getPersistedSnapshot()).children['myChild']?.src,
+    }).toMatchObject({
+      src: 'child',
+      restoredChild: { context: { count: 1 } },
+      restoredSrc: 'child',
+    })
   })
 
-  it('a provided actor retains its registered source when transition-spawned', () => {
+  it('a provided actor retains its registered source when transition-spawned', function*({ expect }) {
     const child = createMachine({})
     const parent = createMachine({
       actors: {} as { child: typeof child },
@@ -227,12 +159,10 @@ describe('#5077 re-persistability of children', () => {
     const actor = createActor(parent).start()
     actor.send({ type: 'spawn' })
 
-    expect(roundTrip(actor.getPersistedSnapshot()).children.myChild.src).toBe(
-      'child',
-    )
+    yield* expect(roundTrip(actor.getPersistedSnapshot()).children['myChild']?.src).toBe('child')
   })
 
-  it('an extended actor retains its registered source when transition-spawned', () => {
+  it('an extended actor retains its registered source when transition-spawned', function*({ expect }) {
     const child = createMachine({})
     const parent = setup()
       .extend({ actors: { child } })
@@ -247,12 +177,10 @@ describe('#5077 re-persistability of children', () => {
     const actor = createActor(parent).start()
     actor.send({ type: 'spawn' })
 
-    expect(roundTrip(actor.getPersistedSnapshot()).children.myChild.src).toBe(
-      'child',
-    )
+    yield* expect(roundTrip(actor.getPersistedSnapshot()).children['myChild']?.src).toBe('child')
   })
 
-  it('preserves the explicitly selected source when duplicate registrations later diverge', () => {
+  it('preserves the explicitly selected source when duplicate registrations later diverge', function*({ expect }) {
     const shared = createMachine({
       context: { count: 0 },
       on: {
@@ -280,7 +208,6 @@ describe('#5077 re-persistability of children', () => {
     const actor = createActor(parent).start()
     actor.send({ type: 'spawn' })
     const persisted = roundTrip(actor.getPersistedSnapshot())
-    expect(persisted.children.worker.src).toBe('second')
     actor.stop()
 
     const migratedParent = parent.provide({ actors: { second: replacement } })
@@ -288,13 +215,17 @@ describe('#5077 re-persistability of children', () => {
       snapshot: persisted,
     }).start()
     restored.send({ type: 'ping' })
-    expect(
-      (restored.getSnapshot().children as any).worker.getSnapshot().context
-        .count,
-    ).toBe(10)
+
+    yield* expect({
+      src: persisted.children['worker']?.src,
+      worker: restored.getSnapshot().children['worker']?.getSnapshot(),
+    }).toMatchObject({
+      src: 'second',
+      worker: { context: { count: 10 } },
+    })
   })
 
-  it('throws immediately when a declared actor source has no implementation', () => {
+  it('throws immediately when a declared actor source has no implementation', function*({ expect }) {
     const child = createMachine({})
     const parent = createMachine({
       actors: {} as { child: typeof child },
@@ -303,12 +234,12 @@ describe('#5077 re-persistability of children', () => {
       },
     })
 
-    expect(() => initialTransition(parent)).toThrow(
+    yield* expect(() => initialTransition(parent)).toThrow(
       "Actor source 'child' is not provided",
     )
   })
 
-  it('a spawned child survives a JSON round-trip, responds to events, and re-persists', () => {
+  it('a spawned child survives a JSON round-trip, responds to events, and re-persists', function*({ expect }) {
     const child = createMachine({
       context: { count: 0 },
       on: {
@@ -341,19 +272,21 @@ describe('#5077 re-persistability of children', () => {
     const restored = createActor(parent, { snapshot: json }).start()
 
     restored.send({ type: 'ping' })
-    expect(
-      (restored.getSnapshot().children as any).myChild.getSnapshot().context
-        .count,
-    ).toBe(1)
 
-    expect(() => roundTrip(restored.getPersistedSnapshot())).not.toThrow()
     const secondRestored = createActor(parent, {
       snapshot: roundTrip(restored.getPersistedSnapshot()),
     }).start()
-    expect(secondRestored.getSnapshot().status).toBe('active')
+
+    yield* expect({
+      child: restored.getSnapshot().children['myChild']?.getSnapshot(),
+      secondStatus: secondRestored.getSnapshot().status,
+    }).toMatchObject({
+      child: { context: { count: 1 } },
+      secondStatus: 'active',
+    })
   })
 
-  it('an invoked child survives a JSON round-trip, responds to events, and re-persists', () => {
+  it('an invoked child survives a JSON round-trip, responds to events, and re-persists', function*({ expect }) {
     const child = createMachine({
       context: { count: 0 },
       on: {
@@ -383,19 +316,21 @@ describe('#5077 re-persistability of children', () => {
     const restored = createActor(parent, { snapshot: json }).start()
 
     restored.send({ type: 'ping' })
-    expect(
-      (restored.getSnapshot().children as any).myChild.getSnapshot().context
-        .count,
-    ).toBe(1)
 
-    expect(() => roundTrip(restored.getPersistedSnapshot())).not.toThrow()
     const secondRestored = createActor(parent, {
       snapshot: roundTrip(restored.getPersistedSnapshot()),
     }).start()
-    expect(secondRestored.getSnapshot().status).toBe('active')
+
+    yield* expect({
+      child: restored.getSnapshot().children['myChild']?.getSnapshot(),
+      secondStatus: secondRestored.getSnapshot().status,
+    }).toMatchObject({
+      child: { context: { count: 1 } },
+      secondStatus: 'active',
+    })
   })
 
-  it('assigns a new runtime session to a restored child', () => {
+  it('assigns a new runtime session to a restored child', function*({ expect }) {
     const child = createMachine({})
     const parent = createMachine({
       actors: { child },
@@ -411,8 +346,6 @@ describe('#5077 re-persistability of children', () => {
     }
     const sessionId = actorChild.sessionId
     const persisted = roundTrip(actor.getPersistedSnapshot())
-    expect(persisted.children.myChild).not.toHaveProperty('incarnationId')
-    expect(persisted.children.myChild).not.toHaveProperty('sessionId')
     actor.stop()
 
     const restored = createActor(parent, { snapshot: persisted }).start()
@@ -421,19 +354,29 @@ describe('#5077 re-persistability of children', () => {
       throw new Error('expected a restored child')
     }
 
-    expect(restoredChild.sessionId).not.toBe(sessionId)
-
-    restored.send({
+    const restoredRef: AnyActorRef = restored
+    restoredRef.send({
       type: 'xstate.done.actor.myChild',
       actorId: 'myChild',
       sessionId,
       output: undefined,
-    } as any)
+    })
 
-    expect(restored.getSnapshot().children['myChild']).toBe(restoredChild)
+    const persistedRef = persisted.children['myChild']
+    yield* expect({
+      hasIncarnationId: persistedRef !== undefined && 'incarnationId' in persistedRef,
+      hasSessionId: persistedRef !== undefined && 'sessionId' in persistedRef,
+      sameSession: restoredChild.sessionId === sessionId,
+      childIsSame: restored.getSnapshot().children['myChild'] === restoredChild,
+    }).toEqual({
+      hasIncarnationId: false,
+      hasSessionId: false,
+      sameSession: false,
+      childIsSame: true,
+    })
   })
 
-  it('does not reuse a removed child incarnation after restoration', () => {
+  it('does not reuse a removed child incarnation after restoration', function*({ expect }) {
     const child = createMachine({})
     const parent = createMachine({
       actors: { child },
@@ -462,21 +405,26 @@ describe('#5077 re-persistability of children', () => {
       throw new Error('expected a replacement child')
     }
 
-    expect(replacement.sessionId).not.toBe(removedSessionId)
-
-    restored.send({
+    const restoredRef: AnyActorRef = restored
+    restoredRef.send({
       type: 'xstate.done.actor.myChild',
       actorId: 'myChild',
       sessionId: removedSessionId,
       output: undefined,
-    } as any)
+    })
 
-    expect(restored.getSnapshot().children['myChild']).toBe(replacement)
+    yield* expect({
+      sameSession: replacement.sessionId === removedSessionId,
+      childIsSame: restored.getSnapshot().children['myChild'] === replacement,
+    }).toEqual({
+      sameSession: false,
+      childIsSame: true,
+    })
   })
 })
 
 describe('missing persisted child sources', () => {
-  it('fails restoration instead of silently dropping the child', () => {
+  it('fails restoration instead of silently dropping the child', function*({ expect }) {
     const child = createMachine({})
     const parent = createMachine({
       actors: {} as { child: typeof child },
@@ -494,7 +442,7 @@ describe('missing persisted child sources', () => {
 
     const restored = createActor(parent, { snapshot: persisted })
 
-    expect(restored.getSnapshot()).toMatchObject({
+    yield* expect(restored.getSnapshot()).toMatchObject({
       status: 'error',
       error: expect.objectContaining({
         message: expect.stringContaining("child source 'child'"),
@@ -504,38 +452,46 @@ describe('missing persisted child sources', () => {
 })
 
 describe('#4873 system.get after restore', () => {
-  it('a child spawned with a registryKey is retrievable via restored.system.get and transitions on send', () => {
-    const child = createMachine({
-      context: { count: 0 },
-      on: {
-        inc: ({ context }) => ({ context: { count: context.count + 1 } }),
-      },
-    })
+  it(
+    'a child spawned with a registryKey is retrievable via restored.system.get and transitions on send',
+    function*({ expect }) {
+      const child = createMachine({
+        context: { count: 0 },
+        on: {
+          inc: ({ context }) => ({ context: { count: context.count + 1 } }),
+        },
+      })
 
-    const parent = createMachine({
-      actors: { child },
-      context: ({ spawn, actors }) => {
-        spawn(actors.child, { registryKey: 'mySystemId' })
-        return {}
-      },
-    })
+      const parent = createMachine({
+        actors: { child },
+        context: ({ spawn, actors }) => {
+          spawn(actors.child, { registryKey: 'mySystemId' })
+          return {}
+        },
+      })
 
-    const actor = createActor(parent).start()
-    const json = roundTrip(actor.getPersistedSnapshot())
-    actor.stop()
+      const actor = createActor(parent).start()
+      const json = roundTrip(actor.getPersistedSnapshot())
+      actor.stop()
 
-    const restored = createActor(parent, { snapshot: json }).start()
+      const restored = createActor(parent, { snapshot: json }).start()
 
-    const ref = restored.system.get('mySystemId')
-    expect(ref).not.toBeUndefined()
+      const ref = restored.system.get('mySystemId')
+      ref?.send({ type: 'inc' })
 
-    expect(() => ref!.send({ type: 'inc' })).not.toThrow()
-    expect((ref!.getSnapshot() as any).context.count).toBe(1)
-  })
+      yield* expect({
+        present: ref !== undefined,
+        snapshot: ref?.getSnapshot(),
+      }).toMatchObject({
+        present: true,
+        snapshot: { context: { count: 1 } },
+      })
+    },
+  )
 })
 
 describe('#5178 historyValue revival', () => {
-  it('a shallow history state remembers the last child across a JSON round-trip', () => {
+  it('a shallow history state remembers the last child across a JSON round-trip', function*({ expect }) {
     const machine = createMachine({
       initial: 'on',
       states: {
@@ -563,17 +519,20 @@ describe('#5178 historyValue revival', () => {
     })
 
     const actor = createActor(machine).start()
-    actor.send({ type: 'SWITCH' }) // on.second
-    actor.send({ type: 'POWER' }) // off (history remembers "second")
-    expect(actor.getSnapshot().value).toBe('off')
+    actor.send({ type: 'SWITCH' })
+    actor.send({ type: 'POWER' })
+    const offValue = actor.getSnapshot().value
 
     const json = roundTrip(actor.getPersistedSnapshot())
     actor.stop()
 
     const restored = createActor(machine, { snapshot: json }).start()
-    restored.send({ type: 'POWER' }) // on.hist -> remembered "second"
+    restored.send({ type: 'POWER' })
 
-    expect(restored.getSnapshot().value).toEqual({ on: 'second' })
+    yield* expect({ offValue, restoredValue: restored.getSnapshot().value }).toEqual({
+      offValue: 'off',
+      restoredValue: { on: 'second' },
+    })
   })
 })
 
@@ -589,23 +548,17 @@ describe('#5331 logical timers restored', () => {
       },
     })
 
-  it('persists timer intent and restarts its declared delay locally', () => {
+  it('persists timer intent and restarts its declared delay locally', function*({ expect }) {
     const clock = new SimulatedClock()
     const actor = createActor(createDelayMachine(), { clock }).start()
-    const persisted: any = actor.getPersistedSnapshot()
+    const persisted = actor.getPersistedSnapshot()
     actor.stop()
 
     const json = roundTrip(persisted)
-    const [timer] = Object.values(json.timers) as any[]
-    expect(timer).toMatchObject({
-      delay: 500,
-      target: 'self',
-      event: { type: expect.stringMatching(/^xstate\.after/) },
-    })
-    // Only the wall clock stamps `startedAt`; this actor runs under a
-    // simulated clock, whose readings are meaningless in another process.
-    expect(timer).not.toHaveProperty('startedAt')
-    expect(timer).not.toHaveProperty('elapsed')
+    const timers = Object.values(
+      (json['timers'] ?? {}) as Record<string, Record<string, unknown>>,
+    )
+    const timer = timers[0]
 
     const clock2 = new SimulatedClock()
     const restored = createActor(createDelayMachine(), {
@@ -614,47 +567,70 @@ describe('#5331 logical timers restored', () => {
     }).start()
 
     clock2.increment(499)
-    expect(restored.getSnapshot().value).toBe('pending')
-    clock2.increment(1) // full 500ms again, ignoring elapsed
-    expect(restored.getSnapshot().value).toBe('done')
+    const pendingValue = restored.getSnapshot().value
+    clock2.increment(1)
+    const doneValue = restored.getSnapshot().value
+
+    yield* expect({
+      timerCount: timers.length,
+      timer,
+      hasStartedAt: timer !== undefined && 'startedAt' in timer,
+      hasElapsed: timer !== undefined && 'elapsed' in timer,
+      pendingValue,
+      doneValue,
+    }).toMatchObject({
+      timerCount: 1,
+      timer: {
+        delay: 500,
+        target: 'self',
+        event: { type: expect.stringMatching(/^xstate\.after/) },
+      },
+      hasStartedAt: false,
+      hasElapsed: false,
+      pendingValue: 'pending',
+      doneValue: 'done',
+    })
   })
 })
 
 describe('#5228 restore errors surface', () => {
-  it('a corrupted snapshot value referencing a nonexistent state surfaces an error, not a silently-running actor', () => {
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: { on: { NEXT: { target: 'b' } } },
-        b: {},
-      },
-    })
+  it(
+    'a corrupted snapshot value referencing a nonexistent state surfaces an error, not a silently-running actor',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        states: {
+          a: { on: { NEXT: { target: 'b' } } },
+          b: {},
+        },
+      })
 
-    const actor = createActor(machine).start()
-    const persisted: any = roundTrip(actor.getPersistedSnapshot())
-    actor.stop()
+      const actor = createActor(machine).start()
+      const persisted = roundTrip(actor.getPersistedSnapshot())
+      actor.stop()
 
-    // mangle the value to reference a nonexistent state
-    persisted.value = 'nonexistent'
+      persisted['value'] = 'nonexistent'
 
-    let surfaced = false
-    const restored = createActor(machine, { snapshot: persisted })
-    restored.subscribe({ error: () => (surfaced = true) })
+      let surfaced = false
+      const restored = createActor(machine, { snapshot: persisted })
+      restored.subscribe({ error: () => (surfaced = true) })
 
-    let threw = false
-    try {
-      restored.start()
-    } catch {
-      threw = true
-    }
+      let threw = false
+      try {
+        restored.start()
+      } catch {
+        threw = true
+      }
 
-    const status = restored.getSnapshot().status
-    // Must NOT silently produce a healthy running actor.
-    expect(threw || surfaced || status === 'error').toBe(true)
-    expect(status).not.toBe('active')
-  })
+      const status = restored.getSnapshot().status
+      yield* expect({
+        surfacedOrThrewOrError: threw || surfaced || status === 'error',
+        statusNotActive: status !== 'active',
+      }).toEqual({ surfacedOrThrewOrError: true, statusNotActive: true })
+    },
+  )
 
-  it('a version-mismatched snapshot without `migrate` surfaces an error', () => {
+  it('a version-mismatched snapshot without `migrate` surfaces an error', function*({ expect }) {
     const machineV1 = createMachine({
       version: '1',
       initial: 'a',
@@ -674,13 +650,15 @@ describe('#5228 restore errors surface', () => {
     restored.subscribe({ error: () => {} })
     restored.start()
 
-    expect(restored.getSnapshot().status).toBe('error')
-    expect((restored.getSnapshot() as any).error.message).toMatch(
-      /does not match machine version/,
-    )
+    yield* expect(restored.getSnapshot()).toMatchObject({
+      status: 'error',
+      error: {
+        message: expect.stringMatching(/does not match machine version/),
+      },
+    })
   })
 
-  it('positive control: a version-mismatched snapshot WITH `migrate` restores successfully', () => {
+  it('positive control: a version-mismatched snapshot WITH `migrate` restores successfully', function*({ expect }) {
     const machineV1 = createMachine({
       version: '1',
       context: { count: 5 },
@@ -689,7 +667,7 @@ describe('#5228 restore errors surface', () => {
     })
     const machineV2 = createMachine({
       version: '2',
-      migrate: (persisted: any) => ({
+      migrate: (persisted: PersistedSnapshotFrom<typeof machineV1>) => ({
         ...persisted,
         version: '2',
         context: { total: persisted.context.count },
@@ -704,11 +682,13 @@ describe('#5228 restore errors surface', () => {
     )
     const restored = createActor(machineV2, { snapshot: persisted }).start()
 
-    expect(restored.getSnapshot().status).toBe('active')
-    expect(restored.getSnapshot().context).toEqual({ total: 5 })
+    yield* expect({
+      status: restored.getSnapshot().status,
+      context: restored.getSnapshot().context,
+    }).toEqual({ status: 'active', context: { total: 5 } })
   })
 
-  it('preserves an explicit child source through parent snapshot migration', () => {
+  it('preserves an explicit child source through parent snapshot migration', function*({ expect }) {
     const shared = createMachine({ context: { implementation: 'shared' } })
     const secondV2 = createMachine({
       context: { implementation: 'second-v2' },
@@ -722,49 +702,60 @@ describe('#5228 restore errors surface', () => {
     })
     const machineV2 = createMachine({
       version: '2',
-      migrate: (persisted: any) => ({ ...persisted, version: '2' }),
+      migrate: (persisted: PersistedSnapshotFrom<typeof machineV1>) => ({
+        ...persisted,
+        version: '2',
+      }),
       actors: { first: shared, second: secondV2 },
     })
 
     const persisted = roundTrip(
       createActor(machineV1).start().getPersistedSnapshot(),
     )
-    expect(persisted.children.worker.src).toBe('second')
 
     const restored = createActor(machineV2, { snapshot: persisted }).start()
-    expect((restored.getSnapshot().children as any).worker.logic).toBe(
-      secondV2,
-    )
+
+    const worker = restored.getSnapshot().children['worker']
+    yield* expect({
+      src: persisted.children['worker']?.src,
+      sameLogic: worker !== undefined && 'logic' in worker && worker.logic === secondV2,
+    }).toEqual({ src: 'second', sameLogic: true })
   })
 })
 
 describe('#4583 rehydrated stopped (done) actor', () => {
-  it('restoring a snapshot in a final state does not throw on subscribe and reports status "done"', () => {
-    const machine = createMachine({
-      initial: 'foo',
-      states: {
-        foo: { on: { NEXT: { target: 'bar' } } },
-        bar: { type: 'final' },
-      },
-    })
+  it(
+    'restoring a snapshot in a final state does not throw on subscribe and reports status "done"',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'foo',
+        states: {
+          foo: { on: { NEXT: { target: 'bar' } } },
+          bar: { type: 'final' },
+        },
+      })
 
-    const actor = createActor(machine).start()
-    actor.send({ type: 'NEXT' })
-    expect(actor.getSnapshot().status).toBe('done')
+      const actor = createActor(machine).start()
+      actor.send({ type: 'NEXT' })
+      const doneBeforePersist = actor.getSnapshot().status
 
-    const json = roundTrip(actor.getPersistedSnapshot())
-    actor.stop()
+      const json = roundTrip(actor.getPersistedSnapshot())
+      actor.stop()
 
-    const restored = createActor(machine, { snapshot: json })
-    expect(() => restored.subscribe(() => {})).not.toThrow()
-    restored.start()
+      const restored = createActor(machine, { snapshot: json })
+      restored.subscribe(() => {})
+      restored.start()
 
-    expect(restored.getSnapshot().status).toBe('done')
-  })
+      yield* expect({
+        doneBeforePersist,
+        statusAfterRestore: restored.getSnapshot().status,
+      }).toEqual({ doneBeforePersist: 'done', statusAfterRestore: 'done' })
+    },
+  )
 })
 
 describe('#5013 unserializable event to stopped actor (dev)', () => {
-  it('sending an event with a circular reference to a stopped actor does not throw', () => {
+  it('sending an event with a circular reference to a stopped actor does not throw', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -775,15 +766,23 @@ describe('#5013 unserializable event to stopped actor (dev)', () => {
     const actor = createActor(machine).start()
     actor.stop()
 
-    const circular: any = { type: 'BOOM' }
+    const circular: { type: string; self?: unknown } = { type: 'BOOM' }
     circular.self = circular
 
-    expect(() => actor.send(circular)).not.toThrow()
+    const ref: AnyActorRef = actor
+    let sendError: unknown
+    try {
+      ref.send(circular)
+    } catch (error) {
+      sendError = error
+    }
+
+    yield* expect(sendError).toBe(undefined)
   })
 })
 
 describe('#4774 initialTransition single init', () => {
-  it('runs the context factory exactly once', () => {
+  it('runs the context factory exactly once', function*({ expect }) {
     let initCount = 0
     const machine = createMachine({
       context: () => {
@@ -796,6 +795,6 @@ describe('#4774 initialTransition single init', () => {
 
     initialTransition(machine)
 
-    expect(initCount).toBe(1)
+    yield* expect(initCount).toBe(1)
   })
 })

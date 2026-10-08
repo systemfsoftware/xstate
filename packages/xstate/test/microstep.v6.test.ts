@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine } from '../src/index.js'
 import { createInertActorScope } from '../src/inertActorScope.js'
 
 describe('machine.microstep()', () => {
-  it('should return an array of states from all microsteps', () => {
+  it('should return an array of states from all microsteps', function*({ expect }) {
     const machine = createMachine({
       initial: 'start',
       states: {
@@ -42,10 +42,10 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual(['a', 'b', 'c', 'd'])
+    yield* expect(states.map((s) => s.value)).toEqual(['a', 'b', 'c', 'd'])
   })
 
-  it('should return the states from microstep (transient)', () => {
+  it('should return the states from microstep (transient)', function*({ expect }) {
     const machine = createMachine({
       initial: 'first',
       states: {
@@ -68,10 +68,10 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual(['second', 'third'])
+    yield* expect(states.map((s) => s.value)).toEqual(['second', 'third'])
   })
 
-  it('should return the states from microstep (raised event)', () => {
+  it('should return the states from microstep (raised event)', function*({ expect }) {
     const machine = createMachine({
       initial: 'first',
       states: {
@@ -99,10 +99,10 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual(['second', 'third'])
+    yield* expect(states.map((s) => s.value)).toEqual(['second', 'third'])
   })
 
-  it('should return a single-item array for normal transitions', () => {
+  it('should return a single-item array for normal transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'first',
       states: {
@@ -122,10 +122,10 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual(['second'])
+    yield* expect(states.map((s) => s.value)).toEqual(['second'])
   })
 
-  it('each state should preserve their internal queue', () => {
+  it('each state should preserve their internal queue', function*({ expect }) {
     const machine = createMachine({
       initial: 'first',
       states: {
@@ -166,7 +166,7 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual([
+    yield* expect(states.map((s) => s.value)).toEqual([
       'second',
       'third',
       'fourth',

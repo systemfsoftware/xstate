@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createActor, createMachine } from '../src/index.js'
 
@@ -17,23 +17,28 @@ const machine = createMachine({
 })
 
 describe('restoring into eventless transitions', () => {
-  it('does not re-evaluate always transitions on restore', () => {
+  it('does not re-evaluate always transitions on restore', function*({ expect }) {
     const persisted = createActor(machine).start().getPersistedSnapshot()
     const tampered = {
       ...persisted,
       context: { go: true },
     } as typeof persisted
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const actor = createActor(machine, { snapshot: tampered }).start()
-    warn.mockRestore()
+    const actor = createActor(machine, {
+      snapshot: tampered,
+      warn: () => {},
+    }).start()
 
-    expect(actor.getSnapshot().value).toBe('waiting')
+    yield* expect(actor.getSnapshot().value).toBe('waiting')
   })
 
-  it('warns in development when the restored configuration has eventless transitions', () => {
+  it('warns in development when the restored configuration has eventless transitions', function*({ expect }) {
     const persisted = createActor(machine).start().getPersistedSnapshot()
-    const guard = vi.fn(() => undefined)
+    const guardCalls: string[] = []
+    const guard = () => {
+      guardCalls.push('called')
+      return undefined
+    }
     const guarded = createMachine({
       initial: 'waiting',
       states: {
@@ -41,36 +46,36 @@ describe('restoring into eventless transitions', () => {
         done: {},
       },
     })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warnings: string[] = []
+    const warn = (message: string) => {
+      warnings.push(message)
+    }
 
-    createActor(machine, { snapshot: persisted }).start()
-    const guardedSnapshot = createActor(guarded).getPersistedSnapshot()
-    guard.mockClear()
-    createActor(guarded, { snapshot: guardedSnapshot })
-    const calls = warn.mock.calls.slice()
-    warn.mockRestore()
+    createActor(machine, { snapshot: persisted, warn }).start()
+    const guardedSnapshot = createActor(guarded, { warn }).getPersistedSnapshot()
+    guardCalls.length = 0
+    createActor(guarded, { snapshot: guardedSnapshot, warn })
 
-    expect(calls).toEqual([
-      [
+    yield* expect({ warnings, guardCalls }).toEqual({
+      warnings: [
+        'Restored snapshot is in state "(machine).waiting" which has eventless transitions; they are not re-evaluated until the next event',
         'Restored snapshot is in state "(machine).waiting" which has eventless transitions; they are not re-evaluated until the next event',
       ],
-      [
-        'Restored snapshot is in state "(machine).waiting" which has eventless transitions; they are not re-evaluated until the next event',
-      ],
-    ])
-    // Detection is structural: no guard or transition function runs.
-    expect(guard).not.toHaveBeenCalled()
+      guardCalls: [],
+    })
   })
 
-  it('does not warn when the restored configuration has no eventless transitions', () => {
+  it('does not warn when the restored configuration has no eventless transitions', function*({ expect }) {
     const plain = createMachine({ initial: 'a', states: { a: {} } })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warnings: string[] = []
+    const warn = (message: string) => {
+      warnings.push(message)
+    }
     createActor(plain, {
-      snapshot: createActor(plain).getPersistedSnapshot(),
+      snapshot: createActor(plain, { warn }).getPersistedSnapshot(),
+      warn,
     }).start()
-    const calls = warn.mock.calls.slice()
-    warn.mockRestore()
 
-    expect(calls).toEqual([])
+    yield* expect(warnings).toEqual([])
   })
 })

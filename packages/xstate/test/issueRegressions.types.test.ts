@@ -1,8 +1,4 @@
-import { describe, expect, it } from 'vitest'
-/**
- * Type-level regression tests for open GitHub issues that are fixed (or made
- * moot) in v6. Each test reproduces the reported pattern with v6 APIs.
- */
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import {
   type ActorRefFromLogic,
@@ -17,7 +13,7 @@ import {
 function expectType<T>(_v: T) {}
 
 describe('types', () => {
-  it('#4915 createActor does not require input when restoring a snapshot', () => {
+  it('#4915 createActor does not require input when restoring a snapshot', function*({ expect }) {
     const machine = setup({
       schemas: {
         input: z.object({ id: z.string() }),
@@ -31,10 +27,10 @@ describe('types', () => {
     const persisted = actor.getPersistedSnapshot()
 
     const restored = createActor(machine, { snapshot: persisted }).start()
-    expect(restored.getSnapshot().context.id).toBe('a')
+    yield* expect(restored.getSnapshot().context.id).toBe('a')
   })
 
-  it('#4855 generic actor stubs in setup keep invoke inference', () => {
+  it('#4855 generic actor stubs in setup keep invoke inference', function*({ expect }) {
     function createGenericMachine<Input, Output>() {
       return setup({
         schemas: {
@@ -74,10 +70,10 @@ describe('types', () => {
     }
 
     const machine = createGenericMachine<{ in: string }, { out: string }>()
-    expect(machine).toBeDefined()
+    yield* expect(createActor(machine).start().getSnapshot().value).toEqual('idle')
   })
 
-  it('#4925 snapshot.value includes compound state values', () => {
+  it('#4925 snapshot.value includes compound state values', function*({ expect }) {
     const machine = setup({}).createMachine({
       initial: 'a',
       states: {
@@ -89,7 +85,7 @@ describe('types', () => {
       },
     })
 
-    const value = createActor(machine).getSnapshot().value
+    const value = createActor(machine).start().getSnapshot().value
     value satisfies typeof value
 
     const compound: typeof value = { a: 'x' }
@@ -97,10 +93,13 @@ describe('types', () => {
     // @ts-expect-error - 'z' is not a child of 'a'
     const invalid: typeof value = { a: 'z' }
 
-    expect([compound, atomic, invalid]).toHaveLength(3)
+    yield* expect({ value, literals: [compound, atomic, invalid] }).toEqual({
+      value: { a: 'x' },
+      literals: [{ a: 'x' }, 'b', { a: 'z' }],
+    })
   })
 
-  it('#4913 each invoked child ref is typed with its own events', () => {
+  it('#4913 each invoked child ref is typed with its own events', function*({ expect }) {
     const childA = createMachine({
       schemas: { events: { onlyA: types<{}>() } },
     })
@@ -108,7 +107,6 @@ describe('types', () => {
       schemas: { events: { onlyB: types<{}>() } },
     })
 
-    // Reported pattern: events unique to one child are no longer rejected
     const untyped = setup({
       actors: { childA, childB },
     }).createMachine({
@@ -119,7 +117,6 @@ describe('types', () => {
     })
     createActor(untyped).getSnapshot().children['a']?.send({ type: 'onlyA' })
 
-    // With `schemas.children`, each ref gets exactly its own events
     const typed = setup({
       actors: { childA, childB },
       schemas: {
@@ -134,20 +131,22 @@ describe('types', () => {
         { id: 'b', src: 'childB' },
       ],
     })
-    const children = createActor(typed).getSnapshot().children
+    const children = createActor(typed).start().getSnapshot().children
 
     children.a?.send({ type: 'onlyA' })
     children.b?.send({ type: 'onlyB' })
     // @ts-expect-error - onlyB belongs to child b
     children.a?.send({ type: 'onlyB' })
+
+    yield* expect(Object.keys(children)).toEqual(['a', 'b'])
   })
 
-  it('#5375 after keys must be declared delays', () => {
+  it('#5375 after keys must be declared delays', function*({ expect }) {
     const s = setup({
       delays: { someDelay: 10000 },
     })
 
-    s.createMachine({
+    const validMachine = s.createMachine({
       initial: 'sleep',
       states: {
         sleep: { after: { someDelay: { target: 'awake' } } },
@@ -167,22 +166,26 @@ describe('types', () => {
         awake: {},
       },
     })
+
+    yield* expect(createActor(validMachine).start().getSnapshot().value).toEqual('sleep')
   })
 
-  it('#4802 enq.spawn accepts dynamic logic when actors are declared', () => {
+  it('#4802 enq.spawn accepts dynamic logic when actors are declared', function*({ expect }) {
     const known = createMachine({})
     const dynamicLogic = createMachine({}) as AnyActorLogic
 
-    setup({ actors: { known } }).createMachine({
+    const machine = setup({ actors: { known } }).createMachine({
       entry: (_, enq) => {
         enq.spawn('known')
         enq.spawn(dynamicLogic)
       },
     })
+
+    yield* expect(createActor(machine).start().getSnapshot().status).toEqual('active')
   })
 
-  it('#4853 unknown keys in a transition object are rejected', () => {
-    setup({
+  it('#4853 unknown keys in a transition object are rejected', function*({ expect }) {
+    const machine = setup({
       schemas: {
         events: { RUN: types<{}>() },
         context: types<{}>(),
@@ -200,14 +203,16 @@ describe('types', () => {
         stop: {},
       },
     })
+
+    yield* expect(createActor(machine).start().getSnapshot().value).toEqual('idle')
   })
 
-  it('#5024 spawned child input sees the narrowed event', () => {
+  it('#5024 spawned child input sees the narrowed event', function*({ expect }) {
     const child = createMachine({
       schemas: { input: z.object({ n: z.number() }) },
     })
 
-    setup({
+    const machine = setup({
       schemas: {
         events: {
           foo: types<{ value: string }>(),
@@ -222,16 +227,18 @@ describe('types', () => {
         },
       },
     })
+
+    yield* expect(createActor(machine).start().getSnapshot().status).toEqual('active')
   })
 
-  it('#4725 sendTo accepts a plain event object with payload', () => {
+  it('#4725 sendTo accepts a plain event object with payload', function*({ expect }) {
     const childMachine = createMachine({
       schemas: {
         events: { notify: types<{ data: string }>() },
       },
     })
 
-    setup({
+    const machine = setup({
       schemas: { events: { someEvent: types<{}>() } },
       actors: { childMachine },
     }).createMachine({
@@ -245,5 +252,7 @@ describe('types', () => {
         },
       },
     })
+
+    yield* expect(createActor(machine).start().getSnapshot().status).toEqual('active')
   })
 })

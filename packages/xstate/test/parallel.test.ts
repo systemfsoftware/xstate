@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import z from 'zod'
 import { createActor, createMachine, type StateValue, types } from '../src/index.js'
 
@@ -500,11 +501,11 @@ const deepFlatParallelMachine = createMachine({
   },
 })
 
-describe('parallel states', () => {
-  it('should have initial parallel states', () => {
+describe('parallel states', (it) => {
+  it('should have initial parallel states', function*({ expect }) {
     const initialState = createActor(wordMachine).getSnapshot()
 
-    expect(initialState.value).toEqual({
+    yield* expect(initialState.value).toEqual({
       bold: 'off',
       italics: 'off',
       underline: 'off',
@@ -566,20 +567,20 @@ describe('parallel states', () => {
             toState,
           )
         } on ${eventTypes}`,
-        () => {
+        function*({ expect }) {
           const resultState = testMultiTransition(
             wordMachine,
             fromState,
             eventTypes,
           )
 
-          expect(resultState.value).toEqual(toState)
+          yield* expect(resultState.value).toEqual(toState)
         },
       )
     })
   })
 
-  it('should have all parallel states represented in the state value', () => {
+  it('should have all parallel states represented in the state value', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -604,47 +605,47 @@ describe('parallel states', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'WAK1' })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       wak1: 'wak1sonB',
       wak2: 'wak2sonA',
     })
   })
 
-  it('should have all parallel states represented in the state value (2)', () => {
+  it('should have all parallel states represented in the state value (2)', function*({ expect }) {
     const actorRef = createActor(wakMachine).start()
     actorRef.send({ type: 'WAK2' })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       wak1: 'wak1sonA',
       wak2: 'wak2sonB',
     })
   })
 
-  it('should work with regions without states', () => {
-    expect(createActor(flatParallelMachine).getSnapshot().value).toEqual({
+  it('should work with regions without states', function*({ expect }) {
+    yield* expect(createActor(flatParallelMachine).getSnapshot().value).toEqual({
       foo: {},
       bar: {},
       baz: 'one',
     })
   })
 
-  it('should work with regions without states', () => {
+  it('should work with regions without states', function*({ expect }) {
     const actorRef = createActor(flatParallelMachine).start()
     actorRef.send({ type: 'E' })
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       foo: {},
       bar: {},
       baz: 'two',
     })
   })
 
-  it('should properly transition to relative substate', () => {
+  it('should properly transition to relative substate', function*({ expect }) {
     const actorRef = createActor(composerMachine).start()
     actorRef.send({
       type: 'singleClickActivity',
     })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       ReadOnly: {
         StructureEdit: {
           SelectionStatus: 'SelectedActivity',
@@ -654,7 +655,7 @@ describe('parallel states', () => {
     })
   })
 
-  it('should properly transition according to entry events on an initial state', () => {
+  it('should properly transition according to entry events on an initial state', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -695,7 +696,7 @@ describe('parallel states', () => {
         },
       },
     })
-    expect(createActor(machine).getSnapshot().value).toEqual({
+    yield* expect(createActor(machine).getSnapshot().value).toEqual({
       OUTER1: 'B',
       OUTER2: {
         INNER1: 'OFF',
@@ -704,13 +705,13 @@ describe('parallel states', () => {
     })
   })
 
-  it('should properly transition when raising events for a parallel state', () => {
+  it('should properly transition when raising events for a parallel state', function*({ expect }) {
     const actorRef = createActor(raisingParallelMachine).start()
     actorRef.send({
       type: 'EVENT_OUTER1_B',
     })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       OUTER1: 'B',
       OUTER2: {
         INNER1: 'ON',
@@ -719,7 +720,7 @@ describe('parallel states', () => {
     })
   })
 
-  it('should handle simultaneous orthogonal transitions', () => {
+  it('should handle simultaneous orthogonal transitions', function*({ expect }) {
     const simultaneousMachine = createMachine({
       schemas: {
         context: z.object({
@@ -774,81 +775,86 @@ describe('parallel states', () => {
       value: 'something',
     })
 
-    expect(actorRef.getSnapshot().value).toEqual({
-      editing: {},
-      status: 'unsaved',
-    })
-
-    expect(actorRef.getSnapshot().context).toEqual({
-      value: 'something',
+    yield* expect({
+      value: actorRef.getSnapshot().value,
+      context: actorRef.getSnapshot().context,
+    }).toEqual({
+      value: { editing: {}, status: 'unsaved' },
+      context: { value: 'something' },
     })
   })
 
   // TODO: skip (initial actions)
-  it('should execute actions of the initial transition of a parallel region when entering the initial state nodes of a machine', () => {
-    const spy = vi.fn()
+  it(
+    'should execute actions of the initial transition of a parallel region when entering the initial state nodes of a machine',
+    function*({ expect }) {
+      const calls: string[] = []
 
-    const machine = createMachine({
-      type: 'parallel',
-      states: {
-        a: {
-          entry: (_, enq) => enq(spy),
-          initial: 'a1',
-          states: {
-            a1: {},
+      const machine = createMachine({
+        type: 'parallel',
+        states: {
+          a: {
+            entry: (_, enq) => enq(() => calls.push('entered')),
+            initial: 'a1',
+            states: {
+              a1: {},
+            },
           },
         },
-      },
-    })
+      })
 
-    createActor(machine).start()
+      createActor(machine).start()
 
-    expect(spy).toHaveBeenCalledTimes(1)
-  })
+      yield* expect(calls).toEqual(['entered'])
+    },
+  )
 
   // TODO: fix (initial actions)
-  it('should execute actions of the initial transition of a parallel region when the parallel state is targeted with an explicit transition', () => {
-    const spy = vi.fn()
+  it(
+    'should execute actions of the initial transition of a parallel region when the parallel state is targeted with an explicit transition',
+    function*({ expect }) {
+      const calls: string[] = []
 
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: {
-          on: {
-            NEXT: { target: 'b' },
+      const machine = createMachine({
+        initial: 'a',
+        states: {
+          a: {
+            on: {
+              NEXT: { target: 'b' },
+            },
           },
-        },
-        b: {
-          entry: () => {
-            // ...
-          },
-          type: 'parallel',
-          states: {
-            c: {
-              entry: (_, enq) => enq(spy),
-              initial: 'c1',
-              states: {
-                c1: {},
+          b: {
+            entry: () => {
+              // ...
+            },
+            type: 'parallel',
+            states: {
+              c: {
+                entry: (_, enq) => enq(() => calls.push('entered')),
+                initial: 'c1',
+                states: {
+                  c1: {},
+                },
               },
             },
           },
         },
-      },
-    })
+      })
 
-    const actorRef = createActor(machine, {
-      inspect: (ev) => {
-        ev
-      },
-    }).start()
+      const actorRef = createActor(machine, {
+        inspect: (ev) => {
+          ev
+        },
+      }).start()
 
-    actorRef.send({ type: 'NEXT' })
+      actorRef.send({ type: 'NEXT' })
 
-    expect(spy).toHaveBeenCalledTimes(1)
-  })
+      yield* expect(calls).toEqual(['entered'])
+    },
+  )
 
-  describe('transitions with nested parallel states', () => {
-    it('should properly transition when in a simple nested state', () => {
+  describe('transitions with nested parallel states', (it) => {
+    it('should properly transition when in a simple nested state', function*({ expect }) {
       const actorRef = createActor(nestedParallelState).start()
       actorRef.send({
         type: 'EVENT_SIMPLE',
@@ -857,7 +863,7 @@ describe('parallel states', () => {
         type: 'EVENT_STATE_NTJ0_WORK',
       })
 
-      expect(actorRef.getSnapshot().value).toEqual({
+      yield* expect(actorRef.getSnapshot().value).toEqual({
         OUTER1: {
           STATE_ON: {
             STATE_NTJ0: 'STATE_WORKING_0',
@@ -868,7 +874,7 @@ describe('parallel states', () => {
       })
     })
 
-    it('should properly transition when in a complex nested state', () => {
+    it('should properly transition when in a complex nested state', function*({ expect }) {
       const actorRef = createActor(nestedParallelState).start()
       actorRef.send({
         type: 'EVENT_COMPLEX',
@@ -877,7 +883,7 @@ describe('parallel states', () => {
         type: 'EVENT_STATE_NTJ0_WORK',
       })
 
-      expect(actorRef.getSnapshot().value).toEqual({
+      yield* expect(actorRef.getSnapshot().value).toEqual({
         OUTER1: {
           STATE_ON: {
             STATE_NTJ0: 'STATE_WORKING_0',
@@ -895,7 +901,7 @@ describe('parallel states', () => {
   })
 
   // https://github.com/statelyai/xstate/issues/191
-  describe('nested flat parallel states', () => {
+  describe('nested flat parallel states', (it) => {
     const machine = createMachine({
       initial: 'A',
       states: {
@@ -917,13 +923,13 @@ describe('parallel states', () => {
       },
     })
 
-    it('should represent the flat nested parallel states in the state value', () => {
+    it('should represent the flat nested parallel states in the state value', function*({ expect }) {
       const actorRef = createActor(machine).start()
       actorRef.send({
         type: 'to-B',
       })
 
-      expect(actorRef.getSnapshot().value).toEqual({
+      yield* expect(actorRef.getSnapshot().value).toEqual({
         B: {
           C: {},
           D: {},
@@ -932,15 +938,15 @@ describe('parallel states', () => {
     })
   })
 
-  describe('deep flat parallel states', () => {
-    it('should properly evaluate deep flat parallel states', () => {
+  describe('deep flat parallel states', (it) => {
+    it('should properly evaluate deep flat parallel states', function*({ expect }) {
       const actorRef = createActor(deepFlatParallelMachine).start()
 
       actorRef.send({ type: 'a' })
       actorRef.send({ type: 'c' })
       actorRef.send({ type: 'b' })
 
-      expect(actorRef.getSnapshot().value).toEqual({
+      yield* expect(actorRef.getSnapshot().value).toEqual({
         V: {
           B: {
             BB: {
@@ -953,7 +959,7 @@ describe('parallel states', () => {
       })
     })
 
-    it('should not overlap resolved state nodes in state resolution', () => {
+    it('should not overlap resolved state nodes in state resolution', function*({ expect }) {
       const machine = createMachine({
         id: 'pipeline',
         type: 'parallel',
@@ -977,17 +983,17 @@ describe('parallel states', () => {
       })
 
       const actorRef = createActor(machine).start()
-      expect(() => {
-        actorRef.send({
-          type: 'UPDATE',
-        })
-      }).not.toThrow()
+      actorRef.send({
+        type: 'UPDATE',
+      })
+
+      yield* expect(actorRef.getSnapshot().value).toEqual({ bar: 'baz', foo: {} })
     })
   })
 
-  describe('other', () => {
+  describe('other', (it) => {
     // https://github.com/statelyai/xstate/issues/518
-    it('regions should be able to transition to orthogonal regions', () => {
+    it('regions should be able to transition to orthogonal regions', function*({ expect }) {
       const testMachine = createMachine({
         type: 'parallel',
         states: {
@@ -1030,13 +1036,14 @@ describe('parallel states', () => {
       actorRef.send({ type: 'toggle' })
       actorRef.send({ type: 'go to dashboard' })
 
-      expect(
-        actorRef.getSnapshot().matches({ Menu: 'Opened', Pages: 'Dashboard' }),
-      ).toBe(true)
+      yield* expect(actorRef.getSnapshot().value).toEqual({
+        Pages: 'Dashboard',
+        Menu: 'Opened',
+      })
     })
 
     // https://github.com/statelyai/xstate/issues/531
-    it('should calculate the entry set for reentering transitions in parallel states', () => {
+    it('should calculate the entry set for reentering transitions in parallel states', function*({ expect }) {
       const testMachine = createMachine({
         id: 'test',
         schemas: {
@@ -1083,11 +1090,11 @@ describe('parallel states', () => {
         type: 'GOTO_FOOBAZ',
       })
 
-      expect(actorRef.getSnapshot().context.log.length).toBe(2)
+      yield* expect(actorRef.getSnapshot().context.log.length).toBe(2)
     })
   })
 
-  it('should raise a "xstate.done.state.*" event when all child states reach final state', async () => {
+  it('should raise a "xstate.done.state.*" event when all child states reach final state', function*({ expect }) {
     const { promise, resolve } = Promise.withResolvers<void>()
     const machine = createMachine({
       id: 'test',
@@ -1154,154 +1161,164 @@ describe('parallel states', () => {
 
     service.send({ type: 'FINISH' })
 
-    await promise
+    yield* Effect.promise(() => promise)
+    yield* expect(service.getSnapshot().value).toBe('success')
   })
 
-  it('should raise a "xstate.done.state.*" event when a pseudostate of a history type is directly on a parallel state', () => {
-    const machine = createMachine({
-      initial: 'parallelSteps',
-      states: {
-        parallelSteps: {
-          type: 'parallel',
-          states: {
-            hist: {
-              type: 'history',
-              target: ['one', 'two'],
-            },
-            one: {
-              initial: 'wait_one',
-              states: {
-                wait_one: {
-                  on: {
-                    finish_one: {
-                      target: 'done',
+  it(
+    'should raise a "xstate.done.state.*" event when a pseudostate of a history type is directly on a parallel state',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'parallelSteps',
+        states: {
+          parallelSteps: {
+            type: 'parallel',
+            states: {
+              hist: {
+                type: 'history',
+                target: ['one', 'two'],
+              },
+              one: {
+                initial: 'wait_one',
+                states: {
+                  wait_one: {
+                    on: {
+                      finish_one: {
+                        target: 'done',
+                      },
                     },
                   },
-                },
-                done: {
-                  type: 'final',
-                },
-              },
-            },
-            two: {
-              initial: 'wait_two',
-              states: {
-                wait_two: {
-                  on: {
-                    finish_two: {
-                      target: 'done',
-                    },
+                  done: {
+                    type: 'final',
                   },
                 },
-                done: {
-                  type: 'final',
-                },
               },
-            },
-          },
-          onDone: { target: 'finished' },
-        },
-        finished: {},
-      },
-    })
-
-    const service = createActor(machine).start()
-
-    service.send({ type: 'finish_one' })
-    service.send({ type: 'finish_two' })
-
-    expect(service.getSnapshot().value).toBe('finished')
-  })
-
-  it('source parallel region should not be exited when a transition within it targets another parallel region (parallel root)', async () => {
-    const machine = createMachine({
-      type: 'parallel',
-      states: {
-        Operation: {
-          initial: 'Waiting',
-          states: {
-            Waiting: {
-              on: {
-                TOGGLE_MODE: {
-                  target: '#Demo',
-                },
-              },
-            },
-            Fetching: {},
-          },
-        },
-        Mode: {
-          initial: 'Normal',
-          states: {
-            Normal: {},
-            Demo: {
-              id: 'Demo',
-            },
-          },
-        },
-      },
-    })
-
-    const flushTracked = trackEntries(machine)
-
-    const actor = createActor(machine)
-    actor.start()
-    flushTracked()
-
-    actor.send({ type: 'TOGGLE_MODE' })
-
-    expect(flushTracked()).toEqual(['exit: Mode.Normal', 'enter: Mode.Demo'])
-  })
-
-  it('source parallel region should not be exited when a transition within it targets another parallel region (nested parallel)', async () => {
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: {
-          type: 'parallel',
-          states: {
-            Operation: {
-              initial: 'Waiting',
-              states: {
-                Waiting: {
-                  on: {
-                    TOGGLE_MODE: {
-                      target: '#Demo',
+              two: {
+                initial: 'wait_two',
+                states: {
+                  wait_two: {
+                    on: {
+                      finish_two: {
+                        target: 'done',
+                      },
                     },
                   },
+                  done: {
+                    type: 'final',
+                  },
                 },
-                Fetching: {},
               },
             },
-            Mode: {
-              initial: 'Normal',
-              states: {
-                Normal: {},
-                Demo: {
-                  id: 'Demo',
+            onDone: { target: 'finished' },
+          },
+          finished: {},
+        },
+      })
+
+      const service = createActor(machine).start()
+
+      service.send({ type: 'finish_one' })
+      service.send({ type: 'finish_two' })
+
+      yield* expect(service.getSnapshot().value).toBe('finished')
+    },
+  )
+
+  it(
+    'source parallel region should not be exited when a transition within it targets another parallel region (parallel root)',
+    function*({ expect }) {
+      const machine = createMachine({
+        type: 'parallel',
+        states: {
+          Operation: {
+            initial: 'Waiting',
+            states: {
+              Waiting: {
+                on: {
+                  TOGGLE_MODE: {
+                    target: '#Demo',
+                  },
+                },
+              },
+              Fetching: {},
+            },
+          },
+          Mode: {
+            initial: 'Normal',
+            states: {
+              Normal: {},
+              Demo: {
+                id: 'Demo',
+              },
+            },
+          },
+        },
+      })
+
+      const flushTracked = trackEntries(machine)
+
+      const actor = createActor(machine)
+      actor.start()
+      flushTracked()
+
+      actor.send({ type: 'TOGGLE_MODE' })
+
+      yield* expect(flushTracked()).toEqual(['exit: Mode.Normal', 'enter: Mode.Demo'])
+    },
+  )
+
+  it(
+    'source parallel region should not be exited when a transition within it targets another parallel region (nested parallel)',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        states: {
+          a: {
+            type: 'parallel',
+            states: {
+              Operation: {
+                initial: 'Waiting',
+                states: {
+                  Waiting: {
+                    on: {
+                      TOGGLE_MODE: {
+                        target: '#Demo',
+                      },
+                    },
+                  },
+                  Fetching: {},
+                },
+              },
+              Mode: {
+                initial: 'Normal',
+                states: {
+                  Normal: {},
+                  Demo: {
+                    id: 'Demo',
+                  },
                 },
               },
             },
           },
         },
-      },
-    })
+      })
 
-    const flushTracked = trackEntries(machine)
+      const flushTracked = trackEntries(machine)
 
-    const actor = createActor(machine)
-    actor.start()
-    flushTracked()
+      const actor = createActor(machine)
+      actor.start()
+      flushTracked()
 
-    actor.send({ type: 'TOGGLE_MODE' })
+      actor.send({ type: 'TOGGLE_MODE' })
 
-    expect(flushTracked()).toEqual([
-      'exit: a.Mode.Normal',
-      'enter: a.Mode.Demo',
-    ])
-  })
+      yield* expect(flushTracked()).toEqual([
+        'exit: a.Mode.Normal',
+        'enter: a.Mode.Demo',
+      ])
+    },
+  )
 
-  it('targetless transition on a parallel state should not enter nor exit any states', () => {
+  it('targetless transition on a parallel state should not enter nor exit any states', function*({ expect }) {
     const machine = createMachine({
       id: 'test',
       type: 'parallel',
@@ -1330,45 +1347,48 @@ describe('parallel states', () => {
 
     actor.send({ type: 'MY_EVENT' })
 
-    expect(flushTracked()).toEqual([])
+    yield* expect(flushTracked()).toEqual([])
   })
 
-  it('targetless transition in one of the parallel regions should not enter nor exit any states', () => {
-    const machine = createMachine({
-      id: 'test',
-      type: 'parallel',
-      states: {
-        first: {
-          initial: 'disabled',
-          states: {
-            disabled: {},
-            enabled: {},
-          },
-          on: {
-            MY_EVENT: (_, enq) => {
-              enq(() => {})
+  it(
+    'targetless transition in one of the parallel regions should not enter nor exit any states',
+    function*({ expect }) {
+      const machine = createMachine({
+        id: 'test',
+        type: 'parallel',
+        states: {
+          first: {
+            initial: 'disabled',
+            states: {
+              disabled: {},
+              enabled: {},
+            },
+            on: {
+              MY_EVENT: (_, enq) => {
+                enq(() => {})
+              },
             },
           },
+          second: {},
         },
-        second: {},
-      },
-    })
+      })
 
-    const flushTracked = trackEntries(machine)
+      const flushTracked = trackEntries(machine)
 
-    const actor = createActor(machine)
-    actor.start()
-    flushTracked()
+      const actor = createActor(machine)
+      actor.start()
+      flushTracked()
 
-    actor.send({ type: 'MY_EVENT' })
+      actor.send({ type: 'MY_EVENT' })
 
-    expect(flushTracked()).toEqual([])
-  })
+      yield* expect(flushTracked()).toEqual([])
+    },
+  )
 })
 
-describe('parallel onDone output aggregation', () => {
-  it('should aggregate region outputs into a keyed object', () => {
-    const outputSpy = vi.fn()
+describe('parallel onDone output aggregation', (it) => {
+  it('should aggregate region outputs into a keyed object', function*({ expect }) {
+    const outputs: unknown[] = []
     const machine = createMachine({
       initial: 'processing',
       states: {
@@ -1398,7 +1418,7 @@ describe('parallel onDone output aggregation', () => {
           },
           onDone: ({ event }, enq) => {
             enq(() => {
-              outputSpy(event.output)
+              outputs.push(event.output)
             })
             return { target: 'success' }
           },
@@ -1412,15 +1432,14 @@ describe('parallel onDone output aggregation', () => {
     actor.send({ type: 'UPLOADED' })
     actor.send({ type: 'VALID' })
 
-    expect(actor.getSnapshot().value).toBe('success')
-    expect(outputSpy).toHaveBeenCalledWith({
-      upload: { url: '/file.png' },
-      validate: { valid: true },
+    yield* expect({ value: actor.getSnapshot().value, outputs }).toEqual({
+      value: 'success',
+      outputs: [{ upload: { url: '/file.png' }, validate: { valid: true } }],
     })
   })
 
-  it('should include undefined for regions without output', () => {
-    const outputSpy = vi.fn()
+  it('should include undefined for regions without output', function*({ expect }) {
+    const outputs: unknown[] = []
     const machine = createMachine({
       initial: 'processing',
       states: {
@@ -1447,7 +1466,7 @@ describe('parallel onDone output aggregation', () => {
           },
           onDone: ({ event }, enq) => {
             enq(() => {
-              outputSpy(event.output)
+              outputs.push(event.output)
             })
             return { target: 'success' }
           },
@@ -1461,14 +1480,14 @@ describe('parallel onDone output aggregation', () => {
     actor.send({ type: 'DONE_A' })
     actor.send({ type: 'DONE_B' })
 
-    expect(outputSpy).toHaveBeenCalledWith({
+    yield* expect(outputs).toEqual([{
       withOutput: { data: 42 },
       withoutOutput: undefined,
-    })
+    }])
   })
 
-  it('should resolve dynamic output functions before aggregation', () => {
-    const outputSpy = vi.fn()
+  it('should resolve dynamic output functions before aggregation', function*({ expect }) {
+    const outputs: unknown[] = []
     const machine = createMachine({
       schemas: { context: types<{ count: number }>() },
       context: { count: 10 },
@@ -1500,7 +1519,7 @@ describe('parallel onDone output aggregation', () => {
           },
           onDone: ({ event }, enq) => {
             enq(() => {
-              outputSpy(event.output)
+              outputs.push(event.output)
             })
             return { target: 'success' }
           },
@@ -1513,14 +1532,11 @@ describe('parallel onDone output aggregation', () => {
     actor.start()
     actor.send({ type: 'DONE' })
 
-    expect(outputSpy).toHaveBeenCalledWith({
-      a: { doubled: 20 },
-      b: 'static-value',
-    })
+    yield* expect(outputs).toEqual([{ a: { doubled: 20 }, b: 'static-value' }])
   })
 
-  it('should aggregate nested parallel outputs', () => {
-    const outputSpy = vi.fn()
+  it('should aggregate nested parallel outputs', function*({ expect }) {
+    const outputs: unknown[] = []
     const machine = createMachine({
       initial: 'outer',
       states: {
@@ -1565,7 +1581,7 @@ describe('parallel onDone output aggregation', () => {
           },
           onDone: ({ event }, enq) => {
             enq(() => {
-              outputSpy(event.output)
+              outputs.push(event.output)
             })
             return { target: 'success' }
           },
@@ -1578,16 +1594,16 @@ describe('parallel onDone output aggregation', () => {
     actor.start()
     actor.send({ type: 'DONE' })
 
-    expect(outputSpy).toHaveBeenCalledWith({
+    yield* expect(outputs).toEqual([{
       branch1: { from: 'branch1' },
       branch2: {
         inner1: { from: 'inner1' },
         inner2: { from: 'inner2' },
       },
-    })
+    }])
   })
 
-  it('should provide aggregated output to onDone guard', () => {
+  it('should provide aggregated output to onDone guard', function*({ expect }) {
     const machine = createMachine({
       initial: 'processing',
       states: {
@@ -1631,10 +1647,10 @@ describe('parallel onDone output aggregation', () => {
     actor.start()
     actor.send({ type: 'DONE' })
 
-    expect(actor.getSnapshot().value).toBe('someNotOk')
+    yield* expect(actor.getSnapshot().value).toBe('someNotOk')
   })
 
-  it('should provide aggregated output for root parallel machine', () => {
+  it('should provide aggregated output for root parallel machine', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -1668,7 +1684,7 @@ describe('parallel onDone output aggregation', () => {
     actor.start()
     actor.send({ type: 'DONE' })
 
-    expect(actor.getSnapshot().output).toEqual({
+    yield* expect(actor.getSnapshot().output).toEqual({
       aggregated: {
         a: { from: 'a' },
         b: { from: 'b' },

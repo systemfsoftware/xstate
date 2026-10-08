@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachineFromConfig } from '../src/createMachineFromConfig.js'
 import { createActor, createMachine, setup } from '../src/index.js'
 
 describe('route', () => {
-  it('should transition directly to a route if route is an empty transition config', () => {
+  it('should transition directly to a route if route is an empty transition config', function*({ expect }) {
     const machine = createMachine({
       id: 'test',
       initial: 'a',
@@ -24,18 +24,23 @@ describe('route', () => {
       to: '#b',
     })
 
-    expect(actor.getSnapshot().value).toEqual('b')
+    const valueAfterRouteToB = actor.getSnapshot().value
 
     // c has no route, so this should not transition
-    actor.send({
-      type: 'xstate.route',
-      to: '#c',
-    } as any)
+    actor.send(
+      {
+        type: 'xstate.route',
+        to: '#c',
+      } as unknown as Parameters<typeof actor.send>[0],
+    )
 
-    expect(actor.getSnapshot().value).toEqual('b')
+    yield* expect({
+      valueAfterRouteToB,
+      valueAfterRouteToC: actor.getSnapshot().value,
+    }).toEqual({ valueAfterRouteToB: 'b', valueAfterRouteToC: 'b' })
   })
 
-  it('should transition directly to a route if the route function allows it', () => {
+  it('should transition directly to a route if the route function allows it', function*({ expect }) {
     const machine = createMachine({
       id: 'test',
       initial: 'a',
@@ -54,24 +59,32 @@ describe('route', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().value).toEqual('a')
+    const initialValue = actor.getSnapshot().value
 
     actor.send({
       type: 'xstate.route',
       to: '#b',
     })
 
-    expect(actor.getSnapshot().value).toEqual('a')
+    const valueAfterBlockedRoute = actor.getSnapshot().value
 
     actor.send({
       type: 'xstate.route',
       to: '#c',
     })
 
-    expect(actor.getSnapshot().value).toEqual('c')
+    yield* expect({
+      initialValue,
+      valueAfterBlockedRoute,
+      valueAfterAllowedRoute: actor.getSnapshot().value,
+    }).toEqual({
+      initialValue: 'a',
+      valueAfterBlockedRoute: 'a',
+      valueAfterAllowedRoute: 'c',
+    })
   })
 
-  it('should resolve guards provided in machine config on route transitions', () => {
+  it('should resolve guards provided in machine config on route transitions', function*({ expect }) {
     const machine = createMachine({
       id: 'flow',
       initial: 'amount',
@@ -105,7 +118,7 @@ describe('route', () => {
       to: '#review',
     })
 
-    expect(actor.getSnapshot().value).toEqual('amount')
+    const valueWhileGuardBlocked = actor.getSnapshot().value
 
     actor.send({ type: 'READY' })
     actor.send({
@@ -113,10 +126,13 @@ describe('route', () => {
       to: '#review',
     })
 
-    expect(actor.getSnapshot().value).toEqual('review')
+    yield* expect({
+      valueWhileGuardBlocked,
+      valueAfterReady: actor.getSnapshot().value,
+    }).toEqual({ valueWhileGuardBlocked: 'amount', valueAfterReady: 'review' })
   })
 
-  it('route function can return a config object (with context update)', () => {
+  it('route function can return a config object (with context update)', function*({ expect }) {
     const machine = createMachine({
       id: 'app',
       context: { visits: 0, loggedIn: false },
@@ -148,16 +164,26 @@ describe('route', () => {
     const actor = createActor(machine).start()
 
     actor.send({ type: 'xstate.route', to: '#profile' })
-    expect(actor.getSnapshot().value).toEqual('home')
-    expect(actor.getSnapshot().context.visits).toBe(0)
+    const valueWhileLoggedOut = actor.getSnapshot().value
+    const visitsWhileLoggedOut = actor.getSnapshot().context.visits
 
     actor.send({ type: 'LOGIN' })
     actor.send({ type: 'xstate.route', to: '#profile' })
-    expect(actor.getSnapshot().value).toEqual('profile')
-    expect(actor.getSnapshot().context.visits).toBe(1)
+
+    yield* expect({
+      valueWhileLoggedOut,
+      visitsWhileLoggedOut,
+      valueAfterLogin: actor.getSnapshot().value,
+      visitsAfterLogin: actor.getSnapshot().context.visits,
+    }).toEqual({
+      valueWhileLoggedOut: 'home',
+      visitsWhileLoggedOut: 0,
+      valueAfterLogin: 'profile',
+      visitsAfterLogin: 1,
+    })
   })
 
-  it('should throw on a JSON-layer route guard reference that is not implemented', () => {
+  it('should throw on a JSON-layer route guard reference that is not implemented', function*({ expect }) {
     const machine = createMachineFromConfig(
       {
         id: 'flow',
@@ -192,13 +218,18 @@ describe('route', () => {
     })
 
     const snapshot = actor.getSnapshot()
-    expect(snapshot.status).toBe('error')
-    expect((snapshot as any).error.message).toMatch(
-      /Guard 'isRedy' is not implemented in machine 'flow'.*Available guards: .*'isReady'/,
-    )
+    yield* expect({
+      status: snapshot.status,
+      message: (snapshot.error as Error).message,
+    }).toEqual({
+      status: 'error',
+      message: expect.stringMatching(
+        /Guard 'isRedy' is not implemented in machine 'flow'.*Available guards: .*'isReady'/,
+      ),
+    })
   })
 
-  it('should work with parallel states', () => {
+  it('should work with parallel states', function*({ expect }) {
     const todoMachine = createMachine({
       id: 'todos',
       type: 'parallel',
@@ -232,23 +263,23 @@ describe('route', () => {
 
     const todoActor = createActor(todoMachine).start()
 
-    expect(todoActor.getSnapshot().value).toEqual({
-      todo: 'new',
-      filter: 'all',
-    })
+    const initialValue = todoActor.getSnapshot().value
 
     todoActor.send({
       type: 'xstate.route',
       to: '#filter-active',
     })
 
-    expect(todoActor.getSnapshot().value).toEqual({
-      todo: 'new',
-      filter: 'active',
+    yield* expect({
+      initialValue,
+      valueAfterRoute: todoActor.getSnapshot().value,
+    }).toEqual({
+      initialValue: { todo: 'new', filter: 'all' },
+      valueAfterRoute: { todo: 'new', filter: 'active' },
     })
   })
 
-  it('route events are strongly typed', () => {
+  it('route events are strongly typed', function*({ expect }) {
     const machine = setup({
       schemas: {
         events: {},
@@ -302,9 +333,11 @@ describe('route', () => {
       // @ts-expect-error - 'blahblah' does not exist
       to: 'blahblah',
     })
+
+    yield* expect(actor.getSnapshot().value).toEqual({ notARoute: 'childRoute' })
   })
 
-  it('route config without id should not generate route events', () => {
+  it('route config without id should not generate route events', function*({ expect }) {
     const machine = setup({
       schemas: {
         events: {},
@@ -332,10 +365,10 @@ describe('route', () => {
       to: '#b',
     })
 
-    expect(actor.getSnapshot().value).toEqual('b')
+    yield* expect(actor.getSnapshot().value).toEqual('b')
   })
 
-  it('machine.root.on should include route events', () => {
+  it('machine.root.on should include route events', function*({ expect }) {
     const machine = createMachine({
       id: 'test',
       initial: 'a',
@@ -352,10 +385,13 @@ describe('route', () => {
       },
     })
 
-    expect(machine.root.on['xstate.route']).toBeDefined()
+    yield* expect({
+      hasRouteDescriptor: Object.hasOwn(machine.root.on, 'xstate.route'),
+      routeTransitionCount: machine.root.on['xstate.route']?.length,
+    }).toEqual({ hasRouteDescriptor: true, routeTransitionCount: 2 })
   })
 
-  it('nested state on should include route events for child routes', () => {
+  it('nested state on should include route events for child routes', function*({ expect }) {
     const machine = createMachine({
       id: 'app',
       initial: 'home',
@@ -388,13 +424,18 @@ describe('route', () => {
       to: '#overview',
     })
 
-    expect(a.getSnapshot().value).toEqual({ dashboard: 'overview' })
-
-    // All routes should be accessible via 'xstate.route'
-    expect(machine.root.on['xstate.route']).toBeDefined()
+    yield* expect({
+      value: a.getSnapshot().value,
+      hasRouteDescriptor: Object.hasOwn(machine.root.on, 'xstate.route'),
+      routeTransitionCount: machine.root.on['xstate.route']?.length,
+    }).toEqual({
+      value: { dashboard: 'overview' },
+      hasRouteDescriptor: true,
+      routeTransitionCount: 4,
+    })
   })
 
-  it('parallel state on should include route events', () => {
+  it('parallel state on should include route events', function*({ expect }) {
     const machine = createMachine({
       id: 'todos',
       type: 'parallel',
@@ -426,11 +467,13 @@ describe('route', () => {
       },
     })
 
-    // Routes should be accessible
-    expect(machine.root.on['xstate.route']).toBeDefined()
+    yield* expect({
+      hasRouteDescriptor: Object.hasOwn(machine.root.on, 'xstate.route'),
+      routeTransitionCount: machine.root.on['xstate.route']?.length,
+    }).toEqual({ hasRouteDescriptor: true, routeTransitionCount: 3 })
   })
 
-  it('should route to deeply nested state from anywhere', () => {
+  it('should route to deeply nested state from anywhere', function*({ expect }) {
     const machine = createMachine({
       id: 'app',
       initial: 'home',
@@ -454,14 +497,20 @@ describe('route', () => {
     const actor = createActor(machine).start()
 
     // Should be able to route to deeply nested state from root
-    expect(actor.getSnapshot().value).toEqual('home')
+    const initialValue = actor.getSnapshot().value
 
     actor.send({ type: 'xstate.route', to: '#overview' })
 
-    expect(actor.getSnapshot().value).toEqual({ dashboard: 'overview' })
+    yield* expect({
+      initialValue,
+      valueAfterRoute: actor.getSnapshot().value,
+    }).toEqual({
+      initialValue: 'home',
+      valueAfterRoute: { dashboard: 'overview' },
+    })
   })
 
-  it('should re-enter when routing to the current state', () => {
+  it('should re-enter when routing to the current state', function*({ expect }) {
     let entries = 0
     const machine = createMachine({
       id: 'test',
@@ -478,16 +527,19 @@ describe('route', () => {
     })
 
     const actor = createActor(machine).start()
-    expect(actor.getSnapshot().value).toEqual('a')
+    const initialValue = actor.getSnapshot().value
     entries = 0
 
     actor.send({ type: 'xstate.route', to: '#a' })
 
-    expect(actor.getSnapshot().value).toEqual('a')
-    expect(entries).toEqual(1)
+    yield* expect({
+      initialValue,
+      valueAfterRoute: actor.getSnapshot().value,
+      entries,
+    }).toEqual({ initialValue: 'a', valueAfterRoute: 'a', entries: 1 })
   })
 
-  it('should route to self with guard', () => {
+  it('should route to self with guard', function*({ expect }) {
     let allowed = false
     let entries = 0
     const machine = createMachine({
@@ -509,14 +561,18 @@ describe('route', () => {
     entries = 0
 
     actor.send({ type: 'xstate.route', to: '#a' })
-    expect(entries).toEqual(0)
+    const entriesWhileBlocked = entries
 
     allowed = true
     actor.send({ type: 'xstate.route', to: '#a' })
-    expect(entries).toEqual(1)
+
+    yield* expect({ entriesWhileBlocked, entriesAfterAllowed: entries }).toEqual({
+      entriesWhileBlocked: 0,
+      entriesAfterAllowed: 1,
+    })
   })
 
-  it('should not route using dot-separated nested id like #id.nested', () => {
+  it('should not route using dot-separated nested id like #id.nested', function*({ expect }) {
     const machine = createMachine({
       id: 'app',
       initial: 'home',
@@ -541,7 +597,7 @@ describe('route', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().value).toEqual('home')
+    const initialValue = actor.getSnapshot().value
 
     // Dot-separated ids should not work as route targets
     actor.send({
@@ -550,6 +606,9 @@ describe('route', () => {
       to: '#dashboard.overview',
     })
 
-    expect(actor.getSnapshot().value).toEqual('home')
+    yield* expect({
+      initialValue,
+      valueAfterDotSeparatedRoute: actor.getSnapshot().value,
+    }).toEqual({ initialValue: 'home', valueAfterDotSeparatedRoute: 'home' })
   })
 })

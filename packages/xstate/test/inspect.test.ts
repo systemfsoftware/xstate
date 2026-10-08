@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it, vi } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import { XSTATE_INIT } from '../src/constants.js'
 import {
@@ -44,8 +45,8 @@ function simplifyEvents(
     .filter(Boolean as any)
 }
 
-describe('inspect', () => {
-  it('uses globally unique session IDs across actor systems', () => {
+describe('inspect', (it) => {
+  it('uses globally unique session IDs across actor systems', function*({ expect }) {
     const machine = createMachine({
       invoke: {
         id: 'child',
@@ -64,18 +65,25 @@ describe('inspect', () => {
     actorA.start()
     actorB.start()
 
-    expect(actorA.id).toBe('x:0')
-    expect(actorB.id).toBe('x:0')
-    expect(actorA.sessionId).not.toBe(actorB.sessionId)
-    expect(new Set(events.map((event) => event.actorRef.sessionId)).size).toBe(
-      4,
-    )
-    expect(new Set(events.map((event) => event.rootId))).toEqual(
-      new Set([actorA.sessionId, actorB.sessionId]),
-    )
+    const rootIds = [...new Set(events.map((event) => event.rootId))].sort()
+    yield* expect({
+      idA: actorA.id,
+      idB: actorB.id,
+      differentSessions: actorA.sessionId !== actorB.sessionId,
+      actorRefSessionCount: new Set(
+        events.map((event) => event.actorRef.sessionId),
+      ).size,
+      rootIds,
+    }).toEqual({
+      idA: 'x:0',
+      idB: 'x:0',
+      differentSessions: true,
+      actorRefSessionCount: 4,
+      rootIds: [actorA.sessionId, actorB.sessionId].sort(),
+    })
   })
 
-  it('falls back without failing when Web Crypto is unusable', async () => {
+  it('falls back without failing when Web Crypto is unusable', function*({ expect }) {
     vi.stubGlobal('crypto', {
       randomUUID: () => {
         throw new Error('unavailable')
@@ -88,7 +96,7 @@ describe('inspect', () => {
 
     try {
       vi.resetModules()
-      const isolatedXState = await import('../src/index.js')
+      const isolatedXState = yield* Effect.promise(() => import('../src/index.js'))
       sessionIds.push(
         isolatedXState.createActor(isolatedXState.createMachine({})).sessionId,
         isolatedXState.createActor(isolatedXState.createMachine({})).sessionId,
@@ -98,11 +106,13 @@ describe('inspect', () => {
       vi.resetModules()
     }
 
-    expect(new Set(sessionIds).size).toBe(2)
-    expect(sessionIds.every((id) => id.startsWith('xstate-'))).toBe(true)
+    yield* expect({
+      uniqueSessions: new Set(sessionIds).size,
+      allFallbackPrefixed: sessionIds.every((id) => id.startsWith('xstate-')),
+    }).toEqual({ uniqueSessions: 2, allFallbackPrefixed: true })
   })
 
-  it('uses new globally unique session IDs when restoring the same snapshot', () => {
+  it('uses new globally unique session IDs when restoring the same snapshot', function*({ expect }) {
     const child = createMachine({})
     const machine = createMachine({
       actors: { child },
@@ -132,19 +142,20 @@ describe('inspect', () => {
     if (restoredBChild === undefined) {
       throw new Error('expected a restored child for B')
     }
-    expect(restoredAChild.sessionId).not.toBe(restoredBChild.sessionId)
-    expect(
-      new Set(
+    yield* expect({
+      differentChildSessions: restoredAChild.sessionId !==
+        restoredBChild.sessionId,
+      childActorSessionCount: new Set(
         events
           .filter(
             (event) => event.type === '@xstate.actor' && event.id === 'child',
           )
           .map((event) => event.actorRef.sessionId),
       ).size,
-    ).toBe(2)
+    }).toEqual({ differentChildSessions: true, childActorSessionCount: 2 })
   })
 
-  it('the .inspect option can observe inspection events', async () => {
+  it('the .inspect option can observe inspection events', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -177,15 +188,16 @@ describe('inspect', () => {
       events,
       (ev) => ev.type === '@xstate.transition',
     ) as any[]
-    expect(simplified.map((e) => e.event.type)).toEqual([
-      '@xstate.init',
-      'NEXT',
-      'NEXT',
-    ])
-    expect(simplified.map((e) => e.snapshot.value)).toEqual(['a', 'b', 'c'])
+    yield* expect({
+      eventTypes: simplified.map((e) => e.event.type),
+      values: simplified.map((e) => e.snapshot.value),
+    }).toEqual({
+      eventTypes: ['@xstate.init', 'NEXT', 'NEXT'],
+      values: ['a', 'b', 'c'],
+    })
   })
 
-  it('can inspect communications between actors', async () => {
+  it('can inspect communications between actors', function*({ expect }) {
     const parentMachine = createMachine({
       initial: 'waiting',
       states: {
@@ -253,24 +265,22 @@ describe('inspect', () => {
     actor.start()
     actor.send({ type: 'load' })
 
-    await waitFor(actor, (state) => state.value === 'success')
+    yield* Effect.promise(() => waitFor(actor, (state) => state.value === 'success'))
 
     const simplified = simplifyEvents(
       events,
       (ev) => ev.type === '@xstate.transition',
     ) as any[]
-    expect(
-      simplified.filter((e) => e.event.type === XSTATE_INIT).length,
-    ).toBeGreaterThanOrEqual(2)
     const parentEvents = simplified.filter(
       (e) => e.targetId === actor.sessionId,
     )
-    expect(parentEvents[parentEvents.length - 1].snapshot.value).toBe(
-      'success',
-    )
+    yield* expect({
+      initCountAtLeastTwo: simplified.filter((e) => e.event.type === XSTATE_INIT).length >= 2,
+      lastParentValue: parentEvents[parentEvents.length - 1].snapshot.value,
+    }).toEqual({ initCountAtLeastTwo: true, lastParentValue: 'success' })
   })
 
-  it('preserves the source of events delivered through snapshot actor refs', () => {
+  it('preserves the source of events delivered through snapshot actor refs', function*({ expect }) {
     const childMachine = createMachine({
       on: {
         PING: {},
@@ -296,12 +306,18 @@ describe('inspect', () => {
     if (childTransition?.type !== '@xstate.transition') {
       throw new Error('Child transition was not inspected.')
     }
-    expect(childTransition?.actorRef).toBe(child)
-    expect(childTransition?.sourceRef).toBe(actor)
-    expect(childTransition?.targetRef).toBe(child)
+    yield* expect({
+      actorRefIsChild: childTransition?.actorRef === child,
+      sourceRefIsActor: childTransition?.sourceRef === actor,
+      targetRefIsChild: childTransition?.targetRef === child,
+    }).toEqual({
+      actorRefIsChild: true,
+      sourceRefIsActor: true,
+      targetRefIsChild: true,
+    })
   })
 
-  it('uses the snapshot actor ref as the source of child errors', () => {
+  it('uses the snapshot actor ref as the source of child errors', function*({ expect }) {
     const childLogic = createCallbackLogic(() => {
       throw new Error('child failed')
     })
@@ -333,10 +349,12 @@ describe('inspect', () => {
     if (errorTransition?.type !== '@xstate.transition') {
       throw new Error('Error transition was not inspected.')
     }
-    expect(errorTransition?.sourceRef).toBe(child)
+    yield* expect({
+      sourceRefIsChild: errorTransition?.sourceRef === child,
+    }).toEqual({ sourceRefIsChild: true })
   })
 
-  it('uses the snapshot parent ref as the source of nested child init', () => {
+  it('uses the snapshot parent ref as the source of nested child init', function*({ expect }) {
     const parentLogic = createMachine({
       invoke: {
         id: 'child',
@@ -367,10 +385,12 @@ describe('inspect', () => {
     if (childInit?.type !== '@xstate.transition') {
       throw new Error('Child init transition was not inspected.')
     }
-    expect(childInit?.sourceRef).toBe(parent)
+    yield* expect({
+      sourceRefIsParent: childInit?.sourceRef === parent,
+    }).toEqual({ sourceRefIsParent: true })
   })
 
-  it('can inspect microsteps from always events', async () => {
+  it('can inspect microsteps from always events', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -410,14 +430,22 @@ describe('inspect', () => {
       events,
       (ev) => ev.type === '@xstate.transition',
     ) as any[]
-    expect(simplified).toHaveLength(1)
-    expect(simplified[0].event.type).toBe(XSTATE_INIT)
-    expect(simplified[0].snapshot.value).toBe('done')
-    expect((simplified[0] as any).snapshot.context.count).toBe(3)
-    expect(simplified[0].microsteps.length).toBeGreaterThan(0)
+    yield* expect({
+      length: simplified.length,
+      eventType: simplified[0].event.type,
+      value: simplified[0].snapshot.value,
+      count: simplified[0].snapshot.context.count,
+      hasMicrosteps: simplified[0].microsteps.length > 0,
+    }).toEqual({
+      length: 1,
+      eventType: XSTATE_INIT,
+      value: 'done',
+      count: 3,
+      hasMicrosteps: true,
+    })
   })
 
-  it('can inspect microsteps from raised events', async () => {
+  it('can inspect microsteps from raised events', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -445,16 +473,24 @@ describe('inspect', () => {
       },
     }).start()
 
-    expect(actor.getSnapshot().matches('c')).toBe(true)
-
     const simplified = simplifyEvents(events) as any[]
-    expect(simplified).toHaveLength(1)
-    const ms = simplified[0].microsteps.map((m: any) => m.eventType)
-    expect(ms).toEqual(['to_b', 'to_c'])
-    expect(simplified[0].snapshot.value).toBe('c')
+    const ms = simplified[0].microsteps.map(
+      (m: { eventType: string }) => m.eventType,
+    )
+    yield* expect({
+      matchesC: actor.getSnapshot().matches('c'),
+      length: simplified.length,
+      microsteps: ms,
+      value: simplified[0].snapshot.value,
+    }).toEqual({
+      matchesC: true,
+      length: 1,
+      microsteps: ['to_b', 'to_c'],
+      value: 'c',
+    })
   })
 
-  it('should inspect microsteps for normal transitions', () => {
+  it('should inspect microsteps for normal transitions', function*({ expect }) {
     const events: any[] = []
     const machine = createMachine({
       initial: 'a',
@@ -469,11 +505,13 @@ describe('inspect', () => {
     actorRef.send({ type: 'EV' })
 
     const simplified = simplifyEvents(events) as any[]
-    expect(simplified.map((e) => e.event.type)).toEqual([XSTATE_INIT, 'EV'])
-    expect(simplified.map((e) => e.snapshot.value)).toEqual(['a', 'b'])
+    yield* expect({
+      eventTypes: simplified.map((e) => e.event.type),
+      values: simplified.map((e) => e.snapshot.value),
+    }).toEqual({ eventTypes: [XSTATE_INIT, 'EV'], values: ['a', 'b'] })
   })
 
-  it('should inspect microsteps for eventless/always transitions', () => {
+  it('should inspect microsteps for eventless/always transitions', function*({ expect }) {
     const events: any[] = []
     const machine = createMachine({
       initial: 'a',
@@ -489,17 +527,28 @@ describe('inspect', () => {
     actorRef.send({ type: 'EV' })
 
     const simplified = simplifyEvents(events) as any[]
-    expect(simplified).toHaveLength(2)
-    expect(simplified[0].event.type).toBe(XSTATE_INIT)
-    expect(simplified[0].snapshot.value).toBe('a')
-    expect(simplified[1].event.type).toBe('EV')
-    expect(simplified[1].snapshot.value).toBe('c')
-    const stepTypes = simplified[1].microsteps.map((m: any) => m.eventType)
-    expect(stepTypes).toEqual(['EV', ''])
+    const stepTypes = simplified[1].microsteps.map(
+      (m: { eventType: string }) => m.eventType,
+    )
+    yield* expect({
+      length: simplified.length,
+      firstEventType: simplified[0].event.type,
+      firstValue: simplified[0].snapshot.value,
+      secondEventType: simplified[1].event.type,
+      secondValue: simplified[1].snapshot.value,
+      stepTypes,
+    }).toEqual({
+      length: 2,
+      firstEventType: XSTATE_INIT,
+      firstValue: 'a',
+      secondEventType: 'EV',
+      secondValue: 'c',
+      stepTypes: ['EV', ''],
+    })
   })
 
   // TODO: fix way actions are inspected
-  it('should inspect transitions when actions run', () => {
+  it('should inspect transitions when actions run', function*({ expect }) {
     const events: InspectionEvent[] = []
 
     const enter1 = () => {}
@@ -543,35 +592,49 @@ describe('inspect', () => {
       events,
       (ev) => ev.type === '@xstate.transition',
     ) as any[]
-    expect(simplified.length).toBeGreaterThanOrEqual(2)
     const last = simplified[simplified.length - 1]
-    expect(last.event.type).toBe('event')
-    expect(last.snapshot.value).toBe('done')
-    const stepTypes = last.microsteps.map((m: any) => m.eventType)
-    expect(stepTypes).toContain('event')
-  })
-
-  it('@xstate.transition inspection event should report no microsteps if an unknown event was sent', () => {
-    const machine = createMachine({})
-    const events: InspectionEvent[] = []
-    const actor = createActor(machine, {
-      inspect: (ev) => {
-        events.push(ev)
-      },
+    const stepTypes = last.microsteps.map(
+      (m: { eventType: string }) => m.eventType,
+    )
+    yield* expect({
+      atLeastTwo: simplified.length >= 2,
+      lastEventType: last.event.type,
+      lastValue: last.snapshot.value,
+      containsEvent: stepTypes.includes('event'),
+    }).toEqual({
+      atLeastTwo: true,
+      lastEventType: 'event',
+      lastValue: 'done',
+      containsEvent: true,
     })
-
-    actor.start()
-    actor.send({ type: 'any' })
-    const simplified = simplifyEvents(
-      events,
-      (ev) => ev.type === '@xstate.transition',
-    ) as any[]
-    const last = simplified[simplified.length - 1]
-    expect(last.event.type).toBe('any')
-    expect(last.microsteps.length).toBe(0)
   })
 
-  it('actor.system.inspect(…) can inspect actors', () => {
+  it(
+    '@xstate.transition inspection event should report no microsteps if an unknown event was sent',
+    function*({ expect }) {
+      const machine = createMachine({})
+      const events: InspectionEvent[] = []
+      const actor = createActor(machine, {
+        inspect: (ev) => {
+          events.push(ev)
+        },
+      })
+
+      actor.start()
+      actor.send({ type: 'any' })
+      const simplified = simplifyEvents(
+        events,
+        (ev) => ev.type === '@xstate.transition',
+      ) as any[]
+      const last = simplified[simplified.length - 1]
+      yield* expect({
+        eventType: last.event.type,
+        microstepCount: last.microsteps.length,
+      }).toEqual({ eventType: 'any', microstepCount: 0 })
+    },
+  )
+
+  it('actor.system.inspect(…) can inspect actors', function*({ expect }) {
     const actor = createActor(createMachine({}))
     const events: InspectionEvent[] = []
 
@@ -581,10 +644,12 @@ describe('inspect', () => {
 
     actor.start()
 
-    expect(events.some((e) => e.type === '@xstate.transition')).toBe(true)
+    yield* expect({
+      hasTransition: events.some((e) => e.type === '@xstate.transition'),
+    }).toEqual({ hasTransition: true })
   })
 
-  it('actor.system.inspect(…) captures initial microsteps before start', () => {
+  it('actor.system.inspect(…) captures initial microsteps before start', function*({ expect }) {
     const actor = createActor(
       createMachine({
         initial: 'a',
@@ -602,14 +667,16 @@ describe('inspect', () => {
     const initialTransition = events.find(
       (event) => event.type === '@xstate.transition' && event.event.type === XSTATE_INIT,
     )
-    expect(initialTransition?.type).toBe('@xstate.transition')
     if (initialTransition?.type !== '@xstate.transition') {
       throw new Error('Initial transition was not inspected.')
     }
-    expect(initialTransition.microsteps).toHaveLength(1)
+    yield* expect({
+      type: initialTransition.type,
+      microstepCount: initialTransition.microsteps.length,
+    }).toEqual({ type: '@xstate.transition', microstepCount: 1 })
   })
 
-  it('clears a pre-start event source before inspecting initialization', () => {
+  it('clears a pre-start event source before inspecting initialization', function*({ expect }) {
     const actor = createActor(createMachine({}))
     const sender = createActor(createMachine({}), { parent: actor })
     const events: InspectionEvent[] = []
@@ -621,14 +688,16 @@ describe('inspect', () => {
     const initialTransition = events.find(
       (event) => event.type === '@xstate.transition' && event.event.type === XSTATE_INIT,
     )
-    expect(initialTransition?.type).toBe('@xstate.transition')
     if (initialTransition?.type !== '@xstate.transition') {
       throw new Error('Initial transition was not inspected.')
     }
-    expect(initialTransition.sourceRef).toBeUndefined()
+    yield* expect({
+      type: initialTransition.type,
+      sourceRef: initialTransition.sourceRef,
+    }).toEqual({ type: '@xstate.transition', sourceRef: undefined })
   })
 
-  it('does not retain uninspected initialization steps for the first event', () => {
+  it('does not retain uninspected initialization steps for the first event', function*({ expect }) {
     const actor = createActor(
       createMachine({
         initial: 'a',
@@ -647,14 +716,16 @@ describe('inspect', () => {
     const transition = events.find(
       (event) => event.type === '@xstate.transition' && event.event.type === 'PING',
     )
-    expect(transition?.type).toBe('@xstate.transition')
     if (transition?.type !== '@xstate.transition') {
       throw new Error('PING transition was not inspected.')
     }
-    expect(transition.microsteps).toHaveLength(0)
+    yield* expect({
+      type: transition.type,
+      microstepCount: transition.microsteps.length,
+    }).toEqual({ type: '@xstate.transition', microstepCount: 0 })
   })
 
-  it('actor.system.inspect(…) can inspect actors (observer)', () => {
+  it('actor.system.inspect(…) can inspect actors (observer)', function*({ expect }) {
     const actor = createActor(createMachine({}))
     const events: InspectionEvent[] = []
 
@@ -666,10 +737,12 @@ describe('inspect', () => {
 
     actor.start()
 
-    expect(events.some((e) => e.type === '@xstate.transition')).toBe(true)
+    yield* expect({
+      hasTransition: events.some((e) => e.type === '@xstate.transition'),
+    }).toEqual({ hasTransition: true })
   })
 
-  it('actor.system.inspect(…) can be unsubscribed', () => {
+  it('actor.system.inspect(…) can be unsubscribed', function*({ expect }) {
     const actor = createActor(createMachine({}))
     const events: InspectionEvent[] = []
 
@@ -679,17 +752,20 @@ describe('inspect', () => {
 
     actor.start()
 
-    expect(events.some((e) => e.type === '@xstate.transition')).toBe(true)
+    const hadTransition = events.some((e) => e.type === '@xstate.transition')
 
     events.length = 0
 
     sub.unsubscribe()
 
     actor.send({ type: 'someEvent' })
-    expect(events.length).toEqual(0)
+    yield* expect({
+      hadTransition,
+      countAfterUnsubscribe: events.length,
+    }).toEqual({ hadTransition: true, countAfterUnsubscribe: 0 })
   })
 
-  it('actor.system.inspect(…) can be unsubscribed (observer)', () => {
+  it('actor.system.inspect(…) can be unsubscribed (observer)', function*({ expect }) {
     const actor = createActor(createMachine({}))
     const events: InspectionEvent[] = []
 
@@ -701,13 +777,16 @@ describe('inspect', () => {
 
     actor.start()
 
-    expect(events.some((e) => e.type === '@xstate.transition')).toBe(true)
+    const hadTransition = events.some((e) => e.type === '@xstate.transition')
 
     events.length = 0
 
     sub.unsubscribe()
 
     actor.send({ type: 'someEvent' })
-    expect(events.length).toEqual(0)
+    yield* expect({
+      hadTransition,
+      countAfterUnsubscribe: events.length,
+    }).toEqual({ hadTransition: true, countAfterUnsubscribe: 0 })
   })
 })

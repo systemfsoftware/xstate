@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createActor, createMachine } from '../src/index.js'
 
 describe('internal transitions', () => {
-  it('parent state should enter child state without re-entering self', () => {
+  it('parent state should enter child state without re-entering self', function*({ expect }) {
     const tracked: string[] = []
     const machine = createMachine({
       initial: 'foo',
@@ -27,65 +27,70 @@ describe('internal transitions', () => {
       },
     })
 
-    // const flushTracked = trackEntries(machine);
     const actor = createActor(machine).start()
-    // flushTracked();
     tracked.length = 0
 
     actor.send({
       type: 'CLICK',
     })
 
-    expect(actor.getSnapshot().value).toEqual({ foo: 'b' })
-    expect(tracked).toEqual(['exit: foo.a', 'enter: foo.b'])
+    yield* expect({ value: actor.getSnapshot().value, tracked }).toEqual({
+      value: { foo: 'b' },
+      tracked: ['exit: foo.a', 'enter: foo.b'],
+    })
   })
 
-  it('parent state should re-enter self upon transitioning to child state if transition is reentering', () => {
-    const tracked: string[] = []
-    const machine = createMachine({
-      initial: 'foo',
-      states: {
-        foo: {
-          entry: (_, enq) => enq(() => tracked.push('enter: foo')),
-          exit: (_, enq) => enq(() => tracked.push('exit: foo')),
-          initial: 'left',
-          states: {
-            left: {
-              entry: (_, enq) => enq(() => tracked.push('enter: foo.left')),
-              exit: (_, enq) => enq(() => tracked.push('exit: foo.left')),
+  it(
+    'parent state should re-enter self upon transitioning to child state if transition is reentering',
+    function*({ expect }) {
+      const tracked: string[] = []
+      const machine = createMachine({
+        initial: 'foo',
+        states: {
+          foo: {
+            entry: (_, enq) => enq(() => tracked.push('enter: foo')),
+            exit: (_, enq) => enq(() => tracked.push('exit: foo')),
+            initial: 'left',
+            states: {
+              left: {
+                entry: (_, enq) => enq(() => tracked.push('enter: foo.left')),
+                exit: (_, enq) => enq(() => tracked.push('exit: foo.left')),
+              },
+              right: {
+                entry: (_, enq) => enq(() => tracked.push('enter: foo.right')),
+                exit: (_, enq) => enq(() => tracked.push('exit: foo.right')),
+              },
             },
-            right: {
-              entry: (_, enq) => enq(() => tracked.push('enter: foo.right')),
-              exit: (_, enq) => enq(() => tracked.push('exit: foo.right')),
+            on: {
+              NEXT: () => ({
+                target: '.right',
+                reenter: true,
+              }),
             },
-          },
-          on: {
-            NEXT: () => ({
-              target: '.right',
-              reenter: true,
-            }),
           },
         },
-      },
-    })
+      })
 
-    const actor = createActor(machine).start()
-    tracked.length = 0
+      const actor = createActor(machine).start()
+      tracked.length = 0
 
-    actor.send({
-      type: 'NEXT',
-    })
+      actor.send({
+        type: 'NEXT',
+      })
 
-    expect(actor.getSnapshot().value).toEqual({ foo: 'right' })
-    expect(tracked).toEqual([
-      'exit: foo.left',
-      'exit: foo',
-      'enter: foo',
-      'enter: foo.right',
-    ])
-  })
+      yield* expect({ value: actor.getSnapshot().value, tracked }).toEqual({
+        value: { foo: 'right' },
+        tracked: [
+          'exit: foo.left',
+          'exit: foo',
+          'enter: foo',
+          'enter: foo.right',
+        ],
+      })
+    },
+  )
 
-  it('parent state should only exit/reenter if there is an explicit self-transition', () => {
+  it('parent state should only exit/reenter if there is an explicit self-transition', function*({ expect }) {
     const tracked: string[] = []
     const machine = createMachine({
       initial: 'foo',
@@ -127,16 +132,18 @@ describe('internal transitions', () => {
       type: 'RESET',
     })
 
-    expect(actor.getSnapshot().value).toEqual({ foo: 'a' })
-    expect(tracked).toEqual([
-      'exit: foo.b',
-      'exit: foo',
-      'enter: foo',
-      'enter: foo.a',
-    ])
+    yield* expect({ value: actor.getSnapshot().value, tracked }).toEqual({
+      value: { foo: 'a' },
+      tracked: [
+        'exit: foo.b',
+        'exit: foo',
+        'enter: foo',
+        'enter: foo.a',
+      ],
+    })
   })
 
-  it('parent state should only exit/reenter if there is an explicit self-transition (to child)', () => {
+  it('parent state should only exit/reenter if there is an explicit self-transition (to child)', function*({ expect }) {
     const tracked: string[] = []
     const machine = createMachine({
       initial: 'foo',
@@ -172,16 +179,18 @@ describe('internal transitions', () => {
       type: 'RESET_TO_B',
     })
 
-    expect(actor.getSnapshot().value).toEqual({ foo: 'b' })
-    expect(tracked).toEqual([
-      'exit: foo.a',
-      'exit: foo',
-      'enter: foo',
-      'enter: foo.b',
-    ])
+    yield* expect({ value: actor.getSnapshot().value, tracked }).toEqual({
+      value: { foo: 'b' },
+      tracked: [
+        'exit: foo.a',
+        'exit: foo',
+        'enter: foo',
+        'enter: foo.b',
+      ],
+    })
   })
 
-  it('should listen to events declared at top state', () => {
+  it('should listen to events declared at top state', function*({ expect }) {
     const machine = createMachine({
       initial: 'foo',
       on: {
@@ -197,17 +206,20 @@ describe('internal transitions', () => {
       type: 'CLICKED',
     })
 
-    expect(actor.getSnapshot().value).toEqual('bar')
+    yield* expect(actor.getSnapshot().value).toEqual('bar')
   })
 
-  it('should work with targetless transitions (in conditional array)', () => {
-    const spy = vi.fn()
+  it('should work with targetless transitions (in conditional array)', function*({ expect }) {
+    const calls: string[] = []
+    const recorder = () => {
+      calls.push('action')
+    }
     const machine = createMachine({
       initial: 'foo',
       states: {
         foo: {
           on: {
-            TARGETLESS_ARRAY: (_, enq) => void enq(spy),
+            TARGETLESS_ARRAY: (_, enq) => void enq(recorder),
           },
         },
       },
@@ -216,17 +228,20 @@ describe('internal transitions', () => {
     actor.send({
       type: 'TARGETLESS_ARRAY',
     })
-    expect(spy).toHaveBeenCalled()
+    yield* expect(calls).toEqual(['action'])
   })
 
-  it('should work with targetless transitions (in object)', () => {
-    const spy = vi.fn()
+  it('should work with targetless transitions (in object)', function*({ expect }) {
+    const calls: string[] = []
+    const recorder = () => {
+      calls.push('action')
+    }
     const machine = createMachine({
       initial: 'foo',
       states: {
         foo: {
           on: {
-            TARGETLESS_OBJECT: (_, enq) => void enq(spy),
+            TARGETLESS_OBJECT: (_, enq) => void enq(recorder),
           },
         },
       },
@@ -235,14 +250,17 @@ describe('internal transitions', () => {
     actor.send({
       type: 'TARGETLESS_OBJECT',
     })
-    expect(spy).toHaveBeenCalled()
+    yield* expect(calls).toEqual(['action'])
   })
 
-  it('should work on parent with targetless transitions (in conditional array)', () => {
-    const spy = vi.fn()
+  it('should work on parent with targetless transitions (in conditional array)', function*({ expect }) {
+    const calls: string[] = []
+    const recorder = () => {
+      calls.push('action')
+    }
     const machine = createMachine({
       on: {
-        TARGETLESS_ARRAY: (_, enq) => void enq(spy),
+        TARGETLESS_ARRAY: (_, enq) => void enq(recorder),
       },
       initial: 'foo',
       states: { foo: {} },
@@ -251,14 +269,17 @@ describe('internal transitions', () => {
     actor.send({
       type: 'TARGETLESS_ARRAY',
     })
-    expect(spy).toHaveBeenCalled()
+    yield* expect(calls).toEqual(['action'])
   })
 
-  it('should work on parent with targetless transitions (in object)', () => {
-    const spy = vi.fn()
+  it('should work on parent with targetless transitions (in object)', function*({ expect }) {
+    const calls: string[] = []
+    const recorder = () => {
+      calls.push('action')
+    }
     const machine = createMachine({
       on: {
-        TARGETLESS_OBJECT: (_, enq) => void enq(spy),
+        TARGETLESS_OBJECT: (_, enq) => void enq(recorder),
       },
       initial: 'foo',
       states: { foo: {} },
@@ -267,10 +288,10 @@ describe('internal transitions', () => {
     actor.send({
       type: 'TARGETLESS_OBJECT',
     })
-    expect(spy).toHaveBeenCalled()
+    yield* expect(calls).toEqual(['action'])
   })
 
-  it('should maintain the child state when targetless transition is handled by parent', () => {
+  it('should maintain the child state when targetless transition is handled by parent', function*({ expect }) {
     const machine = createMachine({
       initial: 'foo',
       on: {
@@ -285,18 +306,11 @@ describe('internal transitions', () => {
       type: 'PARENT_EVENT',
     })
 
-    expect(actor.getSnapshot().value).toEqual('foo')
+    yield* expect(actor.getSnapshot().value).toEqual('foo')
   })
 
-  it('should reenter proper descendants of a source state of an internal transition', () => {
+  it('should reenter proper descendants of a source state of an internal transition', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as {
-      //   context: {
-      //     sourceStateEntries: number;
-      //     directDescendantEntries: number;
-      //     deepDescendantEntries: number;
-      //   };
-      // },
       schemas: {
         context: z.object({
           sourceStateEntries: z.number(),
@@ -346,30 +360,29 @@ describe('internal transitions', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().context).toEqual({
-      sourceStateEntries: 1,
-      directDescendantEntries: 1,
-      deepDescendantEntries: 1,
-    })
+    const contextAfterStart = actor.getSnapshot().context
 
     actor.send({ type: 'REENTER' })
 
-    expect(actor.getSnapshot().context).toEqual({
-      sourceStateEntries: 1,
-      directDescendantEntries: 2,
-      deepDescendantEntries: 2,
+    yield* expect({
+      contextAfterStart,
+      contextAfterReenter: actor.getSnapshot().context,
+    }).toEqual({
+      contextAfterStart: {
+        sourceStateEntries: 1,
+        directDescendantEntries: 1,
+        deepDescendantEntries: 1,
+      },
+      contextAfterReenter: {
+        sourceStateEntries: 1,
+        directDescendantEntries: 2,
+        deepDescendantEntries: 2,
+      },
     })
   })
 
-  it('should exit proper descendants of a source state of an internal transition', () => {
+  it('should exit proper descendants of a source state of an internal transition', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as {
-      //   context: {
-      //     sourceStateExits: number;
-      //     directDescendantExits: number;
-      //     deepDescendantExits: number;
-      //   };
-      // },
       schemas: {
         context: z.object({
           sourceStateExits: z.number(),
@@ -401,14 +414,11 @@ describe('internal transitions', () => {
               }),
               states: {
                 a111: {
-                  exit: ({ context }) => {
-                    console.log('a111 exit')
-                    return {
-                      context: {
-                        deepDescendantExits: context.deepDescendantExits + 1,
-                      },
-                    }
-                  },
+                  exit: ({ context }) => ({
+                    context: {
+                      deepDescendantExits: context.deepDescendantExits + 1,
+                    },
+                  }),
                 },
               },
             },
@@ -424,7 +434,7 @@ describe('internal transitions', () => {
 
     actor.send({ type: 'REENTER' })
 
-    expect(actor.getSnapshot().context).toEqual({
+    yield* expect(actor.getSnapshot().context).toEqual({
       sourceStateExits: 0,
       directDescendantExits: 1,
       deepDescendantExits: 1,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor } from '../src/createActor.js'
 import { createFSM } from '../src/fsm.js'
 import { initialTransition, transition } from '../src/transition.js'
@@ -24,7 +24,7 @@ function createCounter() {
 }
 
 describe('createFSM as actor logic', () => {
-  it('runs in createActor', () => {
+  it('runs in createActor', function*({ expect }) {
     const actor = createActor(createCounter()).start()
     const values: string[] = []
     actor.subscribe((snapshot) => {
@@ -36,45 +36,71 @@ describe('createFSM as actor logic', () => {
     actor.send({ type: 'stop' })
     actor.send({ type: 'inc' })
 
-    expect(actor.getSnapshot().value).toBe('stopped')
-    expect(actor.getSnapshot().context).toEqual({ count: 2 })
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(values).toEqual(['active:1', 'active:2', 'stopped:2', 'stopped:2'])
+    yield* expect({
+      value: actor.getSnapshot().value,
+      context: actor.getSnapshot().context,
+      status: actor.getSnapshot().status,
+      values,
+    }).toEqual({
+      value: 'stopped',
+      context: { count: 2 },
+      status: 'active',
+      values: ['active:1', 'active:2', 'stopped:2', 'stopped:2'],
+    })
   })
 
-  it('works with transition()', () => {
+  it('works with transition()', function*({ expect }) {
     const fsm = createCounter()
     const [next, effects] = transition(fsm, fsm.initialState, { type: 'inc' })
 
-    expect(next.value).toBe('active')
-    expect(next.context).toEqual({ count: 1 })
-    expect(effects).toEqual([])
-    expect(fsm.transition(fsm.initialState, { type: 'inc' })).toEqual([
-      next,
-      [],
-    ])
+    yield* expect({
+      value: next.value,
+      context: next.context,
+      effects,
+      transitionResult: fsm.transition(fsm.initialState, { type: 'inc' }),
+    }).toEqual({
+      value: 'active',
+      context: { count: 1 },
+      effects: [],
+      transitionResult: [next, []],
+    })
   })
 
-  it('works with initialTransition()', () => {
+  it('works with initialTransition()', function*({ expect }) {
     const fsm = createCounter()
     const [snapshot, effects] = initialTransition(fsm)
 
-    expect(snapshot).toBe(fsm.initialState)
-    expect(effects).toEqual([])
-    expect(fsm.getInitialSnapshot()).toBe(fsm.initialState)
+    yield* expect({
+      snapshotIsInitialState: snapshot === fsm.initialState,
+      effects,
+      getInitialSnapshotIsInitialState: fsm.getInitialSnapshot() === fsm.initialState,
+    }).toEqual({
+      snapshotIsInitialState: true,
+      effects: [],
+      getInitialSnapshotIsInitialState: true,
+    })
   })
 
-  it('restores a persisted snapshot', () => {
+  it('restores a persisted snapshot', function*({ expect }) {
     const fsm = createCounter()
     const actor = createActor(fsm).start()
     actor.send({ type: 'inc' })
     const persisted = JSON.parse(JSON.stringify(actor.getPersistedSnapshot()))
 
     const restored = createActor(fsm, { snapshot: persisted }).start()
-    expect(restored.getSnapshot().value).toBe('active')
-    expect(restored.getSnapshot().context).toEqual({ count: 1 })
+    const valueAfterRestore = restored.getSnapshot().value
+    const contextBeforeSend = restored.getSnapshot().context
 
     restored.send({ type: 'inc' })
-    expect(restored.getSnapshot().context).toEqual({ count: 2 })
+
+    yield* expect({
+      valueAfterRestore,
+      contextBeforeSend,
+      contextAfterSend: restored.getSnapshot().context,
+    }).toEqual({
+      valueAfterRestore: 'active',
+      contextBeforeSend: { count: 1 },
+      contextAfterSend: { count: 2 },
+    })
   })
 })
