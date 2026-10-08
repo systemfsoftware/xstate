@@ -16,7 +16,7 @@ import * as fc from 'fast-check'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, vi } from 'vitest'
+import { afterAll } from 'vitest'
 import * as z from 'zod'
 import { fromEffectSchemas } from '../src/effect-schema.js'
 import {
@@ -1393,26 +1393,20 @@ describe('README: How-to guides (oracles, failures, and Vitest)', () => {
   })
 
   it('Inspect the distribution of generated data', function*({ expect }) {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    try {
-      yield* Effect.promise(() =>
-        propertyTest(cartMachine, {
-          seed: 1,
-          events,
-          statistics: true,
-          invariant: ({ snapshot, classify }) => {
-            classify(Object.keys(snapshot.context.items).length >= 2, 'two-skus')
-          },
-        })
-      )
-      const firstCall = log.mock.calls[0]
-      if (firstCall === undefined) {
-        throw new Error('expected a console.log call')
-      }
-      yield* expect(firstCall[0]).toBe(STATISTICS_OUTPUT)
-    } finally {
-      log.mockRestore()
-    }
+    const reports: string[] = []
+    yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        events,
+        statistics: (report) => {
+          reports.push(report)
+        },
+        invariant: ({ snapshot, classify }) => {
+          classify(Object.keys(snapshot.context.items).length >= 2, 'two-skus')
+        },
+      })
+    )
+    yield* expect(reports).toEqual([STATISTICS_OUTPUT])
   })
 
   it('Save failures and replay them first', function*({ expect }) {

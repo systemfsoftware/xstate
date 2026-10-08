@@ -1,4 +1,4 @@
-import { describe, it, vi } from '@systemfsoftware/vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine, types } from '@systemfsoftware/xstate'
 import { Effect } from 'effect'
 import * as fc from 'fast-check'
@@ -100,24 +100,22 @@ describe('fast-check reporting options', () => {
 
 describe('statistics', () => {
   it('prints event-case and label distributions after a passing campaign', function*({ expect }) {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    try {
-      const { coverage } = yield* Effect.promise(() =>
-        propertyTest(counterMachine, {
-          seed: 1,
-          numRuns: 20,
-          maxCommands: 4,
-          events,
-          statistics: true,
-          invariant: ({ snapshot, classify }) => {
-            classify(snapshot.context.count >= 2, 'reached two')
-          },
-        })
-      )
-      yield* expect(log.mock.calls).toEqual([[formatTestStatistics(coverage)]])
-    } finally {
-      log.mockRestore()
-    }
+    const reports: string[] = []
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 1,
+        numRuns: 20,
+        maxCommands: 4,
+        events,
+        statistics: (report) => {
+          reports.push(report)
+        },
+        invariant: ({ snapshot, classify }) => {
+          classify(snapshot.context.count >= 2, 'reached two')
+        },
+      })
+    )
+    yield* expect(reports).toEqual([formatTestStatistics(coverage)])
   })
 
   it('formats shares of executed events and of runs', function*({ expect }) {
