@@ -387,6 +387,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     yield* expect(observed).toEqual({ requested: [1000, 400], childStatus: 'active' })
   })
 
+  // Both persistence sweeps peaked at 6.1 s with vitest and eight busy loops pinned to one core.
   const sweepTimeoutWithHeadroomMs = 15_000
 
   it('matches an uninterrupted run when restored at every step of every shortest path', function*({ expect }) {
@@ -416,8 +417,6 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     yield* expect(restoredValues(comparisons)).toEqual(expectedValues(comparisons))
   }, sweepTimeoutWithHeadroomMs)
 
-  const generatedComparisonTimeoutMs = 7_000
-
   it('matches an uninterrupted run for generated events, clock advances and persist points', function*({ expect }) {
     const world = yield* makeWorld()
     const samples = fc.sample(
@@ -443,7 +442,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     }
 
     yield* expect(restoredValues(comparisons)).toEqual(expectedValues(comparisons))
-  }, generatedComparisonTimeoutMs)
+  }, sweepTimeoutWithHeadroomMs)
 
   it('resumes a pending delayed transition with its remaining delay', function*({ expect }) {
     const machine = createMachine({
