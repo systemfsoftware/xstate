@@ -42,6 +42,24 @@ const events = { INC: fc.constant({}), RESET: fc.constant({}) }
 const dir = mkdtempSync(join(tmpdir(), 'xstate-test-vitest-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
+interface Registered {
+  name: string
+  fn: (context: unknown) => Promise<void>
+  timeout?: number
+}
+
+function fakeIt() {
+  const registered: Registered[] = []
+  const base = (
+    name: string,
+    fn: (context: unknown) => Promise<void>,
+    timeout?: number,
+  ) => {
+    registered.push({ name, fn, ...(timeout === undefined ? {} : { timeout }) })
+  }
+  return { base, registered }
+}
+
 describe('@xstate/test/vitest', () => {
   modelIt.model('it.model runs a campaign', counterMachine, {
     seed: 1,
@@ -72,10 +90,8 @@ describe('@xstate/test/vitest', () => {
   })
 
   it('saved the expected failure under the test file and name', async (context) => {
-    const registered: Array<(context: unknown) => Promise<void>> = []
-    withModelTests((_name, fn) => {
-      registered.push(fn)
-    }).model.fails('saved', counterMachine, {
+    const { base, registered } = fakeIt()
+    withModelTests(base).model.fails('saved', counterMachine, {
       seed: 1,
       numRuns: 50,
       maxCommands: 6,
@@ -83,11 +99,11 @@ describe('@xstate/test/vitest', () => {
       sut: counterSut(true),
       failures: { dir: join(dir, 'saved') },
     })
-    const run = registered[0]
-    if (run === undefined) {
+    const first = registered[0]
+    if (first === undefined) {
       throw new Error('expected a registered test')
     }
-    await run(context)
+    await first.fn(context)
     expect(readdirSync(join(dir, 'saved'))).toEqual([
       'test-vitest.test.ts-xstate-test-vitest-saved-the-expected-failure-under-the-test-file-and-name',
     ])
@@ -95,24 +111,6 @@ describe('@xstate/test/vitest', () => {
 })
 
 describe('withModelTests', () => {
-  interface Registered {
-    name: string
-    fn: (context: unknown) => Promise<void>
-    timeout?: number
-  }
-
-  function fakeIt() {
-    const registered: Registered[] = []
-    const base = (
-      name: string,
-      fn: (context: unknown) => Promise<void>,
-      timeout?: number,
-    ) => {
-      registered.push({ name, fn, ...(timeout === undefined ? {} : { timeout }) })
-    }
-    return { base, registered }
-  }
-
   function contextFor(name: string) {
     return {
       task: {
