@@ -2,6 +2,12 @@
 "@systemfsoftware/xstate": minor
 ---
 
-`matchesState` can now be called with the child state value alone. It returns a function that takes a parent state value and returns whether it matches, so `pipe(parentStateValue, matchesState(snapshot.value))` gives the same answer as `matchesState(parentStateValue, snapshot.value)`. `pathToStateValue` now accepts a readonly path. Both are still exported from `@systemfsoftware/xstate` under the same names.
+`matchesState(childStateValue)` returns a function of the parent state value, for use in `pipe`. `pathToStateValue` accepts a readonly path.
 
-`matchesState` and `snapshot.matches` now read a state name inside a state value as a plain name, even when it contains a dot. Only a state value that is a whole string is read as a dotted path, where `\.` stands for a dot inside a name. For a state `d.e` nested under `b`, `snapshot.matches({ b: 'd.e' })` is now `true`; it used to be `false`, and `{ b: 'd\\.e' }` used to be needed. `snapshot.matches('b.d\\.e')` is `true`, as before.
+`matchesState` and `snapshot.matches` read a state name inside a state value as a plain name, even with a dot: for a state `d.e` under `b`, `snapshot.matches({ b: 'd.e' })` is now `true` (it needed `'d\\.e'`). Only a whole-string state value is a dotted path; `'b.d\\.e'` still matches.
+
+Edge inputs that changed:
+
+- A snapshot passed in place of a state value is no longer read as its `value`; pass `snapshot.value`.
+- A region whose value is `undefined` no longer matches, instead of throwing a `TypeError`.
+- An id ending in a lone `\` keeps the backslash; it used to become the text `undefined`.
