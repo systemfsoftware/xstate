@@ -1049,10 +1049,11 @@ function isZodExactOptional(schema: unknown): boolean {
   return traits?.has('$ZodExactOptional') === true
 }
 
-/** Zod definitions being converted along the current path, to catch cycles. */
-const convertingZodDefs = new Set<ZodDef>()
-
-function fromZod(schema: unknown, path: string): fc.Arbitrary<unknown> {
+function fromZod(
+  schema: unknown,
+  path: string,
+  convertingZodDefs: Set<ZodDef>,
+): fc.Arbitrary<unknown> {
   const def = getZodDef(schema)
   if (def === undefined) {
     unsupported(`Expected a Zod schema at '${path}'.`)
@@ -1064,7 +1065,7 @@ function fromZod(schema: unknown, path: string): fc.Arbitrary<unknown> {
   }
   convertingZodDefs.add(def)
   try {
-    return fromZodDef(schema, def, path)
+    return fromZodDef(schema, def, path, convertingZodDefs)
   } finally {
     convertingZodDefs.delete(def)
   }
@@ -1074,6 +1075,7 @@ function fromZodDef(
   schema: unknown,
   def: ZodDef,
   path: string,
+  convertingZodDefs: Set<ZodDef>,
 ): fc.Arbitrary<unknown> {
   const kind = getZodKind(def)
   switch (kind) {
@@ -1117,7 +1119,7 @@ function fromZodDef(
         unsupported(`Zod union at '${path}' declares no options.`)
       }
       return fc.oneof(
-        ...options.map((option, index) => fromZod(option, `${path}|${String(index)}`)),
+        ...options.map((option, index) => fromZod(option, `${path}|${String(index)}`, convertingZodDefs)),
       )
     }
     case 'array': {
@@ -1126,7 +1128,10 @@ function fromZodDef(
         zodSizeBounds(getZodChecks(def, kind, path), path),
       )
       checkSizeBounds(bounds, path)
-      return fc.array(fromZod(def['element'] ?? def.type, `${path}[]`), bounds)
+      return fc.array(
+        fromZod(def['element'] ?? def.type, `${path}[]`, convertingZodDefs),
+        bounds,
+      )
     }
     case 'set': {
       const bounds = zodLegacySizeBounds(
@@ -1142,13 +1147,16 @@ function fromZodDef(
         )
       }
       return fc
-        .uniqueArray(fromZod(def['valueType'], `${path}[]`), bounds)
+        .uniqueArray(
+          fromZod(def['valueType'], `${path}[]`, convertingZodDefs),
+          bounds,
+        )
         .map((values) => new Set(values))
     }
     case 'tuple': {
       const items = (def['items'] ?? []) as unknown[]
       return fc.tuple(
-        ...items.map((item, index) => fromZod(item, `${path}[${index}]`)),
+        ...items.map((item, index) => fromZod(item, `${path}[${index}]`, convertingZodDefs)),
       )
     }
     case 'record': {
@@ -1164,37 +1172,49 @@ function fromZodDef(
               `Unsupported Zod record key ${String(key)} at '${path}'. Pass an explicit generator for this payload.`,
             )
           }
-          model[String(key)] = fromZod(def['valueType'], `${path}.${key}`)
+          model[String(key)] = fromZod(
+            def['valueType'],
+            `${path}.${key}`,
+            convertingZodDefs,
+          )
         }
         return fc.record(model)
       }
       return fc.dictionary(
-        fromZod(def['keyType'], `${path}.<key>`) as fc.Arbitrary<string>,
-        fromZod(def['valueType'], `${path}.<value>`),
+        fromZod(
+          def['keyType'],
+          `${path}.<key>`,
+          convertingZodDefs,
+        ) as fc.Arbitrary<string>,
+        fromZod(def['valueType'], `${path}.<value>`, convertingZodDefs),
       )
     }
     case 'optional':
       // `exactOptional()` accepts a missing key, never an `undefined` value.
       return isZodExactOptional(schema)
-        ? fromZod(def['innerType'], path)
-        : fc.option(fromZod(def['innerType'], path), { nil: undefined })
+        ? fromZod(def['innerType'], path, convertingZodDefs)
+        : fc.option(fromZod(def['innerType'], path, convertingZodDefs), { nil: undefined })
     case 'nullable':
-      return fc.option(fromZod(def['innerType'], path), { nil: null })
+      return fc.option(fromZod(def['innerType'], path, convertingZodDefs), { nil: null })
     case 'default':
     case 'prefault':
     case 'catch':
     case 'readonly':
     case 'nonoptional':
-      return fromZod(def['innerType'], path)
+      return fromZod(def['innerType'], path, convertingZodDefs)
     case 'lazy':
       if (typeof def['getter'] !== 'function') {
         return unsupported(`Zod lazy schema at '${path}' has no getter.`)
       }
-      return fromZod((def['getter'] as () => unknown)(), path)
+      return fromZod(
+        (def['getter'] as () => unknown)(),
+        path,
+        convertingZodDefs,
+      )
     case 'object':
     case 'interface': {
       const shape = getZodShape(def)
-      return zodObjectArbitrary(shape, path)
+      return zodObjectArbitrary(shape, path, convertingZodDefs)
     }
     default:
       return unsupported(
@@ -1206,11 +1226,16 @@ function fromZodDef(
 function zodObjectArbitrary(
   shape: Record<string, unknown>,
   path: string,
+  convertingZodDefs: Set<ZodDef>,
 ): fc.Arbitrary<Record<string, unknown>> {
   const model: Record<string, fc.Arbitrary<unknown>> = {}
   const requiredKeys: string[] = []
   for (const [key, value] of Object.entries(shape)) {
-    model[key] = fromZod(value, path.length > 0 ? `${path}.${key}` : key)
+    model[key] = fromZod(
+      value,
+      path.length > 0 ? `${path}.${key}` : key,
+      convertingZodDefs,
+    )
     if (!isZodOptionalKind(value)) {
       requiredKeys.push(key)
     }
@@ -1225,7 +1250,8 @@ function isZodSchema(schema: unknown): boolean {
 
 /** ------------------------------------------------------------ Generic --- */
 
-const zodConverter: SchemaConverter = (schema, path) => isZodSchema(schema) ? fromZod(schema, path) : undefined
+const zodConverter: SchemaConverter = (schema, path) =>
+  isZodSchema(schema) ? fromZod(schema, path, new Set()) : undefined
 
 function isEffectSchema(schema: unknown): boolean {
   if (
