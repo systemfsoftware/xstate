@@ -1579,134 +1579,141 @@ describe('final states', () => {
   })
 
   it('warns when a top-level final state declares invoke, on or after', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      createMachine({
-        id: 'm',
-        initial: 'done',
-        states: {
-          done: {
-            type: 'final',
-            invoke: { src: createMachine({}) },
-            on: { go: {} },
-            after: { 100: {} },
-          },
+    const warned: string[] = []
+    const machine = createMachine({
+      id: 'm',
+      initial: 'done',
+      states: {
+        done: {
+          type: 'final',
+          invoke: { src: createMachine({}) },
+          on: { go: {} },
+          after: { 100: {} },
         },
-      })
+      },
+    })
 
-      expect(warn).toHaveBeenCalledWith(
-        'State "m.done" is final and declares "invoke", "on", "after"; final states cannot run actors or take transitions.',
-      )
-    } finally {
-      warn.mockRestore()
-    }
+    createActor(machine, { warn: (message) => warned.push(message) })
+
+    expect(warned).toEqual([
+      'State "m.done" is final and declares "invoke", "on", "after"; final states cannot run actors or take transitions.',
+    ])
   })
 
   it('does not start actors invoked by a top-level final state', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const spy = vi.fn()
-    try {
-      const machine = createMachine({
-        initial: 'done',
-        states: {
-          done: {
-            type: 'final',
-            invoke: { src: createCallbackLogic(() => spy()) },
+    const invocations: string[] = []
+    const machine = createMachine({
+      initial: 'done',
+      states: {
+        done: {
+          type: 'final',
+          invoke: {
+            src: createCallbackLogic(() => {
+              invocations.push('callback')
+            }),
           },
         },
-      })
-      const [, effects] = initialTransition(machine)
-      expect(effects.map((effect) => effect.type)).toEqual([
-        '@xstate.terminate',
-      ])
+      },
+    })
+    const [, effects] = initialTransition(machine)
+    expect(effects.map((effect) => effect.type)).toEqual([
+      '@xstate.terminate',
+    ])
 
-      const actorRef = createActor(machine).start()
+    const warned: string[] = []
+    const actorRef = createActor(machine, {
+      warn: (message) => warned.push(message),
+    }).start()
 
-      expect(actorRef.getSnapshot().status).toBe('done')
-      expect(spy).not.toHaveBeenCalled()
-    } finally {
-      warn.mockRestore()
-    }
+    expect(actorRef.getSnapshot().status).toBe('done')
+    expect(invocations).toEqual([])
+    expect(warned).toEqual([
+      'State "(machine).done" is final and declares "invoke"; final states cannot run actors or take transitions.',
+    ])
   })
 
   it('warns when a nested or parallel-region final state declares on', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      createMachine({
-        id: 'nested',
-        initial: 'a',
-        states: {
-          a: {
-            initial: 'inner',
-            states: {
-              inner: { type: 'final', on: { go: {} } },
-            },
+    const warned: string[] = []
+    const warn = (message: string) => warned.push(message)
+    const nested = createMachine({
+      id: 'nested',
+      initial: 'a',
+      states: {
+        a: {
+          initial: 'inner',
+          states: {
+            inner: { type: 'final', on: { go: {} } },
           },
         },
-      })
-      createMachine({
-        id: 'par',
-        type: 'parallel',
-        states: {
-          region: { type: 'final', on: { go: {} } },
-        },
-      })
+      },
+    })
+    const parallel = createMachine({
+      id: 'par',
+      type: 'parallel',
+      states: {
+        region: { type: 'final', on: { go: {} } },
+      },
+    })
 
-      expect(warn.mock.calls.map((call) => call[0])).toEqual([
-        'State "nested.a.inner" is final and declares "on"; final states cannot run actors or take transitions.',
-        'State "par.region" is final and declares "on"; final states cannot run actors or take transitions.',
-      ])
-    } finally {
-      warn.mockRestore()
-    }
+    createActor(nested, { warn })
+    createActor(parallel, { warn })
+
+    expect(warned).toEqual([
+      'State "nested.a.inner" is final and declares "on"; final states cannot run actors or take transitions.',
+      'State "par.region" is final and declares "on"; final states cannot run actors or take transitions.',
+    ])
   })
 
   it('does not warn for plain final states', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      createMachine({
-        initial: 'a',
-        states: {
-          a: {
-            initial: 'inner',
-            states: { inner: { type: 'final' } },
-          },
-          done: { type: 'final' },
+    const warned: string[] = []
+    const machine = createMachine({
+      initial: 'a',
+      states: {
+        a: {
+          initial: 'inner',
+          states: { inner: { type: 'final' } },
         },
-      })
+        done: { type: 'final' },
+      },
+    })
 
-      expect(warn).not.toHaveBeenCalled()
-    } finally {
-      warn.mockRestore()
-    }
+    createActor(machine, { warn: (message) => warned.push(message) })
+
+    expect(warned).toEqual([])
   })
 
   it('final regions under a parallel state take no transitions and start no actors', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const spy = vi.fn()
-    try {
-      const machine = createMachine({
-        type: 'parallel',
-        states: {
-          a: {
-            type: 'final',
-            invoke: { src: createCallbackLogic(() => spy()) },
-            on: { go: { target: '#b-x' } },
+    const invocations: string[] = []
+    const machine = createMachine({
+      type: 'parallel',
+      states: {
+        a: {
+          type: 'final',
+          invoke: {
+            src: createCallbackLogic(() => {
+              invocations.push('callback')
+            }),
           },
-          b: {
-            initial: 'idle',
-            states: { idle: {}, x: { id: 'b-x' } },
-          },
+          on: { go: { target: '#b-x' } },
         },
-      })
+        b: {
+          initial: 'idle',
+          states: { idle: {}, x: { id: 'b-x' } },
+        },
+      },
+    })
 
-      const actorRef = createActor(machine).start()
-      actorRef.send({ type: 'go' })
+    const warned: string[] = []
+    const actorRef = createActor(machine, {
+      warn: (message) => warned.push(message),
+    }).start()
+    actorRef.send({ type: 'go' })
 
-      expect(spy).not.toHaveBeenCalled()
-      expect(actorRef.getSnapshot().value).toEqual({ a: {}, b: 'idle' })
-    } finally {
-      warn.mockRestore()
-    }
+    expect(invocations).toEqual([])
+    expect(actorRef.getSnapshot().value).toEqual({ a: {}, b: 'idle' })
+    expect(warned).toEqual([
+      'State "(machine).a" is final and declares "invoke", "on"; final states cannot run actors or take transitions.',
+      'Actor x:0 received event "go" in state {"a":{},"b":"idle"} with no matching transition',
+    ])
   })
 })
