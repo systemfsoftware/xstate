@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 const sourceCondition = '@systemfsoftware/source'
@@ -7,7 +8,7 @@ const unguarded = [
   'src/types.test.tsx',
 ]
 
-const ownSource = (module: string): string => new URL(`./src/${module}`, import.meta.url).pathname
+const ownSource = (module: string): string => fileURLToPath(new URL(`./src/${module}`, import.meta.url))
 
 export default defineConfig({
   resolve: {
