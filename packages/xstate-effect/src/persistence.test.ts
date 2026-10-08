@@ -387,7 +387,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     yield* expect(observed).toEqual({ requested: [1000, 400], childStatus: 'active' })
   })
 
-  const sweepTimeoutWithHeadroomMs = 15_000
+  const restoreComparisonTimeoutWithHeadroomMs = 15_000
 
   it('matches an uninterrupted run when restored at every step of every shortest path', function*({ expect }) {
     const world = yield* makeWorld()
@@ -414,7 +414,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     }
 
     yield* expect(restoredValues(comparisons)).toEqual(expectedValues(comparisons))
-  }, sweepTimeoutWithHeadroomMs)
+  }, restoreComparisonTimeoutWithHeadroomMs)
 
   it('matches an uninterrupted run for generated events, clock advances and persist points', function*({ expect }) {
     const world = yield* makeWorld()
@@ -441,7 +441,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     }
 
     yield* expect(restoredValues(comparisons)).toEqual(expectedValues(comparisons))
-  })
+  }, restoreComparisonTimeoutWithHeadroomMs)
 
   it('resumes a pending delayed transition with its remaining delay', function*({ expect }) {
     const machine = createMachine({
