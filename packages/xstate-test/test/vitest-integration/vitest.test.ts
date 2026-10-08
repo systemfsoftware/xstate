@@ -4,8 +4,8 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import type { TestSut } from '../src/index.js'
-import { it as modelIt, test as modelTest, withModelTests } from '../src/vitest.js'
+import type { TestSut } from '../../src/index.js'
+import { it as modelIt, test as modelTest, withModelTests } from '../../src/vitest.js'
 
 const counterMachine = createMachine({
   id: 'counter',
@@ -73,7 +73,7 @@ describe('@xstate/test/vitest', () => {
 
   it('saved the expected failure under the test file and name', () => {
     expect(readdirSync(dir)).toEqual([
-      'test-vitest.test.ts-xstate-test-vitest-it.model.fails-expects-a-counterexample',
+      'test-vitest-integration-vitest.test.ts-xstate-test-vitest-it.model.fails-expects-a-counterexample',
     ])
   })
 })
@@ -108,7 +108,7 @@ describe('withModelTests', () => {
     }
   }
 
-  it('sets the timeout from until.timeMs and attaches coverage to the task', async () => {
+  it('sets the timeout from until.timeMs and attaches coverage to the task', () => {
     const { base, registered } = fakeIt()
     withModelTests(base).model('bounded', counterMachine, {
       events,
@@ -121,13 +121,14 @@ describe('withModelTests', () => {
     }
     expect(first.timeout).toBe(5_050)
     const context = contextFor('bounded')
-    await first.fn(context)
-    expect(context.task.meta['xstateTestCoverage']).toMatchObject({
-      formatVersion: 1,
+    return first.fn(context).then(() => {
+      expect(context.task.meta['xstateTestCoverage']).toMatchObject({
+        formatVersion: 1,
+      })
     })
   })
 
-  it('prints the coverage report when the campaign fails', async () => {
+  it('prints the coverage report when the campaign fails', () => {
     const { base, registered } = fakeIt()
     withModelTests(base).model('broken', counterMachine, {
       seed: 1,
@@ -142,21 +143,20 @@ describe('withModelTests', () => {
       throw new Error('expected a registered test')
     }
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    try {
-      await expect(first.fn(contextFor('broken'))).rejects.toThrow(
-        /Property observation diverged/,
-      )
+    return expect(first.fn(contextFor('broken'))).rejects.toThrow(
+      /Property observation diverged/,
+    ).then(() => {
       const firstCall = log.mock.calls[0]
       if (firstCall === undefined) {
         throw new Error('expected a console.log call')
       }
       expect(firstCall[0]).toMatch(/^Test coverage\n/)
-    } finally {
+    }).finally(() => {
       log.mockRestore()
-    }
+    })
   })
 
-  it('fails an expected failure that passes or does not match', async () => {
+  it('fails an expected failure that passes or does not match', () => {
     const { base, registered } = fakeIt()
     const modelTests = withModelTests(base)
     modelTests.model.fails('passes', counterMachine, {
@@ -175,15 +175,16 @@ describe('withModelTests', () => {
     if (first === undefined || second === undefined) {
       throw new Error('expected two registered tests')
     }
-    await expect(first.fn(contextFor('passes'))).rejects.toThrow(
+    return expect(first.fn(contextFor('passes'))).rejects.toThrow(
       'Expected "passes" to fail, but the campaign passed.',
-    )
-    await expect(second.fn(contextFor('other message'))).rejects.toThrow(
-      /Expected "other message" to fail with a message matching something else/,
+    ).then(() =>
+      expect(second.fn(contextFor('other message'))).rejects.toThrow(
+        /Expected "other message" to fail with a message matching something else/,
+      )
     )
   })
 
-  it('keys the failure database by file, suites, and test name', async () => {
+  it('keys the failure database by file, suites, and test name', () => {
     const { base, registered } = fakeIt()
     withModelTests(base).model.fails('keyed', counterMachine, {
       seed: 1,
@@ -195,9 +196,10 @@ describe('withModelTests', () => {
     if (first === undefined) {
       throw new Error('expected a registered test')
     }
-    await first.fn(contextFor('keyed'))
-    expect(readdirSync(join(dir, 'keyed'))).toEqual([
-      'cart.test.ts-cart-keyed',
-    ])
+    return first.fn(contextFor('keyed')).then(() => {
+      expect(readdirSync(join(dir, 'keyed'))).toEqual([
+        'cart.test.ts-cart-keyed',
+      ])
+    })
   })
 })

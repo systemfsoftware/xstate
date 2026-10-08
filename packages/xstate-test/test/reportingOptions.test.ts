@@ -1,6 +1,7 @@
+import { describe, it, vi } from '@systemfsoftware/vitest'
 import { createMachine, types } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import * as fc from 'fast-check'
-import { describe, expect, it, vi } from 'vitest'
 import { formatTestStatistics, ModelTestFailure, propertyTest, testPaths } from '../src/index.js'
 
 const counterMachine = createMachine({
@@ -17,7 +18,6 @@ const counterMachine = createMachine({
 
 const events = { INC: fc.constant({}), RESET: fc.constant({}) }
 
-/** Fails once the count reaches 3, so fast-check has something to shrink. */
 const failingOptions = {
   seed: 1,
   numRuns: 50,
@@ -30,85 +30,106 @@ const failingOptions = {
   },
 }
 
-async function catchFailure(run: () => Promise<unknown>) {
-  try {
-    await run()
-  } catch (error) {
-    return error as ModelTestFailure
-  }
-  throw new Error('Expected the campaign to fail')
-}
+const catchFailure = (run: () => Promise<unknown>): Promise<ModelTestFailure> =>
+  run().then(
+    () => {
+      throw new Error('Expected the campaign to fail')
+    },
+    (error: unknown) => error as ModelTestFailure,
+  )
 
 describe('fast-check reporting options', () => {
-  it('calls reporter with the run details', async () => {
+  it('calls reporter with the run details', function*({ expect }) {
     const reports: fc.RunDetails<unknown>[] = []
-    await propertyTest(counterMachine, {
-      seed: 1,
-      numRuns: 7,
-      events,
-      reporter: (details) => {
-        reports.push(details)
-      },
-    })
-    expect(reports).toHaveLength(1)
-    expect(reports[0]).toMatchObject({ failed: false, numRuns: 7 })
-  })
-
-  it('awaits asyncReporter with the failing run details', async () => {
-    const reports: fc.RunDetails<unknown>[] = []
-    await catchFailure(() =>
+    yield* Effect.promise(() =>
       propertyTest(counterMachine, {
-        ...failingOptions,
-        asyncReporter: async (details) => {
+        seed: 1,
+        numRuns: 7,
+        events,
+        reporter: (details) => {
           reports.push(details)
         },
       })
     )
-    expect(reports).toHaveLength(1)
+    yield* expect({
+      length: reports.length,
+      failed: reports[0]?.failed,
+      numRuns: reports[0]?.numRuns,
+    }).toEqual({ length: 1, failed: false, numRuns: 7 })
+  })
+
+  it('awaits asyncReporter with the failing run details', function*({ expect }) {
+    const reports: fc.RunDetails<unknown>[] = []
+    yield* Effect.promise(() =>
+      catchFailure(() =>
+        propertyTest(counterMachine, {
+          ...failingOptions,
+          asyncReporter: (details) => {
+            reports.push(details)
+            return Promise.resolve()
+          },
+        })
+      )
+    )
     const firstReport = reports[0]
     if (firstReport === undefined) {
       throw new Error('expected a report')
     }
-    expect(firstReport.failed).toBe(true)
+    yield* expect({ length: reports.length, failed: firstReport.failed }).toEqual({
+      length: 1,
+      failed: true,
+    })
   })
 
-  it('appends the fast-check report to the message when verbose is set', async () => {
-    const quiet = await catchFailure(() => propertyTest(counterMachine, failingOptions))
-    const verbose = await catchFailure(() => propertyTest(counterMachine, { ...failingOptions, verbose: 1 }))
-    expect(quiet.message).not.toContain('Counterexample:')
-    expect(verbose.message).toContain('Counterexample:')
-    expect(verbose.message).toContain('Encountered failures were:')
+  it('appends the fast-check report to the message when verbose is set', function*({ expect }) {
+    const quiet = yield* Effect.promise(() => catchFailure(() => propertyTest(counterMachine, failingOptions)))
+    const verbose = yield* Effect.promise(() =>
+      catchFailure(() => propertyTest(counterMachine, { ...failingOptions, verbose: 1 }))
+    )
+    yield* expect({
+      quietMentionsCounterexample: quiet.message.includes('Counterexample:'),
+      verboseMentionsCounterexample: verbose.message.includes('Counterexample:'),
+      verboseMentionsFailures: verbose.message.includes('Encountered failures were:'),
+    }).toEqual({
+      quietMentionsCounterexample: false,
+      verboseMentionsCounterexample: true,
+      verboseMentionsFailures: true,
+    })
   })
 })
 
 describe('statistics', () => {
-  it('prints event-case and label distributions after a passing campaign', async () => {
+  it('prints event-case and label distributions after a passing campaign', function*({ expect }) {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
-      const { coverage } = await propertyTest(counterMachine, {
-        seed: 1,
-        numRuns: 20,
-        maxCommands: 4,
-        events,
-        statistics: true,
-        invariant: ({ snapshot, classify }) => {
-          classify(snapshot.context.count >= 2, 'reached two')
-        },
-      })
-      expect(log).toHaveBeenCalledWith(formatTestStatistics(coverage))
+      const { coverage } = yield* Effect.promise(() =>
+        propertyTest(counterMachine, {
+          seed: 1,
+          numRuns: 20,
+          maxCommands: 4,
+          events,
+          statistics: true,
+          invariant: ({ snapshot, classify }) => {
+            classify(snapshot.context.count >= 2, 'reached two')
+          },
+        })
+      )
+      yield* expect(log.mock.calls).toEqual([[formatTestStatistics(coverage)]])
     } finally {
       log.mockRestore()
     }
   })
 
-  it('formats shares of executed events and of runs', async () => {
-    const { coverage } = await testPaths(counterMachine, {
-      events,
-      fromEvents: [{ type: 'INC' }, { type: 'INC' }, { type: 'RESET' }],
-      stopWhen: (snapshot) => snapshot.context.count >= 3,
-      invariant: ({ label, step }) => label('step', step % 2 !== 0 ? 'odd' : 'even'),
-    })
-    expect(formatTestStatistics(coverage)).toBe(
+  it('formats shares of executed events and of runs', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      testPaths(counterMachine, {
+        events,
+        fromEvents: [{ type: 'INC' }, { type: 'INC' }, { type: 'RESET' }],
+        stopWhen: (snapshot) => snapshot.context.count >= 3,
+        invariant: ({ label, step }) => label('step', step % 2 !== 0 ? 'odd' : 'even'),
+      })
+    )
+    yield* expect(formatTestStatistics(coverage)).toBe(
       [
         'Test statistics (1 run)',
         '',
@@ -122,33 +143,43 @@ describe('statistics', () => {
     )
   })
 
-  it('leaves shrink attempts out of labels and event cases', async () => {
+  it('leaves shrink attempts out of labels and event cases', function*({ expect }) {
     let created = 0
-    const failure = await catchFailure(() =>
-      propertyTest(counterMachine, {
-        ...failingOptions,
-        sut: {
-          create: ({ label }) => {
-            created++
-            label('run')
-            return { send: () => {} }
+    const failure = yield* Effect.promise(() =>
+      catchFailure(() =>
+        propertyTest(counterMachine, {
+          ...failingOptions,
+          sut: {
+            create: ({ label }) => {
+              created++
+              label('run')
+              return { send: () => {} }
+            },
           },
-        },
-      })
+        })
+      )
     )
     const { exploration, labels, eventCases } = failure.coverage!
-    expect(exploration.shrinkRuns).toBeGreaterThan(0)
-    expect(exploration.attemptedRuns).toBe(created)
     const runLabel = labels['run']
     if (runLabel === undefined) {
       throw new Error('expected a run label')
     }
-    expect(runLabel.count).toBe(created - exploration.shrinkRuns)
-    expect(runLabel.share).toBe(1)
     const executed = Object.values(eventCases).reduce(
       (total, counts) => total + counts.executed,
       0,
     )
-    expect(executed).toBeLessThan(failure.coverage!.generatedSteps)
+    yield* expect({
+      shrinkRunsPositive: exploration.shrinkRuns > 0,
+      attemptedRuns: exploration.attemptedRuns,
+      runCount: runLabel.count,
+      runShare: runLabel.share,
+      executionsBelowGenerated: executed < failure.coverage!.generatedSteps,
+    }).toEqual({
+      shrinkRunsPositive: true,
+      attemptedRuns: created,
+      runCount: created - exploration.shrinkRuns,
+      runShare: 1,
+      executionsBelowGenerated: true,
+    })
   })
 })
