@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine, isTypeSchema, setup, types } from '../src/index.js'
 
 describe('type-only schemas (`types`)', () => {
-  it('infers context and events without a runtime schema library', () => {
+  it('infers context and events without a runtime schema library', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: types<{ count: number }>(),
@@ -27,12 +27,14 @@ describe('type-only schemas (`types`)', () => {
 
     const actor = createActor(machine).start()
     actor.trigger.inc({ by: 5 })
-    expect(actor.getSnapshot().context.count).toBe(5)
+    const afterInc = actor.getSnapshot().context.count
     actor.trigger.reset()
-    expect(actor.getSnapshot().context.count).toBe(0)
+    const afterReset = actor.getSnapshot().context.count
+
+    yield* expect({ afterInc, afterReset }).toEqual({ afterInc: 5, afterReset: 0 })
   })
 
-  it('preserves optional payload fields declared via types()', () => {
+  it('preserves optional payload fields declared via types()', function*({ expect }) {
     const machine = setup({
       schemas: {
         events: {
@@ -60,17 +62,21 @@ describe('type-only schemas (`types`)', () => {
     // optional field must be omittable
     actor.send({ type: 'submit', email: 'a@b.co' })
     actor.send({ type: 'submit', email: 'a@b.co', referrer: 'x' })
+
+    yield* expect(actor.getSnapshot().status).toEqual('active')
   })
 
-  it('does not validate at runtime (identity passthrough)', () => {
+  it('does not validate at runtime (identity passthrough)', function*({ expect }) {
     const schema = types<{ a: number }>()
-    expect(isTypeSchema(schema)).toBe(true)
-    // a real Standard Schema that accepts anything
-    const result = schema['~standard'].validate({ anything: true } as any)
-    expect(result).toEqual({ value: { anything: true } })
+    const result = schema['~standard'].validate({ anything: true })
+
+    yield* expect({ isTypeSchema: isTypeSchema(schema), result }).toEqual({
+      isTypeSchema: true,
+      result: { value: { anything: true } },
+    })
   })
 
-  it('interops with input/output type-only schemas', () => {
+  it('interops with input/output type-only schemas', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: types<{ total: number }>(),
@@ -86,11 +92,12 @@ describe('type-only schemas (`types`)', () => {
     })
 
     const actor = createActor(machine, { input: { start: 7 } }).start()
-    expect(actor.getSnapshot().output).toEqual({ total: 7 })
+
+    yield* expect(actor.getSnapshot().output).toEqual({ total: 7 })
   })
 
-  it('checks top-level final outputs against the machine output schema', () => {
-    createMachine({
+  it('checks top-level final outputs against the machine output schema', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         output: types<{ status: 'ok' }>(),
       },
@@ -148,10 +155,12 @@ describe('type-only schemas (`types`)', () => {
       },
       output: { status: 'ok' },
     })
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('done')
   })
 
-  it('checks top-level final outputs without a root output mapper', () => {
-    createMachine({
+  it('checks top-level final outputs without a root output mapper', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         output: types<{ status: 'ok' }>(),
       },
@@ -177,10 +186,12 @@ describe('type-only schemas (`types`)', () => {
         },
       },
     })
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('done')
   })
 
-  it('keeps top-level final outputs constrained to machine output with a root mapper', () => {
-    createMachine({
+  it('keeps top-level final outputs constrained to machine output with a root mapper', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         output: types<{ status: 'ok' }>(),
       },
@@ -208,16 +219,18 @@ describe('type-only schemas (`types`)', () => {
       },
       output: ({ output }) => output,
     })
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('done')
   })
 
-  it('checks setup top-level final outputs against the machine output schema', () => {
+  it('checks setup top-level final outputs against the machine output schema', function*({ expect }) {
     const s = setup({
       schemas: {
         output: types<{ status: 'ok' }>(),
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'done',
       states: {
         done: {
@@ -238,9 +251,11 @@ describe('type-only schemas (`types`)', () => {
       },
       output: ({ output }) => output,
     })
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('done')
   })
 
-  it('types final output from a setup state-local output schema', () => {
+  it('types final output from a setup state-local output schema', function*({ expect }) {
     const s = setup({
       states: {
         done: {
@@ -251,7 +266,7 @@ describe('type-only schemas (`types`)', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'done',
       states: {
         done: {
@@ -271,9 +286,11 @@ describe('type-only schemas (`types`)', () => {
         },
       },
     })
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('done')
   })
 
-  it('types nested onDone output from a setup state-local output schema', () => {
+  it('types nested onDone output from a setup state-local output schema', function*({ expect }) {
     const s = setup({
       states: {
         workflow: {
@@ -287,7 +304,7 @@ describe('type-only schemas (`types`)', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'workflow',
       states: {
         workflow: {
@@ -308,9 +325,11 @@ describe('type-only schemas (`types`)', () => {
         complete: { type: 'final' },
       },
     })
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('done')
   })
 
-  it('types parallel aggregate output from a setup state-local output schema', () => {
+  it('types parallel aggregate output from a setup state-local output schema', function*({ expect }) {
     const s = setup({
       states: {
         processing: {
@@ -341,7 +360,7 @@ describe('type-only schemas (`types`)', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'processing',
       states: {
         processing: {
@@ -377,5 +396,7 @@ describe('type-only schemas (`types`)', () => {
         complete: { type: 'final' },
       },
     })
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('done')
   })
 })

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import {
   type ActorLogic,
   type AnyActor,
@@ -9,7 +9,7 @@ import {
 } from '../src/index.js'
 
 describe('transition', () => {
-  it('should calculate the next snapshot for custom logic', () => {
+  it('should calculate the next snapshot for custom logic', function*({ expect }) {
     const logic = createLogic({
       context: { count: 0 },
       run: ({ context, event }) => {
@@ -22,12 +22,15 @@ describe('transition', () => {
 
     const [init] = initialTransition(logic, undefined)
     const [s1] = transition(logic, init, { type: 'next' })
-    expect(s1.context.count).toEqual(1)
     const [s2] = transition(logic, s1, { type: 'next' })
-    expect(s2.context.count).toEqual(2)
+    yield* expect({ first: s1.context.count, second: s2.context.count })
+      .toEqual({ first: 1, second: 2 })
   })
-  it('stops children from custom logic during a pure transition', () => {
-    const stop = vi.fn()
+  it('stops children from custom logic during a pure transition', function*({ expect }) {
+    const stopCalls: Array<ReadonlyArray<unknown>> = []
+    const stop = (...args: ReadonlyArray<unknown>) => {
+      stopCalls.push(args)
+    }
     const child = {
       id: 'child',
       _parent: {},
@@ -51,9 +54,9 @@ describe('transition', () => {
 
     transition(logic, snapshot, { type: 'stop' })
 
-    expect(stop).toHaveBeenCalledOnce()
+    yield* expect(stopCalls).toEqual([[]])
   })
-  it('should calculate the next snapshot for machine logic', () => {
+  it('should calculate the next snapshot for machine logic', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -73,15 +76,18 @@ describe('transition', () => {
 
     const [init] = initialTransition(machine, undefined)
     const [s1] = transition(machine, init, { type: 'NEXT' })
-
-    expect(s1.value).toEqual('b')
-
     const [s2] = transition(machine, s1, { type: 'NEXT' })
 
-    expect(s2.value).toEqual('c')
+    yield* expect({ first: s1.value, second: s2.value }).toEqual({
+      first: 'b',
+      second: 'c',
+    })
   })
-  it('should not execute actions', () => {
-    const fn = vi.fn()
+  it('should not execute actions', function*({ expect }) {
+    const executed: Array<void> = []
+    const fn = () => {
+      executed.push()
+    }
 
     const machine = createMachine({
       initial: 'a',
@@ -101,7 +107,9 @@ describe('transition', () => {
     const [init] = initialTransition(machine, undefined)
     const [nextSnapshot] = transition(machine, init, { type: 'event' })
 
-    expect(fn).not.toHaveBeenCalled()
-    expect(nextSnapshot.value).toEqual('b')
+    yield* expect({ executed, value: nextSnapshot.value }).toEqual({
+      executed: [],
+      value: 'b',
+    })
   })
 })

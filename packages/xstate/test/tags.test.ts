@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine } from '../src/index.js'
 
 describe('tags', () => {
-  it('supports tagging states', () => {
+  it('supports tagging states', function*({ expect }) {
     const machine = createMachine({
       initial: 'green',
       states: {
@@ -25,14 +25,20 @@ describe('tags', () => {
     })
 
     const actorRef = createActor(machine).start()
-    expect(actorRef.getSnapshot().hasTag('go')).toBeTruthy()
+    const initialHasGo = actorRef.getSnapshot().hasTag('go')
     actorRef.send({ type: 'TIMER' })
-    expect(actorRef.getSnapshot().hasTag('go')).toBeTruthy()
+    const yellowHasGo = actorRef.getSnapshot().hasTag('go')
     actorRef.send({ type: 'TIMER' })
-    expect(actorRef.getSnapshot().hasTag('go')).toBeFalsy()
+    const redHasGo = actorRef.getSnapshot().hasTag('go')
+
+    yield* expect({ initialHasGo, yellowHasGo, redHasGo }).toEqual({
+      initialHasGo: true,
+      yellowHasGo: true,
+      redHasGo: false,
+    })
   })
 
-  it('supports tags in compound states', () => {
+  it('supports tags in compound states', function*({ expect }) {
     const machine = createMachine({
       initial: 'red',
       states: {
@@ -58,12 +64,14 @@ describe('tags', () => {
     const actorRef = createActor(machine).start()
     const initialState = actorRef.getSnapshot()
 
-    expect(initialState.hasTag('go')).toBeFalsy()
-    expect(initialState.hasTag('stop')).toBeTruthy()
-    expect(initialState.hasTag('crosswalkLight')).toBeTruthy()
+    yield* expect({
+      hasGo: initialState.hasTag('go'),
+      hasStop: initialState.hasTag('stop'),
+      hasCrosswalkLight: initialState.hasTag('crosswalkLight'),
+    }).toEqual({ hasGo: false, hasStop: true, hasCrosswalkLight: true })
   })
 
-  it('supports tags in parallel states', () => {
+  it('supports tags in parallel states', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -96,13 +104,28 @@ describe('tags', () => {
     })
 
     const actorRef = createActor(machine).start()
-
-    expect(actorRef.getSnapshot().tags).toEqual(new Set(['yes']))
+    const initialTags = actorRef.getSnapshot().tags
     actorRef.send({ type: 'DEACTIVATE' })
-    expect(actorRef.getSnapshot().tags).toEqual(new Set(['yes', 'no']))
+    const afterDeactivateTags = actorRef.getSnapshot().tags
+
+    yield* expect({
+      initialTagCount: initialTags.size,
+      initialHasYes: initialTags.has('yes'),
+      initialHasNo: initialTags.has('no'),
+      afterDeactivateTagCount: afterDeactivateTags.size,
+      afterDeactivateHasYes: afterDeactivateTags.has('yes'),
+      afterDeactivateHasNo: afterDeactivateTags.has('no'),
+    }).toEqual({
+      initialTagCount: 1,
+      initialHasYes: true,
+      initialHasNo: false,
+      afterDeactivateTagCount: 2,
+      afterDeactivateHasYes: true,
+      afterDeactivateHasNo: true,
+    })
   })
 
-  it('sets tags correctly after not selecting any transition', () => {
+  it('sets tags correctly after not selecting any transition', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -116,10 +139,13 @@ describe('tags', () => {
     actorRef.send({
       type: 'UNMATCHED',
     })
-    expect(actorRef.getSnapshot().hasTag('myTag')).toBeTruthy()
+
+    yield* expect({ hasMyTag: actorRef.getSnapshot().hasTag('myTag') }).toEqual({
+      hasMyTag: true,
+    })
   })
 
-  it('tags can be single (not array)', () => {
+  it('tags can be single (not array)', function*({ expect }) {
     const machine = createMachine({
       initial: 'green',
       states: {
@@ -129,10 +155,12 @@ describe('tags', () => {
       },
     })
 
-    expect(createActor(machine).getSnapshot().hasTag('go')).toBeTruthy()
+    yield* expect({ hasGo: createActor(machine).getSnapshot().hasTag('go') }).toEqual({
+      hasGo: true,
+    })
   })
 
-  it('stringifies to an array', () => {
+  it('stringifies to an array', function*({ expect }) {
     const machine = createMachine({
       initial: 'green',
       states: {
@@ -143,7 +171,10 @@ describe('tags', () => {
     })
 
     const jsonState = createActor(machine).getSnapshot().toJSON()
+    const tags = typeof jsonState === 'object' && jsonState !== null && 'tags' in jsonState
+      ? jsonState.tags
+      : undefined
 
-    expect((jsonState as any).tags).toEqual(['go', 'light'])
+    yield* expect(tags).toEqual(['go', 'light'])
   })
 })

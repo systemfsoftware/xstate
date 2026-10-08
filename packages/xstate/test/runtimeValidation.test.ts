@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import {
   type ActorLogicValidator,
@@ -37,18 +38,41 @@ function getRejection(
   ) as DeadLetterExecutableActionObject | undefined
 }
 
-function expectValidationError(
-  error: unknown,
+interface ValidationSummary {
+  name: string | undefined
+  isValidationError: boolean
+  boundary: ActorValidationError['boundary'] | undefined
+  reason: ActorValidationError['reason'] | undefined
+}
+
+function validationOf(error: unknown): ValidationSummary {
+  const validation = isActorValidationError(error) ? error : undefined
+  return {
+    name: error instanceof Error ? error.name : undefined,
+    isValidationError: validation !== undefined,
+    boundary: validation?.boundary,
+    reason: validation?.reason,
+  }
+}
+
+function expectedValidation(
   boundary: ActorValidationError['boundary'],
   reason: ActorValidationError['reason'] = 'invalid',
-) {
-  expect(error).toBeInstanceOf(ActorValidationError)
-  expect(isActorValidationError(error)).toBe(true)
-  expect(error).toMatchObject({ boundary, reason })
+): ValidationSummary {
+  return {
+    name: 'ActorValidationError',
+    isValidationError: true,
+    boundary,
+    reason,
+  }
+}
+
+function eventOriginOf(error: unknown): ActorValidationError['eventOrigin'] | undefined {
+  return isActorValidationError(error) ? error.eventOrigin : undefined
 }
 
 describe('runtime schema validation', () => {
-  it('validates setup schemas created through a system builder', () => {
+  it('validates setup schemas created through a system builder', function*({ expect }) {
     const machine = createSystem()
       .setup({
         validator: standardSchemaValidator(),
@@ -56,13 +80,12 @@ describe('runtime schema validation', () => {
       })
       .createMachine({})
 
-    expectValidationError(
-      getThrown(() => initialTransition(machine, { count: 'invalid' } as any)),
-      'input',
-    )
+    const error = getThrown(() => initialTransition(machine, { count: 'invalid' } as any))
+
+    yield* expect(validationOf(error)).toEqual(expectedValidation('input'))
   })
 
-  it('validates input across actor logic creators', () => {
+  it('validates input across actor logic creators', function*({ expect }) {
     const input = z.object({ count: z.number() })
     const validator = standardSchemaValidator()
     const subscribable = {
@@ -78,7 +101,7 @@ describe('runtime schema validation', () => {
       createAsyncLogic({
         validator,
         schemas: { input },
-        run: async () => undefined,
+        run: () => Promise.resolve(undefined),
       }),
       createCallbackLogic({
         validator,
@@ -97,16 +120,26 @@ describe('runtime schema validation', () => {
       }),
     ]
 
-    for (const logic of logics) {
-      expectValidationError(
+    const summaries = logics.map((logic) =>
+      validationOf(
         getThrown(() => initialTransition(logic as any, { count: 'invalid' } as any)),
-        'input',
       )
-    }
+    )
+
+    yield* expect(summaries).toEqual([
+      expectedValidation('input'),
+      expectedValidation('input'),
+      expectedValidation('input'),
+      expectedValidation('input'),
+      expectedValidation('input'),
+    ])
   })
 
-  it('validates generic actor output before returning it', () => {
-    const effect = vi.fn()
+  it('validates generic actor output before returning it', function*({ expect }) {
+    const effectCalls: string[] = []
+    const effect = () => {
+      effectCalls.push('effect')
+    }
     const logic = createLogic({
       validator: standardSchemaValidator(),
       schemas: { output: z.number() },
@@ -117,49 +150,61 @@ describe('runtime schema validation', () => {
       },
     })
 
-    expectValidationError(
-      getThrown(() => initialTransition(logic)),
-      'output',
-    )
+    const error = getThrown(() => initialTransition(logic))
 
     const actor = createActor(logic)
     actor.subscribe({ error: () => {} })
     actor.start()
-    expect(actor.getSnapshot().status).toBe('error')
-    expect(effect).not.toHaveBeenCalled()
+
+    yield* expect({
+      error: validationOf(error),
+      status: actor.getSnapshot().status,
+      effectCalls,
+    }).toEqual({
+      error: expectedValidation('output'),
+      status: 'error',
+      effectCalls: [],
+    })
   })
 
-  it('can be disabled by a derived setup', () => {
+  it('can be disabled by a derived setup', function*({ expect }) {
     const validated = setup({
       validator: standardSchemaValidator(),
       schemas: { input: z.object({ count: z.number() }) },
     })
     const unvalidated = validated.extend({ validator: undefined })
 
-    expect(() =>
-      initialTransition(unvalidated.createMachine({}), {
-        count: 'not validated',
-      } as any)
-    ).not.toThrow()
+    const outcome = yield* Effect.exit(
+      Effect.sync(() =>
+        initialTransition(unvalidated.createMachine({}), {
+          count: 'not validated',
+        } as any)
+      ),
+    )
+
+    yield* expect(outcome._tag).toEqual('Success')
   })
 
-  it('can be installed by a derived setup', () => {
+  it('can be installed by a derived setup', function*({ expect }) {
     const validated = setup({
       schemas: { input: z.object({ count: z.number() }) },
     }).extend({ validator: standardSchemaValidator() })
 
-    expectValidationError(
-      getThrown(() =>
-        initialTransition(validated.createMachine({}), {
-          count: 'invalid',
-        } as any)
-      ),
-      'input',
+    const error = getThrown(() =>
+      initialTransition(validated.createMachine({}), {
+        count: 'invalid',
+      } as any)
     )
+
+    yield* expect(validationOf(error)).toEqual(expectedValidation('input'))
   })
 
-  it('calls validators only at pure calculation boundaries', () => {
-    const check = vi.fn<ActorLogicValidator['check']>(() => undefined)
+  it('calls validators only at pure calculation boundaries', function*({ expect }) {
+    const kinds: string[] = []
+    const check: ActorLogicValidator['check'] = (request) => {
+      kinds.push(request.kind)
+      return undefined
+    }
     const machine = setup({ validator: { check } }).createMachine({
       on: {
         GO: (_, enq) => {
@@ -170,21 +215,24 @@ describe('runtime schema validation', () => {
     })
 
     const [snapshot] = initialTransition(machine)
-    expect(check.mock.calls.map(([request]) => request.kind)).toEqual([
-      'input',
-      'result',
-    ])
+    const initialKinds = [...kinds]
 
-    check.mockClear()
+    kinds.length = 0
     transition(machine, snapshot, { type: 'GO' })
-    expect(check.mock.calls.map(([request]) => request.kind)).toEqual([
-      'event',
-      'result',
-    ])
+    const transitionKinds = [...kinds]
+
+    yield* expect({ initialKinds, transitionKinds }).toEqual({
+      initialKinds: ['input', 'result'],
+      transitionKinds: ['event', 'result'],
+    })
   })
 
-  it('validates input before initial context construction', () => {
-    const context = vi.fn(() => ({ count: 0 }))
+  it('validates input before initial context construction', function*({ expect }) {
+    const contextCalls: number[] = []
+    const context = () => {
+      contextCalls.push(1)
+      return { count: 0 }
+    }
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: { input: z.object({ count: z.number() }) },
@@ -192,11 +240,16 @@ describe('runtime schema validation', () => {
 
     const error = getThrown(() => initialTransition(machine, { count: 'x' } as any))
 
-    expectValidationError(error, 'input')
-    expect(context).not.toHaveBeenCalled()
+    yield* expect({
+      error: validationOf(error),
+      contextCalls,
+    }).toEqual({
+      error: expectedValidation('input'),
+      contextCalls: [],
+    })
   })
 
-  it('does not validate the machine input schema as root state input', () => {
+  it('does not validate the machine input schema as root state input', function*({ expect }) {
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: {
@@ -209,12 +262,23 @@ describe('runtime schema validation', () => {
     })
 
     const [snapshot] = initialTransition(machine, { count: 1 })
-    expect(snapshot.value).toBe('idle')
-    expect(transition(machine, snapshot, { type: 'GO' })[0].value).toBe('done')
+    const next = transition(machine, snapshot, { type: 'GO' })[0]
+
+    yield* expect({
+      initial: snapshot.value,
+      after: next.value,
+    }).toEqual({
+      initial: 'idle',
+      after: 'done',
+    })
   })
 
-  it('validates external events before guard or transition selection', () => {
-    const guard = vi.fn((_event: unknown) => true)
+  it('validates external events before guard or transition selection', function*({ expect }) {
+    const guardCalls: unknown[] = []
+    const guard = (event: unknown) => {
+      guardCalls.push(event)
+      return true
+    }
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: { events: { GO: z.object({ count: z.number() }) } },
@@ -235,17 +299,30 @@ describe('runtime schema validation', () => {
       type: 'GO',
       count: 'x',
     } as any)
-    expect(result[0]).toBe(snapshot)
     const rejection = getRejection(result)
-    expect(rejection).toMatchObject({
-      event: { type: 'GO', count: 'x' },
-      reason: 'invalidEvent',
+
+    yield* expect({
+      sameSnapshot: result[0] === snapshot,
+      rejection: rejection === undefined
+        ? undefined
+        : {
+          event: rejection.event,
+          reason: rejection.reason,
+          error: validationOf(rejection.detail!.error),
+        },
+      guardCalls,
+    }).toEqual({
+      sameSnapshot: true,
+      rejection: {
+        event: { type: 'GO', count: 'x' },
+        reason: 'invalidEvent',
+        error: expectedValidation('event'),
+      },
+      guardCalls: [],
     })
-    expectValidationError(rejection!.detail!.error, 'event')
-    expect(guard).not.toHaveBeenCalled()
   })
 
-  it('validates separately declared internal event schemas', () => {
+  it('validates separately declared internal event schemas', function*({ expect }) {
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: {
@@ -265,11 +342,17 @@ describe('runtime schema validation', () => {
       type: 'TICK',
       count: 'x',
     } as any)
-    expect(result[0]).toBe(snapshot)
-    expectValidationError(getRejection(result)!.detail!.error, 'event')
+
+    yield* expect({
+      sameSnapshot: result[0] === snapshot,
+      error: validationOf(getRejection(result)!.detail!.error),
+    }).toEqual({
+      sameSnapshot: true,
+      error: expectedValidation('event'),
+    })
   })
 
-  it('is strict for unknown events by default and supports open protocols', () => {
+  it('is strict for unknown events by default and supports open protocols', function*({ expect }) {
     const create = (unknownEvents?: 'error' | 'ignore') =>
       setup({
         validator: standardSchemaValidator({
@@ -283,22 +366,25 @@ describe('runtime schema validation', () => {
     const strictResult = transition(strict, strictSnapshot, {
       type: 'UNKNOWN',
     } as any)
-    expect(strictResult[0]).toBe(strictSnapshot)
-    expectValidationError(
-      getRejection(strictResult)!.detail!.error,
-      'event',
-      'unknownEvent',
-    )
 
     const open = create('ignore')
     const [openSnapshot] = initialTransition(open)
     const openResult = transition(open, openSnapshot, {
       type: 'UNKNOWN',
     } as any)
-    expect(getRejection(openResult)).toBeUndefined()
+
+    yield* expect({
+      strictSameSnapshot: strictResult[0] === strictSnapshot,
+      strictError: validationOf(getRejection(strictResult)!.detail!.error),
+      openRejection: getRejection(openResult),
+    }).toEqual({
+      strictSameSnapshot: true,
+      strictError: expectedValidation('event', 'unknownEvent'),
+      openRejection: undefined,
+    })
   })
 
-  it('validates stable root context after the macrostep', () => {
+  it('validates stable root context after the macrostep', function*({ expect }) {
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: {
@@ -313,14 +399,16 @@ describe('runtime schema validation', () => {
     })
     const [snapshot] = initialTransition(machine)
 
-    expectValidationError(
-      getThrown(() => transition(machine, snapshot, { type: 'BREAK' })),
-      'context',
-    )
+    const error = getThrown(() => transition(machine, snapshot, { type: 'BREAK' }))
+
+    yield* expect(validationOf(error)).toEqual(expectedValidation('context'))
   })
 
-  it('does not validate immediate raised events in v1', () => {
-    const raisedHandler = vi.fn()
+  it('does not validate immediate raised events in v1', function*({ expect }) {
+    const raisedCalls: boolean[] = []
+    const raisedHandler = () => {
+      raisedCalls.push(true)
+    }
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: {
@@ -341,11 +429,20 @@ describe('runtime schema validation', () => {
     })
     const [snapshot] = initialTransition(machine)
 
-    expect(() => transition(machine, snapshot, { type: 'GO' })).not.toThrow()
-    expect(raisedHandler).toHaveBeenCalledOnce()
+    const outcome = yield* Effect.exit(
+      Effect.sync(() => transition(machine, snapshot, { type: 'GO' })),
+    )
+
+    yield* expect({
+      outcome: outcome._tag,
+      raisedCalls,
+    }).toEqual({
+      outcome: 'Success',
+      raisedCalls: [true],
+    })
   })
 
-  it('validates delayed raised events retained by the stable snapshot', () => {
+  it('validates delayed raised events retained by the stable snapshot', function*({ expect }) {
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: { events: { LATER: z.object({ value: z.number() }) } },
@@ -356,12 +453,21 @@ describe('runtime schema validation', () => {
     })
 
     const error = getThrown(() => initialTransition(machine))
-    expectValidationError(error, 'event')
-    expect(error).toMatchObject({ eventOrigin: 'raised' })
+
+    yield* expect({
+      ...validationOf(error),
+      eventOrigin: eventOriginOf(error),
+    }).toEqual({
+      ...expectedValidation('event'),
+      eventOrigin: 'raised',
+    })
   })
 
-  it('validates emitted events before any effect executes', () => {
-    const action = vi.fn()
+  it('validates emitted events before any effect executes', function*({ expect }) {
+    const actionCalls: string[] = []
+    const action = () => {
+      actionCalls.push('action')
+    }
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: {
@@ -382,12 +488,18 @@ describe('runtime schema validation', () => {
     actor.start()
     actor.send({ type: 'GO' })
 
-    expect(actor.getSnapshot().status).toBe('error')
-    expectValidationError((actor.getSnapshot() as any).error, 'emitted')
-    expect(action).not.toHaveBeenCalled()
+    yield* expect({
+      status: actor.getSnapshot().status,
+      error: validationOf((actor.getSnapshot() as any).error),
+      actionCalls,
+    }).toEqual({
+      status: 'error',
+      error: expectedValidation('emitted'),
+      actionCalls: [],
+    })
   })
 
-  it('is strict for unknown emitted events and supports open protocols', () => {
+  it('is strict for unknown emitted events and supports open protocols', function*({ expect }) {
     const create = (unknownEmitted?: 'error' | 'ignore') =>
       setup({
         validator: standardSchemaValidator({
@@ -400,15 +512,21 @@ describe('runtime schema validation', () => {
         },
       })
 
-    expectValidationError(
-      getThrown(() => initialTransition(create())),
-      'emitted',
-      'unknownEmitted',
+    const strictError = getThrown(() => initialTransition(create()))
+    const ignoreOutcome = yield* Effect.exit(
+      Effect.sync(() => initialTransition(create('ignore'))),
     )
-    expect(() => initialTransition(create('ignore'))).not.toThrow()
+
+    yield* expect({
+      strictError: validationOf(strictError),
+      ignoreOutcome: ignoreOutcome._tag,
+    }).toEqual({
+      strictError: expectedValidation('emitted', 'unknownEmitted'),
+      ignoreOutcome: 'Success',
+    })
   })
 
-  it('surfaces boundary rejections through onRejectedEvent without erroring the actor', () => {
+  it('surfaces boundary rejections through onRejectedEvent without erroring the actor', function*({ expect }) {
     const inspection: any[] = []
     const rejections: EventRejection[] = []
     const machine = setup({
@@ -422,28 +540,34 @@ describe('runtime schema validation', () => {
     actor.start()
     actor.send({ type: 'GO', value: 'x' } as any)
 
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(rejections).toHaveLength(1)
-    const [rejected] = rejections
-    if (rejected === undefined) {
-      throw new Error('expected a rejected event')
-    }
-    expect(rejected).toMatchObject({
-      event: { type: 'GO', value: 'x' },
-      sourceRef: undefined,
-      reason: 'invalidEvent',
-    })
-    expectValidationError(rejected.error, 'event')
-    expect(
-      inspection.some(
+    yield* expect({
+      status: actor.getSnapshot().status,
+      rejections: rejections.map((rejection) => ({
+        event: rejection.event,
+        sourceRef: rejection.sourceRef,
+        reason: rejection.reason,
+        error: validationOf(rejection.error),
+      })),
+      erroringTransition: inspection.some(
         (event) =>
           event.type === '@xstate.transition' &&
           event.snapshot.status === 'error',
       ),
-    ).toBe(false)
+    }).toEqual({
+      status: 'active',
+      rejections: [
+        {
+          event: { type: 'GO', value: 'x' },
+          sourceRef: undefined,
+          reason: 'invalidEvent',
+          error: expectedValidation('event'),
+        },
+      ],
+      erroringTransition: false,
+    })
   })
 
-  it('does not expose rejected macrostep facets through inspection', () => {
+  it('does not expose rejected macrostep facets through inspection', function*({ expect }) {
     const inspection: any[] = []
     const machine = setup({
       validator: standardSchemaValidator(),
@@ -472,14 +596,24 @@ describe('runtime schema validation', () => {
         event.event.type === 'BREAK' &&
         event.snapshot.status === 'error',
     )
-    expect(failure).toBeDefined()
-    expectValidationError(failure.snapshot.error, 'context')
-    expect(failure.actions).toEqual([])
-    expect(failure.sent).toEqual([])
-    expect(failure.microsteps).toEqual([])
+    if (failure === undefined) {
+      throw new Error('expected a failed transition')
+    }
+
+    yield* expect({
+      error: validationOf(failure.snapshot.error),
+      actions: failure.actions,
+      sent: failure.sent,
+      microsteps: failure.microsteps,
+    }).toEqual({
+      error: expectedValidation('context'),
+      actions: [],
+      sent: [],
+      microsteps: [],
+    })
   })
 
-  it('allows active onError handlers to recover validation failures', () => {
+  it('allows active onError handlers to recover validation failures', function*({ expect }) {
     const inspection: any[] = []
     const machine = setup({
       validator: standardSchemaValidator(),
@@ -504,20 +638,28 @@ describe('runtime schema validation', () => {
 
     actor.send({ type: 'BREAK' })
 
-    expect(actor.getSnapshot()).toMatchObject({
-      status: 'active',
-      value: 'failed',
-    })
     const recovery = inspection.find(
       (event) =>
         event.type === '@xstate.transition' &&
         event.event.type === 'xstate.error.execution',
     )
-    expect(recovery).toBeDefined()
-    expectValidationError(recovery.event.error, 'context')
+    if (recovery === undefined) {
+      throw new Error('expected a recovery transition')
+    }
+
+    yield* expect({
+      snapshot: {
+        status: actor.getSnapshot().status,
+        value: actor.getSnapshot().value,
+      },
+      recoveryError: validationOf(recovery.event.error),
+    }).toEqual({
+      snapshot: { status: 'active', value: 'failed' },
+      recoveryError: expectedValidation('context'),
+    })
   })
 
-  it('allows root onError to recover initial result validation failures', () => {
+  it('allows root onError to recover initial result validation failures', function*({ expect }) {
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: { context: z.object({ count: z.number() }) },
@@ -536,14 +678,18 @@ describe('runtime schema validation', () => {
 
     const [snapshot] = initialTransition(machine)
 
-    expect(snapshot).toMatchObject({
+    yield* expect({
+      status: snapshot.status,
+      value: snapshot.value,
+      context: snapshot.context,
+    }).toEqual({
       status: 'active',
       value: 'recovered',
       context: { count: 0 },
     })
   })
 
-  it('validates final output before completion', () => {
+  it('validates final output before completion', function*({ expect }) {
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: {
@@ -559,13 +705,12 @@ describe('runtime schema validation', () => {
     })
     const [snapshot] = initialTransition(machine)
 
-    expectValidationError(
-      getThrown(() => transition(machine, snapshot, { type: 'FINISH' })),
-      'output',
-    )
+    const error = getThrown(() => transition(machine, snapshot, { type: 'FINISH' }))
+
+    yield* expect(validationOf(error)).toEqual(expectedValidation('output'))
   })
 
-  it('validates state input and state-local context in the stable snapshot', () => {
+  it('validates state input and state-local context in the stable snapshot', function*({ expect }) {
     const stateInputMachine = setup({
       validator: standardSchemaValidator(),
       schemas: { events: { GO: z.object({}) } },
@@ -582,10 +727,7 @@ describe('runtime schema validation', () => {
       },
     })
     const [inputSnapshot] = initialTransition(stateInputMachine)
-    expectValidationError(
-      getThrown(() => transition(stateInputMachine, inputSnapshot, { type: 'GO' })),
-      'state.input',
-    )
+    const inputError = getThrown(() => transition(stateInputMachine, inputSnapshot, { type: 'GO' }))
 
     const stateContextMachine = setup({
       validator: standardSchemaValidator(),
@@ -605,13 +747,18 @@ describe('runtime schema validation', () => {
       },
     })
     const [contextSnapshot] = initialTransition(stateContextMachine)
-    expectValidationError(
-      getThrown(() => transition(stateContextMachine, contextSnapshot, { type: 'GO' })),
-      'state.context',
-    )
+    const contextError = getThrown(() => transition(stateContextMachine, contextSnapshot, { type: 'GO' }))
+
+    yield* expect({
+      inputError: validationOf(inputError),
+      contextError: validationOf(contextError),
+    }).toEqual({
+      inputError: expectedValidation('state.input'),
+      contextError: expectedValidation('state.context'),
+    })
   })
 
-  it('validates root and partial state context schemas independently', () => {
+  it('validates root and partial state context schemas independently', function*({ expect }) {
     const createPartialContextMachine = (context: unknown) =>
       setup({
         validator: standardSchemaValidator(),
@@ -632,27 +779,36 @@ describe('runtime schema validation', () => {
         states: { reviewing: {} },
       })
 
-    expect(() =>
-      initialTransition(
-        createPartialContextMachine({ requestId: 'req-1', draft: 'Ready' }),
-      )
-    ).not.toThrow()
-    expectValidationError(
-      getThrown(() =>
+    const validOutcome = yield* Effect.exit(
+      Effect.sync(() =>
         initialTransition(
-          createPartialContextMachine({ requestId: 1, draft: 'Ready' }),
+          createPartialContextMachine({ requestId: 'req-1', draft: 'Ready' }),
         )
       ),
-      'context',
     )
-    expectValidationError(
-      getThrown(() => initialTransition(createPartialContextMachine({ requestId: 'req-1' }))),
-      'state.context',
+    const rootError = getThrown(() =>
+      initialTransition(
+        createPartialContextMachine({ requestId: 1, draft: 'Ready' }),
+      )
     )
+    const stateError = getThrown(() => initialTransition(createPartialContextMachine({ requestId: 'req-1' })))
+
+    yield* expect({
+      validOutcome: validOutcome._tag,
+      rootError: validationOf(rootError),
+      stateError: validationOf(stateError),
+    }).toEqual({
+      validOutcome: 'Success',
+      rootError: expectedValidation('context'),
+      stateError: expectedValidation('state.context'),
+    })
   })
 
-  it('does not validate named action and guard params in v1', () => {
-    const action = vi.fn()
+  it('does not validate named action and guard params in v1', function*({ expect }) {
+    const actionCalls: string[] = []
+    const action = (..._args: unknown[]) => {
+      actionCalls.push('action')
+    }
     const actionMachine = setup({
       validator: standardSchemaValidator(),
       schemas: {
@@ -669,9 +825,12 @@ describe('runtime schema validation', () => {
     })
     const actionActor = createActor(actionMachine).start()
     actionActor.send({ type: 'GO' })
-    expect(action).toHaveBeenCalledOnce()
 
-    const guard = vi.fn(() => true)
+    const guardCalls: boolean[] = []
+    const guard = () => {
+      guardCalls.push(true)
+      return true
+    }
     const guardMachine = setup({
       validator: standardSchemaValidator(),
       schemas: {
@@ -690,11 +849,22 @@ describe('runtime schema validation', () => {
       },
     })
     const [guardSnapshot] = initialTransition(guardMachine)
-    expect(() => transition(guardMachine, guardSnapshot, { type: 'GO' })).not.toThrow()
-    expect(guard).toHaveBeenCalled()
+    const guardOutcome = yield* Effect.exit(
+      Effect.sync(() => transition(guardMachine, guardSnapshot, { type: 'GO' })),
+    )
+
+    yield* expect({
+      actionCalls,
+      guardOutcome: guardOutcome._tag,
+      guardCalls,
+    }).toEqual({
+      actionCalls: ['action'],
+      guardOutcome: 'Success',
+      guardCalls: [true],
+    })
   })
 
-  it('validates declared child slots', () => {
+  it('validates declared child slots', function*({ expect }) {
     const child = createMachine({})
     const machine = setup({
       validator: standardSchemaValidator(),
@@ -706,28 +876,24 @@ describe('runtime schema validation', () => {
       actors: { worker: child },
     }).createMachine({ invoke: { id: 'worker', src: 'worker' } })
 
-    expectValidationError(
-      getThrown(() => initialTransition(machine)),
-      'child',
-    )
+    const error = getThrown(() => initialTransition(machine))
+
+    yield* expect(validationOf(error)).toEqual(expectedValidation('child'))
   })
 
-  it('rejects async schemas and permits type-only schemas', async () => {
+  it('rejects async schemas and permits type-only schemas', function*({ expect }) {
     const asyncMachine = setup({
       validator: standardSchemaValidator(),
       schemas: {
         events: {
-          GO: z.object({}).refine(async () => true),
+          GO: z.object({}).refine(() => Promise.resolve(true)),
         },
       },
     }).createMachine({})
     const [snapshot] = initialTransition(asyncMachine)
-    expectValidationError(
-      getRejection(transition(asyncMachine, snapshot, { type: 'GO' }))!.detail!
-        .error,
-      'event',
-      'asyncValidationUnsupported',
-    )
+    const asyncError = getRejection(
+      transition(asyncMachine, snapshot, { type: 'GO' }),
+    )!.detail!.error
 
     const rejectingSchema = {
       '~standard': {
@@ -741,25 +907,34 @@ describe('runtime schema validation', () => {
       schemas: { events: { GO: rejectingSchema } },
     }).createMachine({})
     const [rejectingSnapshot] = initialTransition(rejectingMachine)
-    expectValidationError(
-      getRejection(
-        transition(rejectingMachine, rejectingSnapshot, { type: 'GO' }),
-      )!.detail!.error,
-      'event',
-      'asyncValidationUnsupported',
-    )
-    await Promise.resolve()
+    const rejectingError = getRejection(
+      transition(rejectingMachine, rejectingSnapshot, { type: 'GO' }),
+    )!.detail!.error
+
+    yield* Effect.promise(() => Promise.resolve())
 
     const typeOnlyMachine = setup({
       validator: standardSchemaValidator(),
       schemas: { events: { GO: types<{ value: number }>() } },
     }).createMachine({})
     const [typeOnlySnapshot] = initialTransition(typeOnlyMachine)
-    expect(() =>
-      transition(typeOnlyMachine, typeOnlySnapshot, {
-        type: 'GO',
-        value: 'not checked',
-      } as any)
-    ).not.toThrow()
+    const typeOnlyOutcome = yield* Effect.exit(
+      Effect.sync(() =>
+        transition(typeOnlyMachine, typeOnlySnapshot, {
+          type: 'GO',
+          value: 'not checked',
+        } as any)
+      ),
+    )
+
+    yield* expect({
+      asyncError: validationOf(asyncError),
+      rejectingError: validationOf(rejectingError),
+      typeOnlyOutcome: typeOnlyOutcome._tag,
+    }).toEqual({
+      asyncError: expectedValidation('event', 'asyncValidationUnsupported'),
+      rejectingError: expectedValidation('event', 'asyncValidationUnsupported'),
+      typeOnlyOutcome: 'Success',
+    })
   })
 })

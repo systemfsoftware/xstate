@@ -1,12 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createCallbackLogic } from '../src/actors/callback.js'
 import { createActor, createMachine } from '../src/index.js'
 
 const exampleMachine = createMachine({
-  // types: {} as {
-  //   events: Events;
-  // },
   schemas: {
     events: {
       BAR_EVENT: z.object({}),
@@ -35,9 +32,7 @@ const exampleMachine = createMachine({
           reenter: true,
         },
         INERT: {},
-        INTERNAL: {
-          // actions: ['doSomething']
-        },
+        INTERNAL: {},
         TO_TWO: { target: 'two' },
         TO_TWO_MAYBE: () => {
           if (true) {
@@ -107,66 +102,74 @@ const exampleMachine = createMachine({
 })
 
 describe('State', () => {
-  it('should expose active state nodes as nodes', () => {
+  it('should expose active state nodes as nodes', function*({ expect }) {
     const snapshot = createActor(exampleMachine).getSnapshot()
 
-    expect(snapshot.nodes.map((node) => node.id)).toEqual([
-      '(machine)',
-      '(machine).one',
-    ])
-    expect('_nodes' in snapshot).toBe(false)
+    yield* expect({
+      nodeIds: snapshot.nodes.map((node) => node.id),
+      hasNodesKey: '_nodes' in snapshot,
+    }).toEqual({
+      nodeIds: ['(machine)', '(machine).one'],
+      hasNodesKey: false,
+    })
   })
 
   describe('status', () => {
-    it('should show that a machine has not reached its final state', () => {
-      expect(createActor(exampleMachine).getSnapshot().status).not.toBe('done')
+    it('should show that a machine has not reached its final state', function*({ expect }) {
+      yield* expect(createActor(exampleMachine).getSnapshot().status).not.toBe('done')
     })
 
-    it('should show that a machine has reached its final state', () => {
+    it('should show that a machine has reached its final state', function*({ expect }) {
       const actorRef = createActor(exampleMachine).start()
       actorRef.send({ type: 'TO_FINAL' })
-      expect(actorRef.getSnapshot().status).toBe('done')
+      yield* expect(actorRef.getSnapshot().status).toBe('done')
     })
   })
 
   describe('.can', () => {
-    it('should return true for a simple event that results in a transition to a different state', () => {
-      const machine = createMachine({
-        initial: 'a',
-        states: {
-          a: {
-            on: {
-              NEXT: { target: 'b' },
+    it(
+      'should return true for a simple event that results in a transition to a different state',
+      function*({ expect }) {
+        const machine = createMachine({
+          initial: 'a',
+          states: {
+            a: {
+              on: {
+                NEXT: { target: 'b' },
+              },
             },
+            b: {},
           },
-          b: {},
-        },
-      })
+        })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'NEXT' })).toBe(
-        true,
-      )
-    })
+        yield* expect({
+          can: createActor(machine).getSnapshot().can({ type: 'NEXT' }),
+        }).toEqual({ can: true })
+      },
+    )
 
-    it('should return true for an event object that results in a transition to a different state', () => {
-      const machine = createMachine({
-        initial: 'a',
-        states: {
-          a: {
-            on: {
-              NEXT: { target: 'b' },
+    it(
+      'should return true for an event object that results in a transition to a different state',
+      function*({ expect }) {
+        const machine = createMachine({
+          initial: 'a',
+          states: {
+            a: {
+              on: {
+                NEXT: { target: 'b' },
+              },
             },
+            b: {},
           },
-          b: {},
-        },
-      })
+        })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'NEXT' })).toBe(
-        true,
-      )
-    })
+        yield* expect({
+          can: createActor(machine).getSnapshot().can({ type: 'NEXT' }),
+        }).toEqual({ can: true })
+      },
+    )
 
-    it('should return true for an event object that results in a new action', () => {
+    it('should return true for an event object that results in a new action', function*({ expect }) {
       const newAction = () => {}
       const machine = createMachine({
         initial: 'a',
@@ -181,12 +184,12 @@ describe('State', () => {
         },
       })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'NEXT' })).toBe(
-        true,
-      )
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({ type: 'NEXT' }),
+      }).toEqual({ can: true })
     })
 
-    it('should return true for an event object that results in a context change', () => {
+    it('should return true for an event object that results in a context change', function*({ expect }) {
       const machine = createMachine({
         schemas: {
           context: z.object({
@@ -210,12 +213,12 @@ describe('State', () => {
         },
       })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'NEXT' })).toBe(
-        true,
-      )
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({ type: 'NEXT' }),
+      }).toEqual({ can: true })
     })
 
-    it('should return true for a reentering self-transition without actions', () => {
+    it('should return true for a reentering self-transition without actions', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -227,10 +230,12 @@ describe('State', () => {
         },
       })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'EV' })).toBe(true)
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({ type: 'EV' }),
+      }).toEqual({ can: true })
     })
 
-    it('should return true for a reentering self-transition with reentry action', () => {
+    it('should return true for a reentering self-transition with reentry action', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -243,10 +248,12 @@ describe('State', () => {
         },
       })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'EV' })).toBe(true)
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({ type: 'EV' }),
+      }).toEqual({ can: true })
     })
 
-    it('should return true for a reentering self-transition with transition action', () => {
+    it('should return true for a reentering self-transition with transition action', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -261,10 +268,12 @@ describe('State', () => {
         },
       })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'EV' })).toBe(true)
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({ type: 'EV' }),
+      }).toEqual({ can: true })
     })
 
-    it('should return true for a targetless transition with actions', () => {
+    it('should return true for a targetless transition with actions', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -278,10 +287,12 @@ describe('State', () => {
         },
       })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'EV' })).toBe(true)
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({ type: 'EV' }),
+      }).toEqual({ can: true })
     })
 
-    it('should return false for a forbidden transition', () => {
+    it('should return false for a forbidden transition', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -293,12 +304,12 @@ describe('State', () => {
         },
       })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'EV' })).toBe(
-        false,
-      )
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({ type: 'EV' }),
+      }).toEqual({ can: false })
     })
 
-    it('should return false for an unknown event', () => {
+    it('should return false for an unknown event', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -311,12 +322,12 @@ describe('State', () => {
         },
       })
 
-      expect(createActor(machine).getSnapshot().can({ type: 'UNKNOWN' })).toBe(
-        false,
-      )
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({ type: 'UNKNOWN' }),
+      }).toEqual({ can: false })
     })
 
-    it('should return true when a guarded transition allows the transition', () => {
+    it('should return true when a guarded transition allows the transition', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -333,14 +344,14 @@ describe('State', () => {
         },
       })
 
-      expect(
-        createActor(machine).getSnapshot().can({
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({
           type: 'CHECK',
         }),
-      ).toBe(true)
+      }).toEqual({ can: true })
     })
 
-    it('should return false when a guarded transition disallows the transition', () => {
+    it('should return false when a guarded transition disallows the transition', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -358,14 +369,14 @@ describe('State', () => {
         },
       })
 
-      expect(
-        createActor(machine).getSnapshot().can({
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({
           type: 'CHECK',
         }),
-      ).toBe(false)
+      }).toEqual({ can: false })
     })
 
-    it('should not spawn actors when determining if an event is accepted', () => {
+    it('should not spawn actors when determining if an event is accepted', function*({ expect }) {
       let spawned = false
       const machine = createMachine({
         schemas: {
@@ -397,10 +408,11 @@ describe('State', () => {
 
       const service = createActor(machine).start()
       service.getSnapshot().can({ type: 'SPAWN' })
-      expect(spawned).toBe(false)
+
+      yield* expect({ spawned }).toEqual({ spawned: false })
     })
 
-    it('should not execute actions when used with non-started actor', () => {
+    it('should not execute actions when used with non-started actor', function*({ expect }) {
       let executed = false
       const machine = createMachine({
         on: {
@@ -412,12 +424,13 @@ describe('State', () => {
 
       const actorRef = createActor(machine)
 
-      expect(actorRef.getSnapshot().can({ type: 'EVENT' })).toBeTruthy()
-
-      expect(executed).toBeFalsy()
+      yield* expect({
+        can: actorRef.getSnapshot().can({ type: 'EVENT' }),
+        executed,
+      }).toEqual({ can: true, executed: false })
     })
 
-    it('should not execute actions when used with started actor', () => {
+    it('should not execute actions when used with started actor', function*({ expect }) {
       let executed = false
       const machine = createMachine({
         on: {
@@ -429,12 +442,13 @@ describe('State', () => {
 
       const actorRef = createActor(machine).start()
 
-      expect(actorRef.getSnapshot().can({ type: 'EVENT' })).toBeTruthy()
-
-      expect(executed).toBeFalsy()
+      yield* expect({
+        can: actorRef.getSnapshot().can({ type: 'EVENT' }),
+        executed,
+      }).toEqual({ can: true, executed: false })
     })
 
-    it('should return true when non-first parallel region changes value', () => {
+    it('should return true when non-first parallel region changes value', function*({ expect }) {
       const machine = createMachine({
         type: 'parallel',
         states: {
@@ -444,7 +458,6 @@ describe('State', () => {
               a1: {
                 id: 'foo',
                 on: {
-                  // first region doesn't change value here
                   EVENT: { target: ['#foo', '#bar'] },
                 },
               },
@@ -462,43 +475,48 @@ describe('State', () => {
         },
       })
 
-      expect(
-        createActor(machine).getSnapshot().can({ type: 'EVENT' }),
-      ).toBeTruthy()
+      yield* expect({
+        can: createActor(machine).getSnapshot().can({ type: 'EVENT' }),
+      }).toEqual({ can: true })
     })
 
-    it('should return true when transition targets a state that is already part of the current configuration but the final state value changes', () => {
-      const machine = createMachine({
-        initial: 'a',
-        states: {
-          a: {
-            id: 'foo',
-            initial: 'a1',
-            states: {
-              a1: {
-                on: {
-                  NEXT: { target: 'a2' },
+    it(
+      'should return true when transition targets a state that is already part of the current configuration but the final state value changes',
+      function*({ expect }) {
+        const machine = createMachine({
+          initial: 'a',
+          states: {
+            a: {
+              id: 'foo',
+              initial: 'a1',
+              states: {
+                a1: {
+                  on: {
+                    NEXT: { target: 'a2' },
+                  },
                 },
-              },
-              a2: {
-                on: {
-                  NEXT: { target: '#foo' },
+                a2: {
+                  on: {
+                    NEXT: { target: '#foo' },
+                  },
                 },
               },
             },
           },
-        },
-      })
+        })
 
-      const actorRef = createActor(machine).start()
-      actorRef.send({ type: 'NEXT' })
+        const actorRef = createActor(machine).start()
+        actorRef.send({ type: 'NEXT' })
 
-      expect(actorRef.getSnapshot().can({ type: 'NEXT' })).toBeTruthy()
-    })
+        yield* expect({
+          can: actorRef.getSnapshot().can({ type: 'NEXT' }),
+        }).toEqual({ can: true })
+      },
+    )
   })
 
   describe('.hasTag', () => {
-    it('should be able to check a tag after recreating a persisted state', () => {
+    it('should be able to check a tag after recreating a persisted state', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -515,24 +533,26 @@ describe('State', () => {
         snapshot: persistedState,
       }).getSnapshot()
 
-      expect(restoredSnapshot.hasTag('foo')).toBe(true)
+      yield* expect({ hasTag: restoredSnapshot.hasTag('foo') }).toEqual({
+        hasTag: true,
+      })
     })
   })
 
   describe('.status', () => {
-    it("should be 'stopped' after a running actor gets stopped", () => {
+    it("should be 'stopped' after a running actor gets stopped", function*({ expect }) {
       const snapshot = createActor(createMachine({}))
         .start()
         .stop()
         .getSnapshot()
-      expect(snapshot.status).toBe('stopped')
+      yield* expect(snapshot.status).toBe('stopped')
     })
   })
 })
 
 it.each(['__proto__', 'constructor', 'toString'])(
   'transitions from a state named %s in a JSON config',
-  (key) => {
+  function*(key, { expect }) {
     const machine = createMachine(
       JSON.parse(
         JSON.stringify({
@@ -542,12 +562,21 @@ it.each(['__proto__', 'constructor', 'toString'])(
       ),
     )
     const actor = createActor(machine)
-    const error = vi.fn()
-    actor.subscribe({ error })
+    const errors: Array<unknown> = []
+    actor.subscribe({
+      error: (error) => {
+        errors.push(error)
+      },
+    })
     actor.start()
-    expect(Object.hasOwn(machine.root.states, key)).toBe(true)
+    const hasOwnState = Object.hasOwn(machine.root.states, key)
     actor.send({ type: 'GO' })
-    expect(actor.getSnapshot().status).toBe('done')
-    expect(error).not.toHaveBeenCalled()
+    const status = actor.getSnapshot().status
+
+    yield* expect({ hasOwnState, status, errors }).toEqual({
+      hasOwnState: true,
+      status: 'done',
+      errors: [],
+    })
   },
 )

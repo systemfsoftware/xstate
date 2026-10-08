@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 /**
  * Serializability conformance (see V6_REVIEW.md §3.4).
  *
@@ -41,7 +42,7 @@ function findCodeExpressions(json: unknown, path = '$'): string[] {
 }
 
 describe('serializability conformance', () => {
-  it('a fully-serializable definition round-trips losslessly', () => {
+  it('a fully-serializable definition round-trips losslessly', function*({ expect }) {
     const definition = {
       initial: 'idle',
       version: '1.0.0',
@@ -74,7 +75,7 @@ describe('serializability conformance', () => {
     const sources = {
       actors: {
         worker: createAsyncLogic({
-          run: async () => undefined,
+          run: () => Promise.resolve(undefined),
         }),
       },
       guards: {
@@ -84,17 +85,21 @@ describe('serializability conformance', () => {
     const machine = createMachineFromConfig(definition as any, sources)
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
 
-    expect(json).toEqual(definition)
-    expect(findCodeExpressions(json)).toEqual([])
-
-    // Revive and serialize again: byte-stable.
     const revived = createMachineFromConfig(json, sources)
-    expect(JSON.stringify(serializeMachine(revived))).toBe(
-      JSON.stringify(serializeMachine(machine)),
-    )
+
+    yield* expect({
+      json,
+      codeExpressions: findCodeExpressions(json),
+      revivedMatchesMachine: JSON.stringify(serializeMachine(revived)) ===
+        JSON.stringify(serializeMachine(machine)),
+    }).toEqual({
+      json: definition,
+      codeExpressions: [],
+      revivedMatchesMachine: true,
+    })
   })
 
-  it('JSON.stringify never throws on an inline-authored machine', () => {
+  it('JSON.stringify never throws on an inline-authored machine', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({ count: z.number() }),
@@ -117,10 +122,14 @@ describe('serializability conformance', () => {
       },
     })
 
-    expect(() => JSON.stringify(serializeMachine(machine))).not.toThrow()
+    const outcome = yield* Effect.exit(
+      Effect.sync(() => JSON.stringify(serializeMachine(machine))),
+    )
+
+    yield* expect(outcome._tag).toEqual('Success')
   })
 
-  it('setup/createMachine root sources are omitted', () => {
+  it('setup/createMachine root sources are omitted', function*({ expect }) {
     function track() {}
     function isReady() {
       return true
@@ -165,26 +174,32 @@ describe('serializability conformance', () => {
 
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
 
-    expect(json.actions).toBeUndefined()
-    expect(json.guards).toBeUndefined()
-    expect(json.delays).toBeUndefined()
-    // The `@code` text is the function's runtime source, which the consumer's bundler printed.
-    expect(json.states.idle).toEqual({
-      after: {
-        shortDelay: {
-          '@code':
-            '({ guards }) => {\n\t\t\t\t\t\tif (guards.isReady()) {\n\t\t\t\t\t\t\treturn { target: "done" };\n\t\t\t\t\t\t};\n\t\t\t\t\t\treturn undefined;\n\t\t\t\t\t}',
+    yield* expect({
+      actions: json.actions,
+      guards: json.guards,
+      delays: json.delays,
+      idle: json.states.idle,
+    }).toEqual({
+      actions: undefined,
+      guards: undefined,
+      delays: undefined,
+      idle: {
+        after: {
+          shortDelay: {
+            '@code':
+              '({ guards }) => {\n\t\t\t\t\t\tif (guards.isReady()) {\n\t\t\t\t\t\t\treturn { target: "done" };\n\t\t\t\t\t\t};\n\t\t\t\t\t\treturn undefined;\n\t\t\t\t\t}',
+            '@lang': 'ts',
+          },
+        },
+        entry: {
+          '@code': '({ actions }, enq) => {\n\t\t\t\t\t\tenq(actions.track);\n\t\t\t\t\t}',
           '@lang': 'ts',
         },
-      },
-      entry: {
-        '@code': '({ actions }, enq) => {\n\t\t\t\t\t\tenq(actions.track);\n\t\t\t\t\t}',
-        '@lang': 'ts',
       },
     })
   })
 
-  it('inline guards/actions serialize to code directives', () => {
+  it('inline guards/actions serialize to code directives', function*({ expect }) {
     const entry = (_: any) => undefined
     const guard = ({ context }: any) => context.ok
     const transition = (args: any, enq: any) => {
@@ -211,8 +226,7 @@ describe('serializability conformance', () => {
 
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
 
-    // The `@code` text is the function's runtime source, which the consumer's bundler printed.
-    expect(json.states.a).toEqual({
+    yield* expect(json.states.a).toEqual({
       entry: { '@code': '(_) => undefined', '@lang': 'ts' },
       on: {
         GO: {
@@ -224,9 +238,9 @@ describe('serializability conformance', () => {
     })
   })
 
-  it('actors and schemas are omitted instead of marked', () => {
+  it('actors and schemas are omitted instead of marked', function*({ expect }) {
     const worker = createAsyncLogic({
-      run: async () => undefined,
+      run: () => Promise.resolve(undefined),
     })
     const machine = createMachine({
       context: { ok: true },
@@ -255,36 +269,28 @@ describe('serializability conformance', () => {
 
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
 
-    expect(findCodeExpressions(json)).toEqual([])
-    expect(json.actors).toBeUndefined()
-    expect(json.schemas.context).toBeUndefined()
-    expect(json.schemas.events.GO).toBeUndefined()
-    expect(json.states.a.invoke).toBeUndefined()
-    // Structure survives.
-    expect(json).toMatchInlineSnapshot(`
-      {
-        "context": {
-          "ok": true,
-        },
-        "initial": "a",
-        "schemas": {
-          "events": {},
-        },
-        "states": {
-          "a": {
-            "on": {
-              "GO": {
-                "target": "b",
-              },
+    yield* expect(json).toEqual({
+      context: {
+        ok: true,
+      },
+      initial: 'a',
+      schemas: {
+        events: {},
+      },
+      states: {
+        a: {
+          on: {
+            GO: {
+              target: 'b',
             },
           },
-          "b": {},
         },
-      }
-    `)
+        b: {},
+      },
+    })
   })
 
-  it('drops nonportable values from objects and arrays', () => {
+  it('drops nonportable values from objects and arrays', function*({ expect }) {
     const machine = createMachine({
       context: {
         kept: 'value',
@@ -300,26 +306,30 @@ describe('serializability conformance', () => {
     const directJSON = serializeMachine(machine)
     const json = JSON.parse(JSON.stringify(directJSON))
 
-    expect((directJSON as any).context.dropped).toBeUndefined()
-    expect((directJSON as any).context).not.toHaveProperty('dropped')
-    expect(json).toMatchInlineSnapshot(`
-      {
-        "context": {
-          "kept": "value",
-          "list": [
-            "a",
-            "b",
+    yield* expect({
+      dropped: (directJSON as any).context.dropped,
+      contextKeys: Object.keys((directJSON as any).context),
+      json,
+    }).toEqual({
+      dropped: undefined,
+      contextKeys: ['kept', 'list'],
+      json: {
+        context: {
+          kept: 'value',
+          list: [
+            'a',
+            'b',
           ],
         },
-        "initial": "idle",
-        "states": {
-          "idle": {},
+        initial: 'idle',
+        states: {
+          idle: {},
         },
-      }
-    `)
+      },
+    })
   })
 
-  it('serializable structure survives even when sources do not', () => {
+  it('serializable structure survives even when sources do not', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
@@ -334,30 +344,28 @@ describe('serializability conformance', () => {
 
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
 
-    expect(json).toMatchInlineSnapshot(`
-      {
-        "initial": "idle",
-        "states": {
-          "expired": {
-            "type": "final",
-          },
-          "idle": {
-            "on": {
-              "NEXT": {
-                "target": "expired",
-              },
-            },
-            "onTimeout": {
-              "target": "expired",
-            },
-            "timeout": "5s",
-          },
+    yield* expect(json).toEqual({
+      initial: 'idle',
+      states: {
+        expired: {
+          type: 'final',
         },
-      }
-    `)
+        idle: {
+          on: {
+            NEXT: {
+              target: 'expired',
+            },
+          },
+          onTimeout: {
+            target: 'expired',
+          },
+          timeout: '5s',
+        },
+      },
+    })
   })
 
-  it('internal event names survive and stay internal after revival', () => {
+  it('internal event names survive and stay internal after revival', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         internalEvents: { tick: types<{}>() },
@@ -382,55 +390,78 @@ describe('serializability conformance', () => {
     })
 
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
-    expect(json.internalEvents).toEqual(['tick'])
 
     const revived = createMachineFromConfig(json, {
       evaluators: {
         ts: ({ source, scope }: any) => Function(`return (${source});`)()(scope, scope.enq),
       },
     })
-    expect(serializeMachine(revived)).toEqual(json)
 
-    // a stray top-level `internalEvents` config key (removed author API) is
-    // not serialized
     const stray = _createMachineFromCompiledConfig({
       internalEvents: ['stray'],
       schemas: { internalEvents: { tick: types<{}>() } },
       initial: 'idle',
       states: { idle: {} },
     })
-    expect(serializeMachine(stray)['internalEvents']).toEqual(['tick'])
-    expect(
-      serializeMachine(
-        _createMachineFromCompiledConfig({
-          internalEvents: ['stray'],
-          initial: 'idle',
-          states: { idle: {} },
-        }),
-      ),
-    ).not.toHaveProperty('internalEvents')
 
-    for (const logic of [machine, revived] as AnyStateMachine[]) {
+    const strictStray = serializeMachine(
+      _createMachineFromCompiledConfig({
+        internalEvents: ['stray'],
+        initial: 'idle',
+        states: { idle: {} },
+      }),
+    )
+
+    const observations = [machine, revived] as AnyStateMachine[]
+
+    const runs = observations.map((logic) => {
       const rejections: EventRejection[] = []
       const actor = createActor(logic, {
         onRejectedEvent: (rejection) => rejections.push(rejection),
       }).start()
 
-      // external senders are rejected
       actor.send({ type: 'tick' })
-      expect(actor.getSnapshot().value).toBe('idle')
-      expect(rejections.map((r) => [r.event.type, r.reason])).toEqual([
-        ['tick', 'internalEvent'],
-      ])
+      const afterTick = actor.getSnapshot().value
+      const afterTickRejections = rejections.map((r) => [r.event.type, r.reason])
 
-      // raised internal events are accepted
       actor.send({ type: 'start' })
-      expect(actor.getSnapshot().value).toBe('done')
-      expect(rejections).toHaveLength(1)
-    }
+      return {
+        afterTick,
+        afterTickRejections,
+        afterStart: actor.getSnapshot().value,
+        rejectionCount: rejections.length,
+      }
+    })
+
+    yield* expect({
+      internalEvents: json.internalEvents,
+      revivedMatchesJson: JSON.stringify(serializeMachine(revived)) === JSON.stringify(json),
+      strayInternalEvents: serializeMachine(stray)['internalEvents'],
+      strictStrayKeys: Object.keys(strictStray),
+      runs,
+    }).toEqual({
+      internalEvents: ['tick'],
+      revivedMatchesJson: true,
+      strayInternalEvents: ['tick'],
+      strictStrayKeys: ['initial', 'states'],
+      runs: [
+        {
+          afterTick: 'idle',
+          afterTickRejections: [['tick', 'internalEvent']],
+          afterStart: 'done',
+          rejectionCount: 1,
+        },
+        {
+          afterTick: 'idle',
+          afterTickRejections: [['tick', 'internalEvent']],
+          afterStart: 'done',
+          rejectionCount: 1,
+        },
+      ],
+    })
   })
 
-  it('JSON-safe unknown data is preserved', () => {
+  it('JSON-safe unknown data is preserved', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       customData: {
@@ -449,30 +480,28 @@ describe('serializability conformance', () => {
 
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
 
-    expect(json).toMatchInlineSnapshot(`
-      {
-        "customData": {
-          "label": "Portable",
-          "values": [
-            1,
-            true,
-            null,
-          ],
-        },
-        "initial": "idle",
-        "states": {
-          "idle": {
-            "x-viz": {
-              "x": 10,
-              "y": 20,
-            },
+    yield* expect(json).toEqual({
+      customData: {
+        label: 'Portable',
+        values: [
+          1,
+          true,
+          null,
+        ],
+      },
+      initial: 'idle',
+      states: {
+        idle: {
+          'x-viz': {
+            x: 10,
+            y: 20,
           },
         },
-      }
-    `)
+      },
+    })
   })
 
-  it('revived machines run: structure + provided sources', () => {
+  it('revived machines run: structure + provided sources', function*({ expect }) {
     const definition = JSON.parse(
       JSON.stringify(
         serializeMachine(
@@ -490,6 +519,7 @@ describe('serializability conformance', () => {
     const machine = createMachineFromConfig(definition)
     const actor = createActor(machine).start()
     actor.send({ type: 'toggle' })
-    expect(actor.getSnapshot().value).toBe('active')
+
+    yield* expect(actor.getSnapshot().value).toBe('active')
   })
 })

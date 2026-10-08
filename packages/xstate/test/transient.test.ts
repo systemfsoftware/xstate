@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createActor, createMachine, matchesState } from '../src/index.js'
 
 const greetingContext = { hour: 10 }
 const greetingMachine = createMachine({
-  // types: {} as { context: typeof greetingContext },
   schemas: {
     context: z.object({
       hour: z.number(),
@@ -39,10 +38,9 @@ const greetingMachine = createMachine({
   },
 })
 
-describe('transient states (eventless transitions)', () => {
-  it('should choose the first candidate target that matches the guard 1', () => {
+describe('transient states (eventless transitions)', (it) => {
+  it('should choose the first candidate target that matches the guard 1', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { data: boolean } },
       schemas: {
         context: z.object({
           data: z.boolean(),
@@ -71,12 +69,11 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'UPDATE_BUTTON_CLICKED' })
 
-    expect(actorRef.getSnapshot().value).toEqual('D')
+    yield* expect(actorRef.getSnapshot().value).toEqual('D')
   })
 
-  it('should choose the first candidate target that matches the guard 2', () => {
+  it('should choose the first candidate target that matches the guard 2', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { data: boolean; status?: string } },
       schemas: {
         context: z.object({
           data: z.boolean(),
@@ -106,12 +103,11 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'UPDATE_BUTTON_CLICKED' })
 
-    expect(actorRef.getSnapshot().value).toEqual('D')
+    yield* expect(actorRef.getSnapshot().value).toEqual('D')
   })
 
-  it('should choose the final candidate without a guard if none others match', () => {
+  it('should choose the final candidate without a guard if none others match', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { data: boolean; status?: string } },
       schemas: {
         context: z.object({
           data: z.boolean(),
@@ -140,10 +136,10 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'UPDATE_BUTTON_CLICKED' })
 
-    expect(actorRef.getSnapshot().value).toEqual('F')
+    yield* expect(actorRef.getSnapshot().value).toEqual('F')
   })
 
-  it('should carry actions from previous transitions within same step', () => {
+  it('should carry actions from previous transitions within same step', function*({ expect }) {
     const actual: string[] = []
     const machine = createMachine({
       initial: 'A',
@@ -174,10 +170,10 @@ describe('transient states (eventless transitions)', () => {
 
     actor.send({ type: 'TIMER' })
 
-    expect(actual).toEqual(['exit_A', 'timer', 'enter_B'])
+    yield* expect(actual).toEqual(['exit_A', 'timer', 'enter_B'])
   })
 
-  it('should execute all internal events one after the other', () => {
+  it('should execute all internal events one after the other', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -241,10 +237,10 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'E' })
 
-    expect(actorRef.getSnapshot().value).toEqual({ A: 'A2', B: 'B2', C: 'C4' })
+    yield* expect(actorRef.getSnapshot().value).toEqual({ A: 'A2', B: 'B2', C: 'C4' })
   })
 
-  it('should execute all eventless transitions in the same microstep', () => {
+  it('should execute all eventless transitions in the same microstep', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -253,7 +249,7 @@ describe('transient states (eventless transitions)', () => {
           states: {
             A1: {
               on: {
-                E: { target: 'A2' }, // the external event
+                E: { target: 'A2' },
               },
             },
             A2: {
@@ -304,10 +300,10 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'E' })
 
-    expect(actorRef.getSnapshot().value).toEqual({ A: 'A4', B: 'B4' })
+    yield* expect(actorRef.getSnapshot().value).toEqual({ A: 'A4', B: 'B4' })
   })
 
-  it('should check for automatic transitions even after microsteps are done', () => {
+  it('should check for automatic transitions even after microsteps are done', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -356,24 +352,29 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'A' })
 
-    expect(actorRef.getSnapshot().value).toEqual({ A: 'A2', B: 'B2', C: 'C2' })
+    yield* expect(actorRef.getSnapshot().value).toEqual({ A: 'A2', B: 'B2', C: 'C2' })
   })
 
-  it('should determine the resolved initial state from the transient state', () => {
-    expect(createActor(greetingMachine).getSnapshot().value).toEqual('morning')
+  it('should determine the resolved initial state from the transient state', function*({ expect }) {
+    yield* expect(createActor(greetingMachine).getSnapshot().value).toEqual('morning')
   })
 
-  it('should determine the resolved state from an initial transient state', () => {
+  it('should determine the resolved state from an initial transient state', function*({ expect }) {
     const actorRef = createActor(greetingMachine).start()
 
     actorRef.send({ type: 'CHANGE' })
-    expect(actorRef.getSnapshot().value).toEqual('morning')
+    const afterChange = actorRef.getSnapshot().value
 
     actorRef.send({ type: 'RECHECK' })
-    expect(actorRef.getSnapshot().value).toEqual('evening')
+    const afterRecheck = actorRef.getSnapshot().value
+
+    yield* expect({ afterChange, afterRecheck }).toEqual({
+      afterChange: 'morning',
+      afterRecheck: 'evening',
+    })
   })
 
-  it('should select eventless transition before processing raised events', () => {
+  it('should select eventless transition before processing raised events', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -404,10 +405,10 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'FOO' })
 
-    expect(actorRef.getSnapshot().value).toBe('e')
+    yield* expect(actorRef.getSnapshot().value).toBe('e')
   })
 
-  it('should not select wildcard for eventless transition', () => {
+  it('should not select wildcard for eventless transition', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -428,12 +429,11 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'FOO' })
 
-    expect(actorRef.getSnapshot().value).toBe('pass')
+    yield* expect(actorRef.getSnapshot().value).toBe('pass')
   })
 
-  it('should work with transient transition on root', () => {
+  it('should work with transient transition on root', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { count: number } },
       schemas: {
         context: z.object({
           count: z.number(),
@@ -468,65 +468,69 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'ADD' })
 
-    expect(actorRef.getSnapshot().status).toBe('done')
+    yield* expect(actorRef.getSnapshot().status).toBe('done')
   })
 
-  it("shouldn't crash when invoking a machine with initial transient transition depending on custom data", () => {
-    const timerMachine = createMachine({
-      initial: 'initial',
-      schemas: {
-        context: z.object({
-          duration: z.number(),
+  it(
+    "shouldn't crash when invoking a machine with initial transient transition depending on custom data",
+    function*({ expect }) {
+      const timerMachine = createMachine({
+        initial: 'initial',
+        schemas: {
+          context: z.object({
+            duration: z.number(),
+          }),
+          input: z.object({
+            duration: z.number(),
+          }),
+        },
+        context: ({ input }: { input: { duration: number } }) => ({
+          duration: input.duration,
         }),
-        input: z.object({
-          duration: z.number(),
-        }),
-      },
-      context: ({ input }: { input: { duration: number } }) => ({
-        duration: input.duration,
-      }),
-      states: {
-        initial: {
-          always: ({ context }) => {
-            if (context.duration < 1000) {
-              return { target: 'finished' }
-            } else {
-              return { target: 'active' }
-            }
+        states: {
+          initial: {
+            always: ({ context }) => {
+              if (context.duration < 1000) {
+                return { target: 'finished' }
+              } else {
+                return { target: 'active' }
+              }
+            },
+          },
+          active: {},
+          finished: { type: 'final' },
+        },
+      })
+
+      const machine = createMachine({
+        schemas: {
+          context: z.object({
+            customDuration: z.number(),
+          }),
+        },
+        initial: 'active',
+        context: {
+          customDuration: 3000,
+        },
+        states: {
+          active: {
+            invoke: {
+              src: timerMachine,
+              input: ({ context }) => ({
+                duration: context.customDuration,
+              }),
+            },
           },
         },
-        active: {},
-        finished: { type: 'final' },
-      },
-    })
+      })
 
-    const machine = createMachine({
-      schemas: {
-        context: z.object({
-          customDuration: z.number(),
-        }),
-      },
-      initial: 'active',
-      context: {
-        customDuration: 3000,
-      },
-      states: {
-        active: {
-          invoke: {
-            src: timerMachine,
-            input: ({ context }) => ({
-              duration: context.customDuration,
-            }),
-          },
-        },
-      },
-    })
+      const actorRef = createActor(machine)
 
-    const actorRef = createActor(machine)
-    expect(() => actorRef.start()).not.toThrow()
-  })
+      yield* expect(actorRef.start().getSnapshot().value).toEqual('active')
+    },
+  )
 
-  it('should be taken even in absence of other transitions', () => {
+  it('should be taken even in absence of other transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -545,10 +549,10 @@ describe('transient states (eventless transitions)', () => {
 
     actorRef.send({ type: 'WHATEVER' })
 
-    expect(actorRef.getSnapshot().value).toBe('b')
+    yield* expect(actorRef.getSnapshot().value).toBe('b')
   })
 
-  it('should select subsequent transient transitions even in absence of other transitions', () => {
+  it('should select subsequent transient transitions even in absence of other transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -576,10 +580,11 @@ describe('transient states (eventless transitions)', () => {
 
     actorRef.send({ type: 'WHATEVER' })
 
-    expect(actorRef.getSnapshot().value).toBe('c')
+    yield* expect(actorRef.getSnapshot().value).toBe('c')
   })
 
-  it('events that trigger eventless transitions should be preserved in guards', () => {
+  it('events that trigger eventless transitions should be preserved in guards', function*({ expect }) {
+    const guardEvents: string[] = []
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -593,7 +598,7 @@ describe('transient states (eventless transitions)', () => {
         },
         c: {
           always: ({ event }) => {
-            expect(event.type).toEqual('EVENT')
+            guardEvents.push(event.type)
             if (event.type === 'EVENT') {
               return { target: 'd' }
             }
@@ -607,11 +612,14 @@ describe('transient states (eventless transitions)', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'EVENT' })
 
-    expect(actorRef.getSnapshot().status).toBe('done')
+    yield* expect({
+      guardEventsOtherThanEvent: guardEvents.filter((type) => type !== 'EVENT'),
+      status: actorRef.getSnapshot().status,
+    }).toEqual({ guardEventsOtherThanEvent: [], status: 'done' })
   })
 
-  it('events that trigger eventless transitions should be preserved in actions', () => {
-    expect.assertions(2)
+  it('events that trigger eventless transitions should be preserved in actions', function*({ expect }) {
+    const actionEvents: unknown[] = []
 
     const machine = createMachine({
       schemas: {
@@ -628,13 +636,13 @@ describe('transient states (eventless transitions)', () => {
         },
         b: {
           always: ({ event }, enq) => {
-            enq(() => void expect(event).toEqual({ type: 'EVENT', value: 42 }))
+            enq(() => void actionEvents.push(event))
             return { target: 'c' }
           },
         },
         c: {
           entry: ({ event }, enq) => {
-            enq(() => void expect(event).toEqual({ type: 'EVENT', value: 42 }))
+            enq(() => void actionEvents.push(event))
           },
         },
       },
@@ -642,10 +650,14 @@ describe('transient states (eventless transitions)', () => {
 
     const service = createActor(machine).start()
     service.send({ type: 'EVENT', value: 42 })
+
+    yield* expect(actionEvents).toEqual([
+      { type: 'EVENT', value: 42 },
+      { type: 'EVENT', value: 42 },
+    ])
   })
 
-  it('should avoid infinite loops with eventless transitions', () => {
-    expect.assertions(1)
+  it('should avoid infinite loops with eventless transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       options: {
@@ -669,19 +681,23 @@ describe('transient states (eventless transitions)', () => {
         },
       },
     })
+    const errors: unknown[] = []
     const actor = createActor(machine)
 
     actor.subscribe({
       error: (err) => {
-        expect((err as any).message).toMatch(/infinite loop/i)
+        errors.push(err)
       },
     })
 
     actor.start()
+
+    yield* expect(errors.map((err) => (err as Error).message)).toEqual([
+      expect.stringMatching(/infinite loop/i),
+    ])
   })
 
-  it('should avoid infinite loops with raised events', () => {
-    expect.assertions(1)
+  it('should avoid infinite loops with raised events', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -710,18 +726,23 @@ describe('transient states (eventless transitions)', () => {
         maxIterations: 100,
       },
     })
+    const errors: unknown[] = []
     const actor = createActor(machine)
 
     actor.subscribe({
       error: (err) => {
-        expect((err as any).message).toMatch(/infinite loop/i)
+        errors.push(err)
       },
     })
 
     actor.start()
+
+    yield* expect(errors.map((err) => (err as Error).message)).toEqual([
+      expect.stringMatching(/infinite loop/i),
+    ])
   })
 
-  it("shouldn't end up in an infinite loop when selecting the fallback target", () => {
+  it("shouldn't end up in an infinite loop when selecting the fallback target", function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
@@ -751,10 +772,10 @@ describe('transient states (eventless transitions)', () => {
       type: 'event',
     })
 
-    expect(actorRef.getSnapshot().value).toEqual({ active: 'b' })
+    yield* expect(actorRef.getSnapshot().value).toEqual({ active: 'b' })
   })
 
-  it("shouldn't end up in an infinite loop when selecting a guarded target", () => {
+  it("shouldn't end up in an infinite loop when selecting a guarded target", function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
@@ -784,49 +805,54 @@ describe('transient states (eventless transitions)', () => {
       type: 'event',
     })
 
-    expect(actorRef.getSnapshot().value).toEqual({ active: 'a' })
+    yield* expect(actorRef.getSnapshot().value).toEqual({ active: 'a' })
   })
 
-  it("shouldn't end up in an infinite loop when executing a fire-and-forget action that doesn't change state", () => {
-    let count = 0
-    const machine = createMachine({
-      initial: 'idle',
-      states: {
-        idle: {
-          on: {
-            event: { target: 'active' },
+  it(
+    "shouldn't end up in an infinite loop when executing a fire-and-forget action that doesn't change state",
+    function*({ expect }) {
+      let count = 0
+      const machine = createMachine({
+        initial: 'idle',
+        states: {
+          idle: {
+            on: {
+              event: { target: 'active' },
+            },
+          },
+          active: {
+            initial: 'a',
+            states: {
+              a: {},
+            },
+            always: (_, enq) => {
+              enq(() => {
+                count++
+                if (count > 5) {
+                  throw new Error('Infinite loop detected')
+                }
+              })
+              return { target: '.a' }
+            },
           },
         },
-        active: {
-          initial: 'a',
-          states: {
-            a: {},
-          },
-          always: (_, enq) => {
-            enq(() => {
-              count++
-              if (count > 5) {
-                throw new Error('Infinite loop detected')
-              }
-            })
-            return { target: '.a' }
-          },
-        },
-      },
-    })
+      })
 
-    const actorRef = createActor(machine)
+      const actorRef = createActor(machine)
 
-    actorRef.start()
-    actorRef.send({
-      type: 'event',
-    })
+      actorRef.start()
+      actorRef.send({
+        type: 'event',
+      })
 
-    expect(actorRef.getSnapshot().value).toEqual({ active: 'a' })
-    expect(count).toBe(1)
-  })
+      yield* expect({
+        value: actorRef.getSnapshot().value,
+        count,
+      }).toEqual({ value: { active: 'a' }, count: 1 })
+    },
+  )
 
-  it('should loop (but not infinitely) for assign actions', () => {
+  it('should loop (but not infinitely) for assign actions', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -851,39 +877,36 @@ describe('transient states (eventless transitions)', () => {
 
     const actorRef = createActor(machine).start()
 
-    expect(actorRef.getSnapshot().context.count).toEqual(5)
+    yield* expect(actorRef.getSnapshot().context.count).toEqual(5)
   })
 
-  it("should execute an always transition after a raised transition even if that raised transition doesn't change the state", () => {
-    const spy = vi.fn()
-    let counter = 0
-    const machine = createMachine({
-      always: (_, enq) => {
-        enq((...args) => {
-          spy(...args)
-        }, counter)
-      },
-      on: {
-        EV: (_, enq) => {
-          enq.raise({ type: 'RAISED' })
+  it(
+    "should execute an always transition after a raised transition even if that raised transition doesn't change the state",
+    function*({ expect }) {
+      const calls: unknown[][] = []
+      let counter = 0
+      const machine = createMachine({
+        always: (_, enq) => {
+          enq((...args) => {
+            calls.push(args)
+          }, counter)
         },
-        RAISED: (_, enq) => {
-          enq(() => {
-            ++counter
-          })
+        on: {
+          EV: (_, enq) => {
+            enq.raise({ type: 'RAISED' })
+          },
+          RAISED: (_, enq) => {
+            enq(() => {
+              ++counter
+            })
+          },
         },
-      },
-    })
-    const actorRef = createActor(machine).start()
-    spy.mockClear()
-    actorRef.send({ type: 'EV' })
+      })
+      const actorRef = createActor(machine).start()
+      calls.length = 0
+      actorRef.send({ type: 'EV' })
 
-    expect(spy.mock.calls).toEqual([
-      // called in response to the `EV` event
-      [0],
-      // called in response to the `RAISED` event; action args are resolved
-      // during the pure transition before executable effects run
-      [0],
-    ])
-  })
+      yield* expect(calls).toEqual([[0], [0]])
+    },
+  )
 })

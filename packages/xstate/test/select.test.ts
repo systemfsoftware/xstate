@@ -1,13 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
 import { type SnapshotFrom } from '../src/index.js'
 import { createMachine } from '../src/index.js'
 import { createActor } from '../src/index.js'
 
 describe('select', () => {
-  it('should get current value', () => {
+  it('should get current value', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { data: number } },
       schemas: {
         context: z.object({
           data: z.number(),
@@ -31,16 +30,17 @@ describe('select', () => {
     const service = createActor(machine).start()
     const selection = service.select(({ context }) => context.data)
 
-    expect(selection.get()).toBe(42)
+    const before = selection.get()
 
     service.send({ type: 'INC' })
 
-    expect(selection.get()).toBe(43)
+    const after = selection.get()
+
+    yield* expect({ before, after }).toEqual({ before: 42, after: 43 })
   })
 
-  it('should subscribe to changes', () => {
+  it('should subscribe to changes', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { data: number } },
       schemas: {
         context: z.object({
           data: z.number(),
@@ -51,9 +51,6 @@ describe('select', () => {
       states: {
         G: {
           on: {
-            // INC: {
-            //   actions: assign({ data: ({ context }) => context.data + 1 })
-            // }
             INC: ({ context }) => ({
               context: {
                 data: context.data + 1,
@@ -64,20 +61,21 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
+    const calls: number[] = []
+    const callback = (value: number) => {
+      calls.push(value)
+    }
     const service = createActor(machine).start()
     const selection = service.select(({ context }) => context.data)
     selection.subscribe(callback)
 
     service.send({ type: 'INC' })
 
-    expect(callback).toHaveBeenCalledTimes(1)
-    expect(callback).toHaveBeenCalledWith(43)
+    yield* expect(calls).toEqual([43])
   })
 
-  it('should not notify if selected value has not changed', () => {
+  it('should not notify if selected value has not changed', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { data: number; other: string } },
       schemas: {
         context: z.object({
           data: z.number(),
@@ -89,9 +87,6 @@ describe('select', () => {
       states: {
         G: {
           on: {
-            // INC: {
-            //   actions: assign({ data: ({ context }) => context.data + 1 })
-            // }
             INC: ({ context }) => ({
               context: {
                 data: context.data + 1,
@@ -102,19 +97,21 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
+    const calls: string[] = []
+    const callback = (value: string) => {
+      calls.push(value)
+    }
     const service = createActor(machine).start()
     const selection = service.select(({ context }) => context.other)
     selection.subscribe(callback)
 
     service.send({ type: 'INC' })
 
-    expect(callback).not.toHaveBeenCalled()
+    yield* expect(calls).toEqual([])
   })
 
-  it('should support custom equality function', () => {
+  it('should support custom equality function', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as {
       schemas: {
         context: z.object({
           age: z.number(),
@@ -147,25 +144,27 @@ describe('select', () => {
 
     const service = createActor(machine).start()
 
-    const callback = vi.fn()
+    const calls: Array<{ name: string; age: number }> = []
+    const callback = (value: { name: string; age: number }) => {
+      calls.push(value)
+    }
     const selector = ({ context }: SnapshotFrom<typeof machine>) => ({
       name: context.name,
       age: context.age,
     })
-    const equalityFn = (a: { name: string }, b: { name: string }) => a.name === b.name // Only compare names
+    const equalityFn = (a: { name: string }, b: { name: string }) => a.name === b.name
 
     service.select(selector, equalityFn).subscribe(callback)
 
     service.send({ type: 'UPDATE_AGE', age: 66 })
-    expect(callback).not.toHaveBeenCalled()
 
     service.send({ type: 'UPDATE_NAME', name: 'Jane' })
-    expect(callback).toHaveBeenCalledTimes(1)
+
+    yield* expect(calls).toEqual([{ name: 'Jane', age: 66 }])
   })
 
-  it('should unsubscribe correctly', () => {
+  it('should unsubscribe correctly', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as { context: { data: number } },
       schemas: {
         context: z.object({
           data: z.number(),
@@ -188,17 +187,20 @@ describe('select', () => {
 
     const service = createActor(machine).start()
 
-    const callback = vi.fn()
+    const calls: number[] = []
+    const callback = (value: number) => {
+      calls.push(value)
+    }
     const selection = service.select(({ context }) => context.data)
     const subscription = selection.subscribe(callback)
 
     subscription.unsubscribe()
     service.send({ type: 'INC' })
 
-    expect(callback).not.toHaveBeenCalled()
+    yield* expect(calls).toEqual([])
   })
 
-  it('should handle updates with multiple subscribers', () => {
+  it('should handle updates with multiple subscribers', function*({ expect }) {
     interface PositionContext {
       position: {
         x: number
@@ -207,27 +209,6 @@ describe('select', () => {
     }
 
     const machine = createMachine({
-      // types: {} as {
-      //   context: {
-      //     user: { age: number; name: string };
-      //     position: {
-      //       x: number;
-      //       y: number;
-      //     };
-      //   };
-      //   events:
-      //     | {
-      //         type: 'UPDATE_USER';
-      //         user: { age: number; name: string };
-      //       }
-      //     | {
-      //         type: 'UPDATE_POSITION';
-      //         position: {
-      //           x: number;
-      //           y: number;
-      //         };
-      //       };
-      // },
       schemas: {
         context: z.object({
           position: z.object({ x: z.number(), y: z.number() }),
@@ -264,69 +245,50 @@ describe('select', () => {
 
     const store = createActor(machine).start()
 
-    // Mock DOM manipulation callback
-    const renderCallback = vi.fn()
+    const renderCalls: Array<{ x: number; y: number }> = []
     store
       .select(({ context }) => context.position)
       .subscribe((position) => {
-        renderCallback(position)
+        renderCalls.push(position)
       })
 
-    // Mock logger callback for x position only
-    const loggerCallback = vi.fn()
+    const loggerCalls: number[] = []
     store
       .select(({ context }) => context.position.x)
       .subscribe((x) => {
-        loggerCallback(x)
+        loggerCalls.push(x)
       })
 
-    // Simulate position update
     store.send({
       type: 'UPDATE_POSITION',
       position: { x: 100, y: 200 },
     })
 
-    // Verify render callback received full position update
-    expect(renderCallback).toHaveBeenCalledTimes(1)
-    expect(renderCallback).toHaveBeenCalledWith({ x: 100, y: 200 })
-
-    // Verify logger callback received only x position
-    expect(loggerCallback).toHaveBeenCalledTimes(1)
-    expect(loggerCallback).toHaveBeenCalledWith(100)
-
-    // Simulate another update
     store.send({
       type: 'UPDATE_POSITION',
       position: { x: 150, y: 300 },
     })
 
-    expect(renderCallback).toHaveBeenCalledTimes(2)
-    expect(renderCallback).toHaveBeenLastCalledWith({ x: 150, y: 300 })
-    expect(loggerCallback).toHaveBeenCalledTimes(2)
-    expect(loggerCallback).toHaveBeenLastCalledWith(150)
-
-    // Simulate changing only the y position
     store.send({
       type: 'UPDATE_POSITION',
       position: { x: 150, y: 400 },
     })
 
-    expect(renderCallback).toHaveBeenCalledTimes(3)
-    expect(renderCallback).toHaveBeenLastCalledWith({ x: 150, y: 400 })
-
-    // loggerCallback should not have been called
-    expect(loggerCallback).toHaveBeenCalledTimes(2)
-
-    // Simulate changing only the user
     store.send({
       type: 'UPDATE_USER',
       user: { name: 'Jane', age: 25 },
     })
 
-    // renderCallback should not have been called
-    expect(renderCallback).toHaveBeenCalledTimes(3)
-
-    // loggerCallback should not have been called
-    expect(loggerCallback).toHaveBeenCalledTimes(2)
+    yield* expect({
+      render: renderCalls,
+      logger: loggerCalls,
+    }).toEqual({
+      render: [
+        { x: 100, y: 200 },
+        { x: 150, y: 300 },
+        { x: 150, y: 400 },
+      ],
+      logger: [100, 150],
+    })
   })
 })

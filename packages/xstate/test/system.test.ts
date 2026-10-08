@@ -1,5 +1,6 @@
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { of } from 'rxjs'
-import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { createCallbackLogic } from '../src/actors/callback.js'
 import {
@@ -18,8 +19,25 @@ import {
 import { type ActorSystem } from '../src/system.js'
 import { toSubscribable } from './utils.js'
 
+function defined<T>(value: T | undefined, message: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${message}`)
+  }
+  return value
+}
+
+function captureError(run: () => unknown): string | undefined {
+  try {
+    run()
+    return undefined
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
 describe('system', () => {
-  it('should register an invoked actor', () => {
+  it('should register an invoked actor', function*({ expect }) {
+    const received: string[] = []
     const { resolve, promise } = Promise.withResolvers<void>()
     type MySystem = ActorSystem<{
       actors: {
@@ -36,7 +54,7 @@ describe('system', () => {
             {
               src: createCallbackLogic(({ receive }) => {
                 receive((event) => {
-                  expect(event.type).toBe('HELLO')
+                  received.push(event.type)
                   resolve()
                 })
               }),
@@ -61,10 +79,12 @@ describe('system', () => {
 
     createActor(machine).start()
 
-    return promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect(received).toEqual(['HELLO'])
   })
 
-  it('should register an invoked actor with a registryKey', () => {
+  it('should register an invoked actor with a registryKey', function*({ expect }) {
     const machine = createMachine({
       id: 'parent',
       invoke: {
@@ -75,10 +95,13 @@ describe('system', () => {
 
     const actor = createActor(machine)
 
-    expect(actor.system.get('receiver')).toBeDefined()
+    yield* expect(actor.system.get('receiver')).toSatisfy(
+      (value) => value !== undefined,
+      'the invoked receiver is registered',
+    )
   })
 
-  it('projects nested registry keys before the root actor starts', () => {
+  it('projects nested registry keys before the root actor starts', function*({ expect }) {
     const child = createMachine({
       invoke: {
         id: 'grandchild',
@@ -98,10 +121,10 @@ describe('system', () => {
     const grandchild = childActor.getSnapshot()
       .children.grandchild
 
-    expect(actor.system.get('grandchild')).toBe(grandchild)
+    yield* expect(actor.system.get('grandchild')).toBe(grandchild)
   })
 
-  it('refreshes registry changes made before the root actor starts', () => {
+  it('refreshes registry changes made before the root actor starts', function*({ expect }) {
     let registeredActor: AnyActor | undefined
     const machine = createMachine({
       on: {
@@ -119,10 +142,10 @@ describe('system', () => {
     actor.start()
     transition(machine, actor.getSnapshot(), { type: 'CHECK' })
 
-    expect(registeredActor).toBe(child)
+    yield* expect(registeredActor).toBe(child)
   })
 
-  it('createSystem should own the runtime actor system', () => {
+  it('createSystem should own the runtime actor system', function*({ expect }) {
     const child = createMachine({})
     const machine = createMachine({
       invoke: {
@@ -136,21 +159,31 @@ describe('system', () => {
         receiver: child,
       },
     })
-
-    expect(system.get('root')).toBeUndefined()
+    const beforeCreate = system.get('root')
 
     const actor = system.createActor(machine, { registryKey: 'root' })
+    const actorSystemAll = actor.system.getAll()
 
-    expect(system.get('root')).toBe(actor)
-    expect(system.get('receiver')).toBe(actor.system.get('receiver'))
-    expect(system.getAll()).toEqual(actor.system.getAll())
+    yield* expect({
+      beforeCreate,
+      rootIsActor: system.get('root') === actor,
+      receiverIsActorSystemReceiver: system.get('receiver') === actor.system.get('receiver'),
+      systemAll: system.getAll(),
+    }).toEqual({
+      beforeCreate: undefined,
+      rootIsActor: true,
+      receiverIsActorSystemReceiver: true,
+      systemAll: actorSystemAll,
+    })
   })
 
-  it('transition functions can access the actor system', () => {
+  it('transition functions can access the actor system', function*({ expect }) {
+    const received: string[] = []
     const { resolve, promise } = Promise.withResolvers<void>()
     const receiver = createCallbackLogic<{ type: 'HELLO' }>(({ receive }) => {
       receive((event) => {
         if (event.type === 'HELLO') {
+          received.push(event.type)
           resolve()
         }
       })
@@ -175,10 +208,13 @@ describe('system', () => {
 
     system.createActor(machine).start().send({ type: 'PING' })
 
-    return promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect(received).toEqual(['HELLO'])
   })
 
-  it('should register a spawned actor', () => {
+  it('should register a spawned actor', function*({ expect }) {
+    const received: string[] = []
     const { resolve, promise } = Promise.withResolvers<void>()
     type MySystem = ActorSystem<{
       actors: {
@@ -187,12 +223,6 @@ describe('system', () => {
     }>
 
     const machine = createMachine({
-      // types: {} as {
-      //   context: {
-      //     ref: CallbackActorRef<EventObject, unknown>;
-      //     machineRef?: ActorRefFrom<AnyStateMachine>;
-      //   };
-      // },
       schemas: {
         context: z.object({
           ref: z.any(),
@@ -204,7 +234,7 @@ describe('system', () => {
         ref: spawn(
           createCallbackLogic(({ receive }) => {
             receive((event) => {
-              expect(event.type).toBe('HELLO')
+              received.push(event.type)
               resolve()
             })
           }),
@@ -237,10 +267,12 @@ describe('system', () => {
 
     actor.send({ type: 'toggle' })
 
-    return promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect(received).toEqual(['HELLO'])
   })
 
-  it('system can be immediately accessed outside the actor', () => {
+  it('system can be immediately accessed outside the actor', function*({ expect }) {
     const machine = createMachine({
       invoke: {
         registryKey: 'someChild',
@@ -248,19 +280,21 @@ describe('system', () => {
       },
     })
 
-    // no .start() here is important for the test
     const actor = createActor(machine)
 
-    expect(actor.system.get('someChild')).toBeDefined()
+    yield* expect(actor.system.get('someChild')).toSatisfy(
+      (value) => value !== undefined,
+      'the invoked child is registered before start',
+    )
   })
 
-  it('root actor can be given the registryKey', () => {
+  it('root actor can be given the registryKey', function*({ expect }) {
     const machine = createMachine({})
     const actor = createActor(machine, { registryKey: 'test0' })
-    expect(actor.system.get('test0')).toBe(actor)
+    yield* expect(actor.system.get('test0')).toBe(actor)
   })
 
-  it('should remove invoked actor from receptionist if stopped', () => {
+  it('should remove invoked actor from receptionist if stopped', function*({ expect }) {
     const machine = createMachine({
       initial: 'active',
       states: {
@@ -278,22 +312,19 @@ describe('system', () => {
     })
 
     const actor = createActor(machine).start()
-
-    expect(actor.system.get('test1')).toBeDefined()
+    const beforeToggle = actor.system.get('test1')
 
     actor.send({ type: 'toggle' })
 
-    expect(actor.system.get('test1')).toBeUndefined()
+    yield* expect({
+      registeredBeforeStop: beforeToggle !== undefined,
+      afterToggle: actor.system.get('test1'),
+    }).toEqual({ registeredBeforeStop: true, afterToggle: undefined })
   })
 
-  it('should remove spawned actor from receptionist if stopped', () => {
+  it('should remove spawned actor from receptionist if stopped', function*({ expect }) {
     const childMachine = createMachine({})
     const machine = createMachine({
-      // types: {} as {
-      //   context: {
-      //     ref: ActorRefFrom<typeof childMachine>;
-      //   };
-      // },
       schemas: {
         context: z.object({
           ref: z.any(),
@@ -305,9 +336,6 @@ describe('system', () => {
         }),
       }),
       on: {
-        // toggle: {
-        //   actions: stopChild(({ context }) => context.ref)
-        // }
         toggle: ({ context }, enq) => ({
           context: {
             ref: enq.stop(context.ref),
@@ -317,15 +345,17 @@ describe('system', () => {
     })
 
     const actor = createActor(machine).start()
-
-    expect(actor.system.get('test2')).toBeDefined()
+    const beforeToggle = actor.system.get('test2')
 
     actor.send({ type: 'toggle' })
 
-    expect(actor.system.get('test2')).toBeUndefined()
+    yield* expect({
+      registeredBeforeStop: beforeToggle !== undefined,
+      afterToggle: actor.system.get('test2'),
+    }).toEqual({ registeredBeforeStop: true, afterToggle: undefined })
   })
 
-  it('should throw an error if an actor with the registry key already exists', () => {
+  it('should throw an error if an actor with the registry key already exists', function*({ expect }) {
     const machine = createMachine({
       initial: 'inactive',
       states: {
@@ -349,31 +379,24 @@ describe('system', () => {
       },
     })
 
-    const errorSpy = vi.fn()
+    const errors: unknown[] = []
 
     const actorRef = createActor(machine, { registryKey: 'test1' })
     actorRef.subscribe({
-      error: errorSpy,
+      error: (error) => {
+        errors.push(error)
+      },
     })
     actorRef.start()
     actorRef.send({ type: 'toggle' })
 
-    expect(errorSpy.mock.calls).toMatchInlineSnapshot(`
-      [
-        [
-          [Error: Actor with registry key 'test1' already exists.],
-        ],
-      ]
-    `)
+    yield* expect(
+      errors.map((error) => error instanceof Error ? error.message : String(error)),
+    ).toEqual(["Actor with registry key 'test1' already exists."])
   })
 
-  it.skip('should cleanup stopped actors', () => {
+  it.skip('should cleanup stopped actors', function*({ expect }) {
     const machine = createMachine({
-      // types: {
-      //   context: {} as {
-      //     ref: AnyActorRef;
-      //   }
-      // },
       schemas: {
         context: z.object({
           ref: z.any(),
@@ -385,25 +408,10 @@ describe('system', () => {
         }),
       }),
       on: {
-        // stop: {
-        //   actions: stopChild(({ context }) => context.ref)
-        // },
         stop: ({ context }, enq) => {
           enq.stop(context.ref)
         },
-        // start: {
-        //   actions: spawnChild(
-        //     createAsyncLogic(() => Promise.resolve()),
-        //     {
-        //       registryKey: 'test11'
-        //     }
-        //   )
-        // }
         start: (_, enq) => {
-          // This currently double-creates the actor:
-          // 1. when getting transition result
-          // 2. when actually executing it
-          // Since it's set in the system twice, it triggers the error currently
           enq.spawn(createAsyncLogic({ run: () => Promise.resolve() }), {
             registryKey: 'test11',
           })
@@ -415,30 +423,36 @@ describe('system', () => {
 
     actor.send({ type: 'stop' })
 
-    expect(() => {
-      actor.send({ type: 'start' })
-    }).not.toThrow()
+    yield* expect({
+      startError: captureError(() => {
+        actor.send({ type: 'start' })
+      }),
+    }).toEqual({ startError: undefined })
   })
 
-  it('should be accessible in inline custom actions', () => {
+  it('should be accessible in inline custom actions', function*({ expect }) {
+    const observed: boolean[] = []
     const machine = createMachine({
       invoke: {
         src: createMachine({}),
         registryKey: 'test3',
       },
       entry: ({ system }) => {
-        expect(system?.get('test3')).toBeDefined()
+        observed.push(system?.get('test3') !== undefined)
       },
     })
 
     createActor(machine).start()
+
+    yield* expect({ observed }).toEqual({ observed: [true] })
   })
 
-  it('should be accessible in referenced custom actions', () => {
+  it('should be accessible in referenced custom actions', function*({ expect }) {
+    const observed: boolean[] = []
     const machine = createMachine({
       actions: {
         myAction: (system) => {
-          expect(system.get('test4')).toBeDefined()
+          observed.push(system.get('test4') !== undefined)
         },
       },
       invoke: {
@@ -451,9 +465,12 @@ describe('system', () => {
     })
 
     createActor(machine).start()
+
+    yield* expect({ observed }).toEqual({ observed: [true] })
   })
 
-  it('should be accessible in sendTo actions', () => {
+  it('should be accessible in sendTo actions', function*({ expect }) {
+    const observed: boolean[] = []
     const machine = createMachine({
       invoke: {
         src: createMachine({}),
@@ -462,15 +479,8 @@ describe('system', () => {
       initial: 'a',
       states: {
         a: {
-          // entry: sendTo(
-          //   ({ system }) => {
-          //     expect(system.get('test5')).toBeDefined();
-          //     return system.get('test5');
-          //   },
-          //   { type: 'FOO' }
-          // )
           entry: ({ system }, enq) => {
-            expect(system?.get('test5')).toBeDefined()
+            observed.push(system?.get('test5') !== undefined)
             enq.sendTo(system?.get('test5'), { type: 'FOO' })
           },
         },
@@ -478,10 +488,12 @@ describe('system', () => {
     })
 
     createActor(machine).start()
+
+    yield* expect({ observed }).toEqual({ observed: [true] })
   })
 
-  it('should be accessible in promise logic', () => {
-    expect.assertions(2)
+  it('should be accessible in promise logic', function*({ expect }) {
+    const observed: boolean[] = []
     const machine = createMachine({
       invoke: [
         {
@@ -491,7 +503,7 @@ describe('system', () => {
         {
           src: createAsyncLogic({
             run: ({ system }) => {
-              expect(system.get('test6')).toBeDefined()
+              observed.push(system.get('test6') !== undefined)
               return Promise.resolve()
             },
           }),
@@ -501,11 +513,14 @@ describe('system', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.system.get('test6')).toBeDefined()
+    yield* expect({
+      registered: actor.system.get('test6') !== undefined,
+      observed,
+    }).toEqual({ registered: true, observed: [true] })
   })
 
-  it('should be accessible in custom logic', () => {
-    expect.assertions(2)
+  it('should be accessible in custom logic', function*({ expect }) {
+    const observed: boolean[] = []
     const machine = createMachine({
       invoke: [
         {
@@ -518,9 +533,9 @@ describe('system', () => {
             context: 0,
             run: ({ event, system }) => {
               if (event.type === '@xstate.init') {
-                return
+                return undefined
               }
-              expect(system.get('test7')).toBeDefined()
+              observed.push(system.get('test7') !== undefined)
               return { context: 0 }
             },
           }),
@@ -530,15 +545,15 @@ describe('system', () => {
     })
 
     const actor = createActor(machine).start()
+    const registered = actor.system.get('test7') !== undefined
 
-    expect(actor.system.get('test7')).toBeDefined()
+    defined(actor.system.get('reducer'), 'reducer').send({ type: 'a' })
 
-    // The assertion won't be checked until the transition function gets an event
-    actor.system.get('reducer')!.send({ type: 'a' })
+    yield* expect({ registered, observed }).toEqual({ registered: true, observed: [true] })
   })
 
-  it('should be accessible in observable logic', () => {
-    expect.assertions(2)
+  it('should be accessible in observable logic', function*({ expect }) {
+    const observed: boolean[] = []
     const machine = createMachine({
       invoke: [
         {
@@ -548,7 +563,7 @@ describe('system', () => {
 
         {
           src: createObservableLogic<number, undefined>(({ system }) => {
-            expect(system.get('test8')).toBeDefined()
+            observed.push(system.get('test8') !== undefined)
             return toSubscribable(of(0))
           }),
         },
@@ -557,11 +572,14 @@ describe('system', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.system.get('test8')).toBeDefined()
+    yield* expect({
+      registered: actor.system.get('test8') !== undefined,
+      observed,
+    }).toEqual({ registered: true, observed: [true] })
   })
 
-  it('should be accessible in event observable logic', () => {
-    expect.assertions(2)
+  it('should be accessible in event observable logic', function*({ expect }) {
+    const observed: boolean[] = []
     const machine = createMachine({
       invoke: [
         {
@@ -572,7 +590,7 @@ describe('system', () => {
         {
           src: createEventObservableLogic<{ type: 'a' }, undefined>(
             ({ system }) => {
-              expect(system.get('test9')).toBeDefined()
+              observed.push(system.get('test9') !== undefined)
               return toSubscribable(of({ type: 'a' }))
             },
           ),
@@ -582,11 +600,14 @@ describe('system', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.system.get('test9')).toBeDefined()
+    yield* expect({
+      registered: actor.system.get('test9') !== undefined,
+      observed,
+    }).toEqual({ registered: true, observed: [true] })
   })
 
-  it('should be accessible in callback logic', () => {
-    expect.assertions(2)
+  it('should be accessible in callback logic', function*({ expect }) {
+    const observed: boolean[] = []
     const machine = createMachine({
       invoke: [
         {
@@ -595,7 +616,7 @@ describe('system', () => {
         },
         {
           src: createCallbackLogic(({ system }) => {
-            expect(system.get('test10')).toBeDefined()
+            observed.push(system.get('test10') !== undefined)
           }),
         },
       ],
@@ -603,97 +624,102 @@ describe('system', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.system.get('test10')).toBeDefined()
+    yield* expect({
+      registered: actor.system.get('test10') !== undefined,
+      observed,
+    }).toEqual({ registered: true, observed: [true] })
   })
 
-  it('should gracefully handle re-registration of a `registryKey` during a reentering transition', () => {
-    const spy = vi.fn()
+  it(
+    'should gracefully handle re-registration of a `registryKey` during a reentering transition',
+    function*({ expect }) {
+      const calls: unknown[][] = []
 
-    let counter = 0
+      let counter = 0
 
-    const machine = createMachine({
-      initial: 'listening',
-      states: {
-        listening: {
-          invoke: {
-            registryKey: 'listener',
-            src: createCallbackLogic(({ receive }) => {
-              const localId = counter++
+      const machine = createMachine({
+        initial: 'listening',
+        states: {
+          listening: {
+            invoke: {
+              registryKey: 'listener',
+              src: createCallbackLogic(({ receive }) => {
+                const localId = counter++
 
-              receive((event) => {
-                spy(localId, event)
-              })
+                receive((event) => {
+                  calls.push([localId, event])
+                })
 
-              return () => {}
-            }),
+                return () => {}
+              }),
+            },
           },
         },
-      },
-      on: {
-        RESTART: {
-          target: '.listening',
+        on: {
+          RESTART: {
+            target: '.listening',
+          },
         },
-      },
-    })
+      })
 
-    const actorRef = createActor(machine).start()
+      const actorRef = createActor(machine).start()
 
-    actorRef.send({ type: 'RESTART' })
-    actorRef.system.get('listener')!.send({ type: 'a' })
+      actorRef.send({ type: 'RESTART' })
+      defined(actorRef.system.get('listener'), 'listener').send({ type: 'a' })
 
-    expect(spy.mock.calls).toEqual([
-      [
-        1,
-        {
-          type: 'a',
+      yield* expect(calls).toEqual([
+        [
+          1,
+          {
+            type: 'a',
+          },
+        ],
+      ])
+    },
+  )
+
+  it(
+    'should be able to send an event to an ancestor with a registered `registryKey` from an initial entry action',
+    function*({ expect }) {
+      const calls: unknown[][] = []
+      const recorder = (...args: unknown[]) => {
+        calls.push(args)
+      }
+
+      const child = createMachine({
+        entry: ({ system }, enq) => {
+          enq.sendTo(system?.get('myRoot'), { type: 'EV' })
         },
-      ],
-    ])
-  })
+      })
 
-  it('should be able to send an event to an ancestor with a registered `registryKey` from an initial entry action', () => {
-    const spy = vi.fn()
-
-    const child = createMachine({
-      // entry: sendTo(({ system }) => system.get('myRoot'), {
-      //   type: 'EV'
-      // })
-      entry: ({ system }, enq) => {
-        enq.sendTo(system?.get('myRoot'), { type: 'EV' })
-      },
-    })
-
-    const machine = createMachine({
-      invoke: {
-        src: child,
-      },
-      on: {
-        // EV: {
-        //   actions: spy
-        // }
-        EV: (_, enq) => {
-          enq(spy)
+      const machine = createMachine({
+        invoke: {
+          src: child,
         },
-      },
-    })
-    createActor(machine, { registryKey: 'myRoot' }).start()
+        on: {
+          EV: (_, enq) => {
+            enq(recorder)
+          },
+        },
+      })
+      createActor(machine, { registryKey: 'myRoot' }).start()
 
-    expect(spy).toHaveBeenCalledTimes(1)
-  })
+      yield* expect({ callCount: calls.length }).toEqual({ callCount: 1 })
+    },
+  )
 
-  it('registry key should be accessible on the actor', () => {
+  it('registry key should be accessible on the actor', function*({ expect }) {
     const machine = createMachine({})
     const actor = createActor(machine, { registryKey: 'test' })
-    expect(actor.registryKey).toBe('test')
+    yield* expect(actor.registryKey).toBe('test')
   })
 
-  it('should give a list of runnings actors', () => {
+  it('should give a list of runnings actors', function*({ expect }) {
     const machine = createMachine({
       id: 'root',
       initial: 'happy path',
       states: {
         'happy path': {
-          // entry: [spawnChild(createMachine({}), { registryKey: 'child1' })],
           entry: (_, enq) => {
             enq.spawn(createMachine({}), { registryKey: 'child1' })
           },
@@ -706,7 +732,6 @@ describe('system', () => {
           },
         },
         'sad path': {
-          // entry: stopChild(({ system }) => system.get('child1'))
           entry: ({ system }, enq) => {
             enq.stop(system?.get('child1'))
           },
@@ -715,18 +740,25 @@ describe('system', () => {
     })
 
     const actor = createActor(machine).start()
-
-    expect(actor.system.getAll()).toEqual({
-      child1: actor.system.get('child1'),
-      child2: actor.system.get('child2'),
-    })
+    const child1 = actor.system.get('child1')
+    const child2 = actor.system.get('child2')
+    const beforeStop = actor.system.getAll()
 
     actor.send({ type: 'stopChild1' })
 
-    expect(actor.system.getAll()).toEqual({})
+    yield* expect({
+      beforeStop,
+      afterStop: actor.system.getAll(),
+    }).toEqual({
+      beforeStop: {
+        child1,
+        child2,
+      },
+      afterStop: {},
+    })
   })
 
-  it.skip('should unregister nested child registryKeys when stopping a parent actor', () => {
+  it.skip('should unregister nested child registryKeys when stopping a parent actor', function*({ expect }) {
     const subchild = createMachine({})
 
     const child = createMachine({
@@ -743,17 +775,10 @@ describe('system', () => {
     const parent = createMachine({
       actors: { child },
 
-      // entry: spawnChild('child', { id: 'childId' }),
       entry: ({ actors }, enq) => {
         enq.spawn(actors.child, { id: 'childId' })
       },
       on: {
-        // restart: {
-        //   actions: [
-        //     stopChild('childId'),
-        //     spawnChild('child', { id: 'childId' })
-        //   ]
-        // }
         restart: ({ children, actors }, enq) => {
           enq.stop(children['childId'])
           enq.spawn(actors.child, { id: 'childId' })
@@ -762,12 +787,18 @@ describe('system', () => {
     })
 
     const root = createActor(parent).start()
+    const registeredBeforeRestart = root.system.get('subchild') !== undefined
 
-    expect(root.system.get('subchild')).toBeDefined()
+    const restartError = captureError(() => root.send({ type: 'restart' }))
 
-    // This should not throw "Actor with registry key 'subchild' already exists"
-    expect(() => root.send({ type: 'restart' })).not.toThrow()
-
-    expect(root.system.get('subchild')).toBeDefined()
+    yield* expect({
+      registeredBeforeRestart,
+      restartError,
+      registeredAfterRestart: root.system.get('subchild') !== undefined,
+    }).toEqual({
+      registeredBeforeRestart: true,
+      restartError: undefined,
+      registeredAfterRestart: true,
+    })
   })
 })

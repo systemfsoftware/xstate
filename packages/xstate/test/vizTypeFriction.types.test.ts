@@ -1,8 +1,8 @@
-import { describe, it } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
 import { setup, types } from '../src/index.js'
 
-describe('Viz v6 type ergonomics', () => {
-  it('preserves an inline machine id for ID targets without as const', () => {
+describe('Viz v6 type ergonomics', (it) => {
+  it('preserves an inline machine id for ID targets without as const', function*({ expect }) {
     const machine = setup({
       schemas: {
         events: {
@@ -32,9 +32,11 @@ describe('Viz v6 type ergonomics', () => {
     })
 
     machine.id satisfies 'gesture'
+
+    yield* expect(machine.id).toEqual('gesture')
   })
 
-  it('accepts setup-provided named delays in nested states', () => {
+  it('accepts setup-provided named delays in nested states', function*({ expect }) {
     const machine = setup({
       delays: {
         doubleTap: 300,
@@ -64,5 +66,7 @@ describe('Viz v6 type ergonomics', () => {
     })
 
     machine.id satisfies 'gesture'
+
+    yield* expect(machine.id).toEqual('gesture')
   })
 })

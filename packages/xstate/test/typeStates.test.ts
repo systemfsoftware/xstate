@@ -1,4 +1,4 @@
-import { describe, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
 import { type Compute } from '../src/index.js'
 import { type StandardSchemaV1 } from '../src/schema.types.js'
@@ -29,7 +29,7 @@ function createMachineWithTypeStates<T extends TypeStateSchemas>(config: {
 }) {}
 
 describe('typeStates', () => {
-  it('should be able to type the states', () => {
+  it('should be able to type the states', function*({ expect }) {
     createMachineWithTypeStates({
       schemas: {
         typeStates: {
@@ -90,5 +90,8 @@ describe('typeStates', () => {
         },
       },
     })
+
+    yield* expect(z.object({ user: z.string() }).parse({ user: 'test' }))
+      .toEqual({ user: 'test' })
   })
 })

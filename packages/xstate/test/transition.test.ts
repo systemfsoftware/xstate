@@ -1,5 +1,6 @@
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { listenerLogic } from '../src/actors/listener.js'
 import { subscriptionLogic } from '../src/actors/subscription.js'
@@ -81,7 +82,7 @@ function describeEffects(effects: ExecutableActionObject[]): string[] {
 }
 
 describe('transition function', () => {
-  it('does not materialize actors or systems for context-only planning', () => {
+  it('does not materialize actors or systems for context-only planning', function*({ expect }) {
     let materializations = 0
     setInertActorMaterializationObserver(() => materializations++)
     try {
@@ -99,8 +100,8 @@ describe('transition function', () => {
         ;[snapshot] = transition(machine, snapshot, { type: 'INCREMENT' })
       }
 
-      expect(snapshot.context.count).toBe(100)
-      expect(materializations).toBe(0)
+      const contextOnlyCount = snapshot.context.count
+      const contextOnlyMaterializations = materializations
 
       const checkingMachine = createMachine({
         context: { found: false },
@@ -120,8 +121,8 @@ describe('transition function', () => {
         type: 'CHECK',
       })
 
-      expect(checkingSnapshot.context.found).toBe(false)
-      expect(materializations).toBe(2)
+      const systemLookupFound = checkingSnapshot.context.found
+      const systemLookupMaterializations = materializations
 
       materializations = 0
       const livePlanningMachine = createMachine({
@@ -136,20 +137,36 @@ describe('transition function', () => {
       transition(livePlanningMachine, liveActor.getSnapshot(), {
         type: 'INCREMENT',
       })
-      expect(materializations).toBe(0)
+      const livePlanningMaterializations = materializations
 
       const entryMachine = createMachine({
         context: { count: 0 },
         entry: ({ context }) => ({ context }),
       })
       initialTransition(entryMachine)
-      expect(materializations).toBe(0)
+      const entryMaterializations = materializations
+
+      yield* expect({
+        contextOnlyCount,
+        contextOnlyMaterializations,
+        systemLookupFound,
+        systemLookupMaterializations,
+        livePlanningMaterializations,
+        entryMaterializations,
+      }).toEqual({
+        contextOnlyCount: 100,
+        contextOnlyMaterializations: 0,
+        systemLookupFound: false,
+        systemLookupMaterializations: 2,
+        livePlanningMaterializations: 0,
+        entryMaterializations: 0,
+      })
     } finally {
       setInertActorMaterializationObserver(undefined)
     }
   })
 
-  it('preserves callback argument surfaces while planning lazily', () => {
+  it('preserves callback argument surfaces while planning lazily', function*({ expect }) {
     let contextKeys: string[] = []
     let guardKeys: string[] = []
     // Object-form guards are only produced by compiled configs.
@@ -171,23 +188,25 @@ describe('transition function', () => {
     const [snapshot] = initialTransition(machine)
     transition(machine, snapshot, { type: 'CHECK' })
 
-    expect(contextKeys).toEqual(['actors', 'input', 'self', 'spawn'])
-    expect(guardKeys).toEqual([
-      '_snapshot',
-      'actions',
-      'actors',
-      'children',
-      'context',
-      'delays',
-      'event',
-      'guards',
-      'output',
-      'parent',
-      'self',
-    ])
+    yield* expect({ contextKeys, guardKeys }).toEqual({
+      contextKeys: ['actors', 'input', 'self', 'spawn'],
+      guardKeys: [
+        '_snapshot',
+        'actions',
+        'actors',
+        'children',
+        'context',
+        'delays',
+        'event',
+        'guards',
+        'output',
+        'parent',
+        'self',
+      ],
+    })
   })
 
-  it('keeps materialized pure scopes effect-free', () => {
+  it('keeps materialized pure scopes effect-free', function*({ expect }) {
     let deferred = false
     let executed = false
     const snapshot = {
@@ -208,28 +227,39 @@ describe('transition function', () => {
 
     initialTransition(logic)
 
-    expect(deferred).toBe(false)
-    expect(executed).toBe(false)
+    yield* expect({ deferred, executed }).toEqual({
+      deferred: false,
+      executed: false,
+    })
   })
 
-  it('does not repeatedly resolve a selected transition during a microstep', () => {
-    const update = vi.fn(({ context }: { context: { count: number } }) => ({
-      context: { count: context.count + 1 },
-    }))
+  it('does not repeatedly resolve a selected transition during a microstep', function*({ expect }) {
+    const updateArgs: Array<{ context: { count: number } }> = []
+    const update = ({ context }: { context: { count: number } }) => {
+      updateArgs.push({ context })
+      return {
+        context: { count: context.count + 1 },
+      }
+    }
     const machine = createMachine({
       context: { count: 0 },
       on: { UPDATE: update },
     })
     const actor = createActor(machine).start()
 
-    update.mockClear()
+    updateArgs.length = 0
     actor.send({ type: 'UPDATE' })
 
-    expect(update).toHaveBeenCalledTimes(1)
-    expect(actor.getSnapshot().context).toEqual({ count: 1 })
+    yield* expect({
+      updateArgs,
+      context: actor.getSnapshot().context,
+    }).toEqual({
+      updateArgs: [{ context: { count: 0 } }],
+      context: { count: 1 },
+    })
   })
 
-  it('resolves a selected transition with the real parent', () => {
+  it('resolves a selected transition with the real parent', function*({ expect }) {
     const childMachine = createMachine({
       context: { parent: undefined as unknown },
       on: {
@@ -245,10 +275,10 @@ describe('transition function', () => {
 
     child.send({ type: 'CHECK' })
 
-    expect(child.getSnapshot().context.parent).toBe(parent)
+    yield* expect(child.getSnapshot().context.parent).toBe(parent)
   })
 
-  it('resolves a root transition with an undefined parent', () => {
+  it('resolves a root transition with an undefined parent', function*({ expect }) {
     const machine = createMachine({
       context: { hasParent: true },
       on: {
@@ -259,10 +289,10 @@ describe('transition function', () => {
 
     actor.send({ type: 'CHECK' })
 
-    expect(actor.getSnapshot().context.hasParent).toBe(false)
+    yield* expect(actor.getSnapshot().context).toEqual({ hasParent: false })
   })
 
-  it('does not send to the parent during transition selection', () => {
+  it('does not send to the parent during transition selection', function*({ expect }) {
     const childMachine = createMachine({
       on: {
         CHECK: ({ parent }) => {
@@ -285,10 +315,10 @@ describe('transition function', () => {
 
     parent.getSnapshot().children['child']!.send({ type: 'CHECK' })
 
-    expect(parent.getSnapshot().context.received).toBe(1)
+    yield* expect(parent.getSnapshot().context.received).toBe(1)
   })
 
-  it('resolves mapper context on object transitions', () => {
+  it('resolves mapper context on object transitions', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -322,10 +352,10 @@ describe('transition function', () => {
 
     actor.send({ type: 'GO', value: 42 })
 
-    expect(actor.getSnapshot().context.value).toBe(42)
+    yield* expect(actor.getSnapshot().context.value).toBe(42)
   })
 
-  it('resolves mapper context on invoke onDone object transitions', async () => {
+  it('resolves mapper context on invoke onDone object transitions', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -338,7 +368,7 @@ describe('transition function', () => {
         pending: {
           invoke: {
             src: createAsyncLogic({
-              run: async () => 42,
+              run: () => Promise.resolve(42),
             }),
             onDone: {
               target: 'done',
@@ -355,15 +385,24 @@ describe('transition function', () => {
 
     const actor = createActor(machine).start()
 
-    await toPromise(actor)
+    yield* Effect.promise(() => toPromise(actor))
 
-    expect(actor.getSnapshot().context.value).toBe(42)
+    yield* expect(actor.getSnapshot().context.value).toBe(42)
   })
 
-  it('should capture actions', () => {
-    const actionWithParams = vi.fn()
-    const actionWithDynamicParams = vi.fn()
-    const stringAction = vi.fn()
+  it('should capture actions', function*({ expect }) {
+    const actionWithParamsCalls: string[] = []
+    const actionWithParams = (_params: { a: number }) => {
+      actionWithParamsCalls.push('actionWithParams')
+    }
+    const actionWithDynamicParamsCalls: string[] = []
+    const actionWithDynamicParams = (_params: { msg: string }) => {
+      actionWithDynamicParamsCalls.push('actionWithDynamicParams')
+    }
+    const stringActionCalls: string[] = []
+    const stringAction = () => {
+      stringActionCalls.push('stringAction')
+    }
 
     // const machine = setup({
     //   types: {
@@ -413,32 +452,45 @@ describe('transition function', () => {
 
     const [state0, actions0] = initialTransition(machine)
 
-    expect(state0.context.count).toBe(100)
-    expect(actions0).toEqual([
-      expect.objectContaining({ args: [{ a: 1 }] }),
-      expect.objectContaining({}),
-    ])
-
-    expect(actionWithParams).not.toHaveBeenCalled()
-    expect(stringAction).not.toHaveBeenCalled()
+    const entryContextCount = state0.context.count
+    const entryActions = actions0
 
     const [state1, actions1] = transition(machine, state0, {
       type: 'event',
       msg: 'hello',
     })
 
-    expect(state1.context.count).toBe(100)
-    expect(actions1).toEqual([
-      expect.objectContaining({
-        args: [{ msg: 'hello' }],
-      }),
-    ])
-
-    expect(actionWithDynamicParams).not.toHaveBeenCalled()
+    yield* expect({
+      entryContextCount,
+      entryActions,
+      actionWithParamsCalls,
+      stringActionCalls,
+      eventContextCount: state1.context.count,
+      eventActions: actions1,
+      actionWithDynamicParamsCalls,
+    }).toEqual({
+      entryContextCount: 100,
+      entryActions: [
+        expect.objectContaining({ args: [{ a: 1 }] }),
+        expect.objectContaining({}),
+      ],
+      actionWithParamsCalls: [],
+      stringActionCalls: [],
+      eventContextCount: 100,
+      eventActions: [
+        expect.objectContaining({
+          args: [{ msg: 'hello' }],
+        }),
+      ],
+      actionWithDynamicParamsCalls: [],
+    })
   })
 
-  it('should not execute a referenced serialized action', () => {
-    const foo = vi.fn()
+  it('should not execute a referenced serialized action', function*({ expect }) {
+    const fooCalls: string[] = []
+    const foo = () => {
+      fooCalls.push('foo')
+    }
 
     const machine = createMachine({
       schemas: {
@@ -455,10 +507,10 @@ describe('transition function', () => {
 
     const [, actions] = initialTransition(machine)
 
-    expect(foo).not.toHaveBeenCalled()
+    yield* expect(fooCalls).toEqual([])
   })
 
-  it('should capture enqueued actions', () => {
+  it('should capture enqueued actions', function*({ expect }) {
     const machine = createMachine({
       entry: (_, enq) => {
         enq.emit({ type: 'stringAction' })
@@ -468,13 +520,13 @@ describe('transition function', () => {
 
     const [_state, actions] = initialTransition(machine)
 
-    expect(actions).toEqual([
+    yield* expect(actions).toEqual([
       expect.objectContaining({ type: 'stringAction' }),
       expect.objectContaining({ type: 'objectAction' }),
     ])
   })
 
-  it.todo('delayed raise actions should be returned', async () => {
+  it('delayed raise actions should be returned', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -492,17 +544,17 @@ describe('transition function', () => {
 
     const [state, actions] = initialTransition(machine)
 
-    expect(state.value).toEqual('a')
-
-    expect(actions[0]).toEqual(
-      expect.objectContaining({
+    yield* expect({ value: state.value, firstAction: actions[0] }).toEqual({
+      value: 'a',
+      firstAction: expect.objectContaining({
         type: '@xstate.raise',
-        params: [{ type: 'NEXT' }, { delay: 10 }],
+        event: { type: 'NEXT' },
+        delay: 10,
       }),
-    )
+    })
   })
 
-  it('raise actions related to delayed transitions should be returned', async () => {
+  it('raise actions related to delayed transitions should be returned', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -515,13 +567,12 @@ describe('transition function', () => {
 
     const [state, actions] = initialTransition(machine)
 
-    expect(state.value).toEqual('a')
-
-    expect(actions[0]).toEqual(
-      expect.objectContaining({
+    yield* expect({ value: state.value, firstAction: actions[0] }).toEqual({
+      value: 'a',
+      firstAction: expect.objectContaining({
         type: '@xstate.raise',
         args: [
-          expect.anything(),
+          expect.any(Object),
           { type: 'xstate.after', delay: 10, stateId: '(machine).a' },
           expect.objectContaining({
             delay: 10,
@@ -529,10 +580,10 @@ describe('transition function', () => {
           }),
         ],
       }),
-    )
+    })
   })
 
-  it('cancel action should be returned', async () => {
+  it('cancel action should be returned', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -553,22 +604,25 @@ describe('transition function', () => {
 
     const [state] = initialTransition(machine)
 
-    expect(state.value).toEqual('a')
+    const stateValue = state.value
 
     const [, actions] = transition(machine, state, { type: 'NEXT' })
 
-    expect(actions).toContainEqual(
-      expect.objectContaining({
-        type: '@xstate.cancel',
-        // params: expect.objectContaining({
-        //   sendId: 'myRaise'
-        // })
-        args: [expect.anything(), 'myRaise'],
-      }),
-    )
+    yield* expect({ value: stateValue, actions }).toEqual({
+      value: 'a',
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          type: '@xstate.cancel',
+          // params: expect.objectContaining({
+          //   sendId: 'myRaise'
+          // })
+          args: [expect.any(Object), 'myRaise'],
+        }),
+      ]),
+    })
   })
 
-  it('sendTo action should be returned', async () => {
+  it('sendTo action should be returned', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       invoke: {
@@ -588,25 +642,31 @@ describe('transition function', () => {
 
     const [state, actions0] = initialTransition(machine)
 
-    expect(state.value).toEqual('a')
-
-    expect(actions0).toContainEqual(
-      expect.objectContaining({
-        type: '@xstate.start',
-        args: [state.children['someActor']],
-      }),
-    )
+    const stateValue = state.value
 
     const [, actions] = transition(machine, state, { type: 'NEXT' })
 
-    expect(actions).toContainEqual(
-      expect.objectContaining({
-        type: '@xstate.sendTo',
-      }),
-    )
+    yield* expect({
+      value: stateValue,
+      initialActions: actions0,
+      nextActions: actions,
+    }).toEqual({
+      value: 'a',
+      initialActions: expect.arrayContaining([
+        expect.objectContaining({
+          type: '@xstate.start',
+          args: [state.children['someActor']],
+        }),
+      ]),
+      nextActions: expect.arrayContaining([
+        expect.objectContaining({
+          type: '@xstate.sendTo',
+        }),
+      ]),
+    })
   })
 
-  it('enq.raise with a string event throws in a transition function', () => {
+  it('enq.raise with a string event throws in a transition function', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -625,35 +685,41 @@ describe('transition function', () => {
 
     const [state] = initialTransition(machine)
 
-    expect(() => transition(machine, state, { type: 'NEXT' })).toThrowError(
+    yield* expect(() => transition(machine, state, { type: 'NEXT' })).toThrowError(
       'Only event objects may be used with raise; use raise({ type: "a string" }) instead',
     )
   })
 
-  it('enq.sendTo with an undefined actor does not return a sendTo action from a transition function', () => {
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: {
-          on: {
-            NEXT: ({ children }, enq) => {
-              enq.sendTo(children['missing'], { type: 'someEvent' })
+  it(
+    'enq.sendTo with an undefined actor does not return a sendTo action from a transition function',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        states: {
+          a: {
+            on: {
+              NEXT: ({ children }, enq) => {
+                enq.sendTo(children['missing'], { type: 'someEvent' })
+              },
             },
           },
         },
-      },
-    })
+      })
 
-    const [state] = initialTransition(machine)
-    const [nextState, actions] = transition(machine, state, { type: 'NEXT' })
+      const [state] = initialTransition(machine)
+      const [nextState, actions] = transition(machine, state, { type: 'NEXT' })
 
-    expect(actions.some((a) => (a as any).type === '@xstate.sendTo')).toBe(
-      false,
-    )
-    expect(nextState.status).toBe('active')
-  })
+      yield* expect({
+        sendToActions: actions.filter(isEffect('@xstate.sendTo')),
+        status: nextState.status,
+      }).toEqual({
+        sendToActions: [],
+        status: 'active',
+      })
+    },
+  )
 
-  it('enq.spawn creates and starts a child once from a transition function', () => {
+  it('enq.spawn creates and starts a child once from a transition function', function*({ expect }) {
     let childConstructions = 0
     const childMachine = createMachine({
       schemas: {
@@ -682,16 +748,28 @@ describe('transition function', () => {
 
     const actor = createActor(parentMachine).start()
 
-    expect(() => actor.send({ type: 'SPAWN' })).not.toThrow()
-    expect(childConstructions).toBe(1)
+    let spawnThrew: unknown = null
+    try {
+      actor.send({ type: 'SPAWN' })
+    } catch (error) {
+      spawnThrew = error
+    }
 
     const child = actor.system.get('child')!
     child.send({ type: 'ping' })
 
-    expect(child.getSnapshot().context).toEqual({ n: 1 })
+    yield* expect({
+      spawnThrew,
+      childConstructions,
+      childContext: child.getSnapshot().context,
+    }).toEqual({
+      spawnThrew: null,
+      childConstructions: 1,
+      childContext: { n: 1 },
+    })
   })
 
-  it('keeps one child ref before and after its spawn effect executes', () => {
+  it('keeps one child ref before and after its spawn effect executes', function*({ expect }) {
     const childLogic = createCallbackLogic(() => {})
     const machine = createMachine({
       entry: (_, enq) => {
@@ -702,16 +780,24 @@ describe('transition function', () => {
     const child = actor.getSnapshot().children['child']
     if (child === undefined) throw new Error('expected a child')
 
-    expect(actor.system.get('child')).toBe(child)
+    const systemChildBeforeStart = actor.system.get('child')
 
     actor.start()
 
-    expect(actor.getSnapshot().children['child']).toBe(child)
-    expect(actor.system.get('child')).toBe(child)
-    expect(child.getSnapshot().status).toBe('active')
+    yield* expect({
+      systemChildBeforeStartIsChild: systemChildBeforeStart === child,
+      snapshotChildIsChild: actor.getSnapshot().children['child'] === child,
+      systemChildIsChild: actor.system.get('child') === child,
+      childStatus: child.getSnapshot().status,
+    }).toEqual({
+      systemChildBeforeStartIsChild: true,
+      snapshotChildIsChild: true,
+      systemChildIsChild: true,
+      childStatus: 'active',
+    })
   })
 
-  it('uses the snapshot child ref as self after start', () => {
+  it('uses the snapshot child ref as self after start', function*({ expect }) {
     let entrySelf: AnyActor | undefined
     let transitionSelf: AnyActor | undefined
     const childLogic = createMachine({
@@ -729,16 +815,23 @@ describe('transition function', () => {
 
     child.send({ type: 'PING' })
 
-    expect(entrySelf).toBe(child)
-    expect(transitionSelf).toBe(child)
+    yield* expect({
+      entrySelfIsChild: entrySelf === child,
+      transitionSelfIsChild: transitionSelf === child,
+    }).toEqual({
+      entrySelfIsChild: true,
+      transitionSelfIsChild: true,
+    })
   })
 
-  it('uses the same system on child self during initialization', () => {
-    let usesTransitionSystem = false
+  it('uses the same system on child self during initialization', function*({ expect }) {
+    let initializationSystems:
+      | { selfSystem: unknown; system: unknown }
+      | undefined
     const childLogic = createMachine({
       entry: ({ self, system }, enq) =>
         enq(() => {
-          usesTransitionSystem = self.system === system
+          initializationSystems = { selfSystem: self.system, system }
         }),
     })
     const machine = createMachine({
@@ -747,24 +840,32 @@ describe('transition function', () => {
 
     createActor(machine).start()
 
-    expect(usesTransitionSystem).toBe(true)
+    if (initializationSystems === undefined) {
+      throw new Error('expected the entry effect to run')
+    }
+    yield* expect(initializationSystems.selfSystem).toBe(
+      initializationSystems.system,
+    )
   })
 
-  it('uses the same system on a runtime self', () => {
-    let usesRuntimeSystem = false
+  it('uses the same system on a runtime self', function*({ expect }) {
+    let runtimeSystems: { selfSystem: unknown; system: unknown } | undefined
     const machine = createMachine({
       entry: ({ self, system }, enq) =>
         enq(() => {
-          usesRuntimeSystem = self.system === system
+          runtimeSystems = { selfSystem: self.system, system }
         }),
     })
 
     createActor(machine).start()
 
-    expect(usesRuntimeSystem).toBe(true)
+    if (runtimeSystems === undefined) {
+      throw new Error('expected the entry effect to run')
+    }
+    yield* expect(runtimeSystems.selfSystem).toBe(runtimeSystems.system)
   })
 
-  it('built-in action effects expose public metadata fields', () => {
+  it('built-in action effects expose public metadata fields', function*({ expect }) {
     const childMachine = createMachine({})
     const machine = createMachine({
       initial: 'a',
@@ -799,75 +900,87 @@ describe('transition function', () => {
 
     // Full metadata now lives on the authored-position `@xstate.spawn` effect.
     const invokeSpawn = initialActions.find(isEffect(XSTATE_SPAWN))!
-
-    expect(invokeSpawn).toBeDefined()
-    expect(invokeSpawn.actor).toBe(invokeSpawn.args[0])
-    expect(invokeSpawn.id).toBe('child')
-    expect(invokeSpawn.logic).toBe(childMachine)
-    expect(invokeSpawn.src).toBe(invokeSpawn.actor.src)
-    expect(invokeSpawn.input).toEqual({ kind: 'invoke' })
-
-    // The deferred `@xstate.start` effect is slimmed to `{ actor, id }`.
     const invokeStart = initialActions.find(isEffect(XSTATE_START))!
-
-    expect(invokeStart.type).toBe('@xstate.start')
-    expect(invokeStart.actor).toBe(invokeStart.args[0])
-    expect(invokeStart.id).toBe('child')
 
     const [, actions] = transition(machine, state, { type: 'NEXT' })
 
     const spawnedSpawn = actions
       .filter(isEffect(XSTATE_SPAWN))
       .find((action) => action.id === 'spawned')!
-    expect(spawnedSpawn).toBeDefined()
-    expect(spawnedSpawn.id).toBe('spawned')
-    expect(spawnedSpawn.actor).toBe(spawnedSpawn.args[0])
-    expect(spawnedSpawn.logic).toBe(childMachine)
-    expect(spawnedSpawn.src).toBe(childMachine)
-    expect(spawnedSpawn.input).toEqual({ kind: 'spawn' })
-
     const spawnedStart = actions
       .filter(isEffect(XSTATE_START))
       .find((action) => action.id === 'spawned')!
-    expect(spawnedStart.type).toBe('@xstate.start')
-    expect(spawnedStart.id).toBe('spawned')
-    expect(spawnedStart.actor).toBe(spawnedStart.args[0])
-
-    expect(
-      actions.find((action) => action.type === '@xstate.raise'),
-    ).toMatchObject({
-      type: '@xstate.raise',
-      event: { type: 'later' },
-      id: 'raise-id',
-      delay: 10,
-    })
-
     const sendAction = actions.find(isEffect('@xstate.sendTo'))!
-    expect(sendAction).toMatchObject({
-      type: '@xstate.sendTo',
-      event: { type: 'ping' },
-      id: 'send-id',
-      delay: 20,
-    })
-    expect(sendAction.target).toBe(state.children['child'])
-
-    expect(
-      actions.find((action) => action.type === '@xstate.cancel'),
-    ).toMatchObject({
-      type: '@xstate.cancel',
-      id: 'raise-id',
-    })
-
     const stopAction = actions.find(isEffect(XSTATE_STOP))!
-    expect(stopAction.type).toBe('@xstate.stop')
-    expect(stopAction.actor).toBe(state.children['child'])
-    expect(stopAction.id).toBe('child')
+
+    yield* expect({
+      invokeSpawnActorIsFirstArg: invokeSpawn.actor === invokeSpawn.args[0],
+      invokeSpawnId: invokeSpawn.id,
+      invokeSpawnLogic: invokeSpawn.logic,
+      invokeSpawnSrcIsActorSrc: invokeSpawn.src === invokeSpawn.actor.src,
+      invokeSpawnInput: invokeSpawn.input,
+      invokeStartType: invokeStart.type,
+      invokeStartActorIsFirstArg: invokeStart.actor === invokeStart.args[0],
+      invokeStartId: invokeStart.id,
+      spawnedSpawnId: spawnedSpawn.id,
+      spawnedSpawnActorIsFirstArg: spawnedSpawn.actor === spawnedSpawn.args[0],
+      spawnedSpawnLogic: spawnedSpawn.logic,
+      spawnedSpawnSrc: spawnedSpawn.src,
+      spawnedSpawnInput: spawnedSpawn.input,
+      spawnedStartType: spawnedStart.type,
+      spawnedStartId: spawnedStart.id,
+      spawnedStartActorIsFirstArg: spawnedStart.actor === spawnedStart.args[0],
+      raise: actions.find((action) => action.type === '@xstate.raise'),
+      send: sendAction,
+      sendTargetIsChild: sendAction.target === state.children['child'],
+      cancel: actions.find((action) => action.type === '@xstate.cancel'),
+      stopType: stopAction.type,
+      stopActorIsChild: stopAction.actor === state.children['child'],
+      stopId: stopAction.id,
+    }).toEqual({
+      invokeSpawnActorIsFirstArg: true,
+      invokeSpawnId: 'child',
+      invokeSpawnLogic: childMachine,
+      invokeSpawnSrcIsActorSrc: true,
+      invokeSpawnInput: { kind: 'invoke' },
+      invokeStartType: '@xstate.start',
+      invokeStartActorIsFirstArg: true,
+      invokeStartId: 'child',
+      spawnedSpawnId: 'spawned',
+      spawnedSpawnActorIsFirstArg: true,
+      spawnedSpawnLogic: childMachine,
+      spawnedSpawnSrc: childMachine,
+      spawnedSpawnInput: { kind: 'spawn' },
+      spawnedStartType: '@xstate.start',
+      spawnedStartId: 'spawned',
+      spawnedStartActorIsFirstArg: true,
+      raise: expect.objectContaining({
+        type: '@xstate.raise',
+        event: { type: 'later' },
+        id: 'raise-id',
+        delay: 10,
+      }),
+      send: expect.objectContaining({
+        type: '@xstate.sendTo',
+        event: { type: 'ping' },
+        id: 'send-id',
+        delay: 20,
+      }),
+      sendTargetIsChild: true,
+      cancel: expect.objectContaining({
+        type: '@xstate.cancel',
+        id: 'raise-id',
+      }),
+      stopType: '@xstate.stop',
+      stopActorIsChild: true,
+      stopId: 'child',
+    })
   })
 
   describe('invoke stop effects', () => {
     const listener = createCallbackLogic(() => {})
 
-    it('returns an @xstate.stop effect when an invoking state exits', () => {
+    it('returns an @xstate.stop effect when an invoking state exits', function*({ expect }) {
       const machine = createMachine({
         id: 'player',
         initial: 'mini',
@@ -887,18 +1000,23 @@ describe('transition function', () => {
         type: 'key.escape',
       })
 
-      expect(mini.children).toEqual({})
-      expect(effects.filter(isEffect(XSTATE_STOP))).toEqual([
-        expect.objectContaining({
-          type: XSTATE_STOP,
-          actor: child,
-          id: 'keyEscape',
-          args: [expect.anything(), child],
-        }),
-      ])
+      yield* expect({
+        children: mini.children,
+        stopEffects: effects.filter(isEffect(XSTATE_STOP)),
+      }).toEqual({
+        children: {},
+        stopEffects: [
+          expect.objectContaining({
+            type: XSTATE_STOP,
+            actor: child,
+            id: 'keyEscape',
+            args: [expect.any(Object), child],
+          }),
+        ],
+      })
     })
 
-    it('orders an invoke stop after its exit action', () => {
+    it('orders an invoke stop after its exit action', function*({ expect }) {
       function exitAction() {}
       const machine = createMachine({
         initial: 'active',
@@ -915,13 +1033,13 @@ describe('transition function', () => {
       const [active] = initialTransition(machine)
       const [, effects] = transition(machine, active, { type: 'EXIT' })
 
-      expect(effects.map((effect) => effect.type)).toEqual([
+      yield* expect(effects.map((effect) => effect.type)).toEqual([
         'exitAction',
         XSTATE_STOP,
       ])
     })
 
-    it('preserves one-argument exit actions before an invoke stop', () => {
+    it('preserves one-argument exit actions before an invoke stop', function*({ expect }) {
       function exitAction(_: unknown) {}
       const machine = createMachine({
         initial: 'active',
@@ -938,14 +1056,23 @@ describe('transition function', () => {
       const [active] = initialTransition(machine)
       const [, effects] = transition(machine, active, { type: 'EXIT' })
 
-      expect(effects).toHaveLength(2)
       const firstEffect = effects[0]
       if (firstEffect === undefined) throw new Error('expected a first effect')
-      expect(firstEffect.type).not.toBe(XSTATE_STOP)
-      expect(effects[1]).toMatchObject({ type: XSTATE_STOP, id: 'child' })
+      yield* expect({
+        effectCount: effects.length,
+        firstIsNotStop: firstEffect.type !== XSTATE_STOP,
+        secondEffect: effects[1],
+      }).toEqual({
+        effectCount: 2,
+        firstIsNotStop: true,
+        secondEffect: expect.objectContaining({
+          type: XSTATE_STOP,
+          id: 'child',
+        }),
+      })
     })
 
-    it('orders after cancellation before the invoke stop', () => {
+    it('orders after cancellation before the invoke stop', function*({ expect }) {
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -964,7 +1091,7 @@ describe('transition function', () => {
         (effect) => effect.type === '@xstate.cancel' || effect.type === XSTATE_STOP,
       )
 
-      expect(lifecycleEffects).toEqual([
+      yield* expect(lifecycleEffects).toEqual([
         expect.objectContaining({
           type: '@xstate.cancel',
           id: 'xstate.after.1000.(machine).active',
@@ -973,7 +1100,7 @@ describe('transition function', () => {
       ])
     })
 
-    it('stops invokes in reverse state document order on parallel exit', () => {
+    it('stops invokes in reverse state document order on parallel exit', function*({ expect }) {
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -992,12 +1119,12 @@ describe('transition function', () => {
       const [active] = initialTransition(machine)
       const [, effects] = transition(machine, active, { type: 'EXIT' })
 
-      expect(
+      yield* expect(
         effects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id),
       ).toEqual(['right', 'left'])
     })
 
-    it('stops multiple invokes in their declaration order', () => {
+    it('stops multiple invokes in their declaration order', function*({ expect }) {
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -1015,12 +1142,12 @@ describe('transition function', () => {
       const [active] = initialTransition(machine)
       const [, effects] = transition(machine, active, { type: 'EXIT' })
 
-      expect(
+      yield* expect(
         effects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id),
       ).toEqual(['first', 'second'])
     })
 
-    it('stops nested invokes from child state to parent state', () => {
+    it('stops nested invokes from child state to parent state', function*({ expect }) {
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -1039,12 +1166,12 @@ describe('transition function', () => {
       const [active] = initialTransition(machine)
       const [, effects] = transition(machine, active, { type: 'EXIT' })
 
-      expect(
+      yield* expect(
         effects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id),
       ).toEqual(['child', 'parent'])
     })
 
-    it('stops remaining children when the machine reaches a final state', () => {
+    it('stops remaining children when the machine reaches a final state', function*({ expect }) {
       const machine = createMachine({
         invoke: { id: 'rootChild', src: listener },
         initial: 'active',
@@ -1057,14 +1184,20 @@ describe('transition function', () => {
       const [active] = initialTransition(machine)
       const [done, effects] = transition(machine, active, { type: 'FINISH' })
 
-      expect(done.status).toBe('done')
-      expect(done.children).toEqual({})
-      expect(
-        effects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id),
-      ).toEqual(['rootChild'])
+      yield* expect({
+        status: done.status,
+        children: done.children,
+        stoppedIds: effects
+          .filter(isEffect(XSTATE_STOP))
+          .map((effect) => effect.id),
+      }).toEqual({
+        status: 'done',
+        children: {},
+        stoppedIds: ['rootChild'],
+      })
     })
 
-    it('stops spawned children after root exit actions on machine completion', () => {
+    it('stops spawned children after root exit actions on machine completion', function*({ expect }) {
       const order: string[] = []
       const child = createCallbackLogic(() => () => order.push('stop'))
       const machine = createMachine({
@@ -1080,10 +1213,10 @@ describe('transition function', () => {
 
       actor.send({ type: 'FINISH' })
 
-      expect(order).toEqual(['exit', 'stop'])
+      yield* expect(order).toEqual(['exit', 'stop'])
     })
 
-    it('reports every removed child id with a stop effect', () => {
+    it('reports every removed child id with a stop effect', function*({ expect }) {
       const machine = createMachine({
         initial: 'first',
         states: {
@@ -1107,6 +1240,7 @@ describe('transition function', () => {
         type: 'FINISH',
       })
 
+      const reports: Array<{ removedIds: string[]; stoppedIds: string[] }> = []
       for (
         const [previous, next, effects] of [
           [first, second, nextEffects],
@@ -1120,11 +1254,16 @@ describe('transition function', () => {
           .filter(isEffect(XSTATE_STOP))
           .map((effect) => effect.id)
 
-        expect(stoppedIds).toEqual(removedIds)
+        reports.push({ removedIds, stoppedIds })
       }
+
+      yield* expect(reports).toEqual([
+        { removedIds: ['firstChild'], stoppedIds: ['firstChild'] },
+        { removedIds: ['secondChild'], stoppedIds: ['secondChild'] },
+      ])
     })
 
-    it('exposes stops in getMicrosteps and getInitialMicrosteps', () => {
+    it('exposes stops in getMicrosteps and getInitialMicrosteps', function*({ expect }) {
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -1141,21 +1280,11 @@ describe('transition function', () => {
         type: 'EXIT',
       })
 
-      expect(microsteps).toHaveLength(1)
       const firstStep = microsteps[0]
       const firstStepEffects = firstStep?.[1]
       if (firstStepEffects === undefined) {
         throw new Error('expected first step effects')
       }
-      expect(
-        firstStepEffects
-          .filter(isEffect(XSTATE_STOP))
-          .map((effect) => effect.id),
-      ).toEqual(
-        transitionEffects
-          .filter(isEffect(XSTATE_STOP))
-          .map((effect) => effect.id),
-      )
 
       const initialMachine = createMachine({
         initial: 'transient',
@@ -1170,24 +1299,44 @@ describe('transition function', () => {
       const initialMicrosteps = getInitialMicrosteps(initialMachine)
       const [, initialEffects] = initialTransition(initialMachine)
 
-      expect(initialMicrosteps).toHaveLength(2)
       const secondStep = initialMicrosteps[1]
       const secondStepEffects = secondStep?.[1]
       if (secondStepEffects === undefined) {
         throw new Error('expected second step effects')
       }
-      expect(
-        secondStepEffects
+
+      yield* expect({
+        microstepCount: microsteps.length,
+        firstStepStoppedIds: firstStepEffects
           .filter(isEffect(XSTATE_STOP))
           .map((effect) => effect.id),
-      ).toEqual(
-        initialEffects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id),
-      )
+        transitionStoppedIds: transitionEffects
+          .filter(isEffect(XSTATE_STOP))
+          .map((effect) => effect.id),
+        initialMicrostepCount: initialMicrosteps.length,
+        secondStepStoppedIds: secondStepEffects
+          .filter(isEffect(XSTATE_STOP))
+          .map((effect) => effect.id),
+        initialStoppedIds: initialEffects
+          .filter(isEffect(XSTATE_STOP))
+          .map((effect) => effect.id),
+      }).toEqual({
+        microstepCount: 1,
+        firstStepStoppedIds: ['child'],
+        transitionStoppedIds: ['child'],
+        initialMicrostepCount: 2,
+        secondStepStoppedIds: ['initialChild'],
+        initialStoppedIds: ['initialChild'],
+      })
     })
 
-    it('createActor executes an invoke stop exactly once after exit actions', () => {
+    it('createActor executes an invoke stop exactly once after exit actions', function*({ expect }) {
       const order: string[] = []
-      const dispose = vi.fn(() => order.push('stop'))
+      const disposeCalls: string[] = []
+      const dispose = () => {
+        disposeCalls.push('stop')
+        order.push('stop')
+      }
       const childLogic = createCallbackLogic(() => dispose)
       const machine = createMachine({
         initial: 'active',
@@ -1204,32 +1353,40 @@ describe('transition function', () => {
 
       actor.send({ type: 'EXIT' })
 
-      expect(order).toEqual(['exit', 'stop'])
-      expect(dispose).toHaveBeenCalledTimes(1)
+      yield* expect({
+        order,
+        disposeCallCount: disposeCalls.length,
+      }).toEqual({
+        order: ['exit', 'stop'],
+        disposeCallCount: 1,
+      })
     })
 
-    it('does not let an actor stop itself through enq.stop()', () => {
-      const error = vi.fn()
+    it('does not let an actor stop itself through enq.stop()', function*({ expect }) {
+      const errors: unknown[] = []
       const machine = createMachine({
         on: {
           STOP_SELF: ({ self }, enq) => enq.stop(self),
         },
       })
       const actor = createActor(machine)
-      actor.subscribe({ error })
+      actor.subscribe({ error: (err) => errors.push(err) })
       actor.start()
 
       actor.send({ type: 'STOP_SELF' })
 
-      expect(error).toHaveBeenCalledWith(
+      yield* expect(errors).toEqual([
         expect.objectContaining({
           message: expect.stringContaining('because it is not a child'),
         }),
-      )
+      ])
     })
 
-    it('explicit enq.stop removes and stops a child exactly once', () => {
-      const dispose = vi.fn()
+    it('explicit enq.stop removes and stops a child exactly once', function*({ expect }) {
+      const disposeCalls: unknown[] = []
+      const dispose = () => {
+        disposeCalls.push(undefined)
+      }
       const childLogic = createCallbackLogic(() => dispose)
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(childLogic, { id: 'child' }),
@@ -1244,16 +1401,26 @@ describe('transition function', () => {
 
       const [stopped, effects] = transition(machine, active, { type: 'STOP' })
 
-      expect(stopped.children).toEqual({})
-      expect(effects.filter(isEffect(XSTATE_STOP))).toEqual([
-        expect.objectContaining({ actor: child, id: 'child' }),
-      ])
+      const stoppedChildren = stopped.children
+      const stopEffects = effects.filter(isEffect(XSTATE_STOP))
       effects.forEach((effect) => void effect.exec())
-      expect(dispose).toHaveBeenCalledOnce()
+
+      yield* expect({
+        stoppedChildren,
+        stopEffects,
+        disposeCalls,
+      }).toEqual({
+        stoppedChildren: {},
+        stopEffects: [expect.objectContaining({ actor: child, id: 'child' })],
+        disposeCalls: [undefined],
+      })
     })
 
-    it('does not duplicate invoke auto-stop after an explicit exit stop', () => {
-      const dispose = vi.fn()
+    it('does not duplicate invoke auto-stop after an explicit exit stop', function*({ expect }) {
+      const disposeCalls: unknown[] = []
+      const dispose = () => {
+        disposeCalls.push(undefined)
+      }
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -1272,15 +1439,23 @@ describe('transition function', () => {
 
       actor.send({ type: 'EXIT' })
 
-      expect(dispose).toHaveBeenCalledOnce()
-
       const [active] = initialTransition(machine)
       const [, effects] = transition(machine, active, { type: 'EXIT' })
-      expect(effects.filter(isEffect(XSTATE_STOP))).toHaveLength(1)
+
+      yield* expect({
+        disposeCalls,
+        stopEffectCount: effects.filter(isEffect(XSTATE_STOP)).length,
+      }).toEqual({
+        disposeCalls: [undefined],
+        stopEffectCount: 1,
+      })
     })
 
-    it('supports naive sequential execution of invoke lifecycle effects', () => {
-      const dispose = vi.fn()
+    it('supports naive sequential execution of invoke lifecycle effects', function*({ expect }) {
+      const disposeCalls: unknown[] = []
+      const dispose = () => {
+        disposeCalls.push(undefined)
+      }
       const childLogic = createCallbackLogic(() => dispose)
       const machine = createMachine({
         initial: 'active',
@@ -1299,31 +1474,41 @@ describe('transition function', () => {
 
       const child = active.children['child']
       if (child === undefined) throw new Error('expected a child')
-      expect(child.getSnapshot().status).toBe('active')
+      const childStatusAfterStart = child.getSnapshot().status
 
       const [reentered, restartEffects] = transition(machine, active, {
         type: 'RESTART',
       })
-      expect(describeEffects(restartEffects)).toEqual([
-        'stop(child)',
-        'spawn(child)',
-        'start(child)',
-      ])
+      const restartEffectLabels = describeEffects(restartEffects)
       for (const effect of restartEffects) {
         void effect.exec()
       }
 
-      expect(child.getSnapshot().status).toBe('stopped')
       const reenteredChild = reentered.children['child']
       if (reenteredChild === undefined) {
         throw new Error('expected a reentered child')
       }
-      expect(reenteredChild.getSnapshot().status).toBe('active')
-      expect(dispose).toHaveBeenCalledTimes(1)
+
+      yield* expect({
+        childStatusAfterStart,
+        restartEffectLabels,
+        childStatusAfterRestart: child.getSnapshot().status,
+        reenteredChildStatus: reenteredChild.getSnapshot().status,
+        disposeCalls,
+      }).toEqual({
+        childStatusAfterStart: 'active',
+        restartEffectLabels: ['stop(child)', 'spawn(child)', 'start(child)'],
+        childStatusAfterRestart: 'stopped',
+        reenteredChildStatus: 'active',
+        disposeCalls: [undefined],
+      })
     })
 
-    it('executes immediate sends in a sequential effect loop', () => {
-      const received = vi.fn()
+    it('executes immediate sends in a sequential effect loop', function*({ expect }) {
+      const receivedEvents: unknown[] = []
+      const received = (event: unknown) => {
+        receivedEvents.push(event)
+      }
       const machine = createMachine({
         invoke: {
           id: 'child',
@@ -1339,10 +1524,10 @@ describe('transition function', () => {
       const [, effects] = transition(machine, active, { type: 'SEND' })
       effects.forEach((effect: ExecutableActionObject) => void effect.exec())
 
-      expect(received).toHaveBeenCalledWith({ type: 'PING' })
+      yield* expect(receivedEvents).toEqual([{ type: 'PING' }])
     })
 
-    it('cancels a previously scheduled effect in a sequential effect loop', () => {
+    it('cancels a previously scheduled effect in a sequential effect loop', function*({ expect }) {
       const machine = createMachine({
         initial: 'waiting',
         states: {
@@ -1357,19 +1542,27 @@ describe('transition function', () => {
       initialEffects.forEach((effect) => void effect.exec())
       const source = initialEffects.find(isEffect('@xstate.raise'))!.source
 
-      expect(
-        Object.keys(source.system.getSnapshot()._scheduledTimers),
-      ).toHaveLength(1)
+      const scheduledTimerCountBefore = Object.keys(
+        source.system.getSnapshot()._scheduledTimers,
+      ).length
 
       const [, effects] = machine.transition(waiting, { type: 'CANCEL' })
       effects.forEach((effect: ExecutableActionObject) => void effect.exec())
 
-      expect(
-        Object.keys(source.system.getSnapshot()._scheduledTimers),
-      ).toHaveLength(0)
+      const scheduledTimerCountAfter = Object.keys(
+        source.system.getSnapshot()._scheduledTimers,
+      ).length
+
+      yield* expect({
+        scheduledTimerCountBefore,
+        scheduledTimerCountAfter,
+      }).toEqual({
+        scheduledTimerCountBefore: 1,
+        scheduledTimerCountAfter: 0,
+      })
     })
 
-    it('machine transition methods do not require an actor scope', () => {
+    it('machine transition methods do not require an actor scope', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -1381,10 +1574,10 @@ describe('transition function', () => {
       const [a] = machine.initialTransition(undefined)
       const [b] = machine.transition(a, { type: 'NEXT' })
 
-      expect(b.value).toBe('b')
+      yield* expect(b.value).toBe('b')
     })
 
-    it('keeps the inert self snapshot in sync for executable effects', () => {
+    it('keeps the inert self snapshot in sync for executable effects', function*({ expect }) {
       let effectSnapshot: unknown
       const machine = createMachine({
         initial: 'a',
@@ -1407,10 +1600,10 @@ describe('transition function', () => {
       const [, effects] = machine.transition(a, { type: 'NEXT' })
       effects.forEach((effect: ExecutableActionObject) => void effect.exec())
 
-      expect(effectSnapshot).toBe('b')
+      yield* expect(effectSnapshot).toBe('b')
     })
 
-    it('keeps executable effect self snapshots isolated between branches', () => {
+    it('keeps executable effect self snapshots isolated between branches', function*({ expect }) {
       let effectSnapshot: unknown
       const machine = createMachine({
         initial: 'a',
@@ -1438,11 +1631,11 @@ describe('transition function', () => {
         (effect: ExecutableActionObject) => void effect.exec(),
       )
 
-      expect(effectSnapshot).toBe('left')
+      yield* expect(effectSnapshot).toBe('left')
     })
 
-    it('keeps pure system registries isolated between branches', () => {
-      let branchSawChild = false
+    it('keeps pure system registries isolated between branches', function*({ expect }) {
+      let branchSystemEntry: AnyActor | string = 'not-checked'
       const child = createMachine({})
       const machine = createMachine({
         on: {
@@ -1450,7 +1643,7 @@ describe('transition function', () => {
             enq.spawn(child, { registryKey: 'child' })
           },
           CHECK: ({ system }) => {
-            branchSawChild = !!system.get('child')
+            branchSystemEntry = system.get('child') ?? 'no child'
           },
         },
       })
@@ -1460,11 +1653,11 @@ describe('transition function', () => {
       machine.transition(initial, { type: 'SPAWN' })
       machine.transition(initial, { type: 'CHECK' })
 
-      expect(branchSawChild).toBe(false)
+      yield* expect(branchSystemEntry).toEqual('no child')
     })
 
-    it('does not expose future runtime registry entries to old snapshots', () => {
-      let oldSnapshotSawChild = false
+    it('does not expose future runtime registry entries to old snapshots', function*({ expect }) {
+      let oldSnapshotSystemEntry: AnyActor | string = 'not-checked'
       const child = createMachine({})
       const machine = createMachine({
         on: {
@@ -1472,7 +1665,7 @@ describe('transition function', () => {
             enq.spawn(child, { registryKey: 'child' })
           },
           CHECK: ({ system }) => {
-            oldSnapshotSawChild = !!system.get('child')
+            oldSnapshotSystemEntry = system.get('child') ?? 'no child'
           },
         },
       })
@@ -1482,11 +1675,17 @@ describe('transition function', () => {
       actor.send({ type: 'SPAWN' })
       transition(machine, oldSnapshot, { type: 'CHECK' })
 
-      expect(actor.system.get('child')).toBeDefined()
-      expect(oldSnapshotSawChild).toBe(false)
+      const registryChild = actor.system.get('child')
+      yield* expect({
+        registryChildIsDefined: registryChild !== undefined,
+        oldSnapshotSystemEntry,
+      }).toEqual({
+        registryChildIsDefined: true,
+        oldSnapshotSystemEntry: 'no child',
+      })
     })
 
-    it('reuses captured live system state until topology changes', () => {
+    it('reuses captured live system state until topology changes', function*({ expect }) {
       const child = createMachine({})
       const machine = createMachine({
         context: { count: 0 },
@@ -1504,19 +1703,30 @@ describe('transition function', () => {
       const initialSystemState = getSystemState()
 
       actor.send({ type: 'INCREMENT' })
-      expect(getSystemState()).toBe(initialSystemState)
+      const afterIncrementSystemState = getSystemState()
 
       actor.send({ type: 'SPAWN' })
       const spawnedSystemState = getSystemState()
-      expect(spawnedSystemState).not.toBe(initialSystemState)
 
       actor.send({ type: 'INCREMENT' })
-      expect(getSystemState()).toBe(spawnedSystemState)
-      expect(actor.system.get('child')).toBeDefined()
+      const afterSecondIncrementSystemState = getSystemState()
+      const registryChild = actor.system.get('child')
+
+      yield* expect({
+        firstReusePreserved: afterIncrementSystemState === initialSystemState,
+        spawnChanged: spawnedSystemState !== initialSystemState,
+        secondReusePreserved: afterSecondIncrementSystemState === spawnedSystemState,
+        registryChildIsDefined: registryChild !== undefined,
+      }).toEqual({
+        firstReusePreserved: true,
+        spawnChanged: true,
+        secondReusePreserved: true,
+        registryChildIsDefined: true,
+      })
     })
 
-    it('does not discover future nested actors through old child refs', () => {
-      let oldSnapshotSawGrandchild = false
+    it('does not discover future nested actors through old child refs', function*({ expect }) {
+      let oldSnapshotGrandchildEntry: AnyActor | string = 'not-checked'
       const child = createMachine({
         on: {
           SPAWN: (_, enq) => {
@@ -1528,7 +1738,7 @@ describe('transition function', () => {
         invoke: { id: 'child', src: child },
         on: {
           CHECK: ({ system }) => {
-            oldSnapshotSawGrandchild = !!system.get('grandchild')
+            oldSnapshotGrandchildEntry = system.get('grandchild') ?? 'no child'
           },
         },
       })
@@ -1542,11 +1752,11 @@ describe('transition function', () => {
       oldSnapshotChild.send({ type: 'SPAWN' })
       transition(machine, oldSnapshot, { type: 'CHECK' })
 
-      expect(oldSnapshotSawGrandchild).toBe(false)
+      yield* expect(oldSnapshotGrandchildEntry).toEqual('no child')
     })
 
-    it('removes stopped children from later pure system views', () => {
-      let sawStoppedChild = true
+    it('removes stopped children from later pure system views', function*({ expect }) {
+      let laterSystemEntry: AnyActor | string = 'not-checked'
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -1561,7 +1771,7 @@ describe('transition function', () => {
           inactive: {
             on: {
               CHECK: ({ system }) => {
-                sawStoppedChild = !!system.get('child')
+                laterSystemEntry = system.get('child') ?? 'no child'
               },
             },
           },
@@ -1572,10 +1782,10 @@ describe('transition function', () => {
 
       transition(machine, inactive, { type: 'CHECK' })
 
-      expect(sawStoppedChild).toBe(false)
+      yield* expect(laterSystemEntry).toEqual('no child')
     })
 
-    it('uses a new actor session ID across pure stop and reentry', () => {
+    it('uses a new actor session ID across pure stop and reentry', function*({ expect }) {
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -1597,10 +1807,10 @@ describe('transition function', () => {
       if (reenteredChild === undefined) {
         throw new Error('expected a reentered child')
       }
-      expect(reenteredChild.sessionId).not.toBe(firstSessionId)
+      yield* expect(reenteredChild.sessionId).not.toBe(firstSessionId)
     })
 
-    it('assigns distinct opaque session IDs across pure initial transitions', () => {
+    it('assigns distinct opaque session IDs across pure initial transitions', function*({ expect }) {
       const machine = createMachine({
         invoke: { id: 'child', src: listener },
       })
@@ -1613,10 +1823,10 @@ describe('transition function', () => {
       if (firstChildRef === undefined || secondChildRef === undefined) {
         throw new Error('expected children')
       }
-      expect(firstChildRef.sessionId).not.toBe(secondChildRef.sessionId)
+      yield* expect(firstChildRef.sessionId).not.toBe(secondChildRef.sessionId)
     })
 
-    it('assigns distinct session IDs to branches from the same snapshot', () => {
+    it('assigns distinct session IDs to branches from the same snapshot', function*({ expect }) {
       const machine = createMachine({
         initial: 'idle',
         states: {
@@ -1634,11 +1844,16 @@ describe('transition function', () => {
       if (firstChildRef === undefined || secondChildRef === undefined) {
         throw new Error('expected children')
       }
-      expect(first.children['child']).not.toBe(second.children['child'])
-      expect(firstChildRef.sessionId).not.toBe(secondChildRef.sessionId)
+      yield* expect({
+        childrenDistinct: first.children['child'] !== second.children['child'],
+        sessionIdsDistinct: firstChildRef.sessionId !== secondChildRef.sessionId,
+      }).toEqual({
+        childrenDistinct: true,
+        sessionIdsDistinct: true,
+      })
     })
 
-    it('projects nested system registries from the input snapshot', () => {
+    it('projects nested system registries from the input snapshot', function*({ expect }) {
       let foundGrandchild: AnyActor | undefined
       const child = createMachine({
         invoke: {
@@ -1661,10 +1876,10 @@ describe('transition function', () => {
         .grandchild as AnyActor
       machine.transition(initial, { type: 'CHECK' })
 
-      expect(foundGrandchild).toBe(grandchild)
+      yield* expect(foundGrandchild).toBe(grandchild)
     })
 
-    it('preserves parent refs when purely transitioning a child snapshot', () => {
+    it('preserves parent refs when purely transitioning a child snapshot', function*({ expect }) {
       let seenParent: unknown
       const child = createMachine({
         on: {
@@ -1681,10 +1896,10 @@ describe('transition function', () => {
       const [, effects] = transition(child, childSnapshot, { type: 'CHECK' })
       effects.forEach((effect) => void effect.exec())
 
-      expect(seenParent).toBe(parent)
+      yield* expect(seenParent).toBe(parent)
     })
 
-    it('does not reuse a running actor scope for a pure transition', () => {
+    it('does not reuse a running actor scope for a pure transition', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -1698,11 +1913,16 @@ describe('transition function', () => {
         type: 'NEXT',
       })
 
-      expect(next.value).toBe('b')
-      expect(actor.getSnapshot().value).toBe('a')
+      yield* expect({
+        nextValue: next.value,
+        liveValue: actor.getSnapshot().value,
+      }).toEqual({
+        nextValue: 'b',
+        liveValue: 'a',
+      })
     })
 
-    it('replaces inherited live identity after materializing a pure branch', () => {
+    it('replaces inherited live identity after materializing a pure branch', function*({ expect }) {
       let branchSelf: AnyActor | undefined
       const machine = createMachine({
         context: { count: 0 },
@@ -1722,14 +1942,22 @@ describe('transition function', () => {
       })
       const branchRef = getSnapshotActorRef(nextSnapshot)!
 
-      expect(branchSelf).not.toBe(actor)
-      expect(branchRef.actor).toBe(branchSelf)
-      expect(branchRef.actor.getSnapshot()).toBe(nextSnapshot)
-      expect(actor.getSnapshot()).toBe(liveSnapshot)
-      expect(getSnapshotActorRef(liveSnapshot)!.actor).toBe(actor)
+      yield* expect({
+        branchSelfIsNotActor: branchSelf !== actor,
+        branchRefActorIsBranchSelf: branchRef.actor === branchSelf,
+        branchRefSnapshotIsNext: branchRef.actor.getSnapshot() === nextSnapshot,
+        liveActorSnapshotIsLive: actor.getSnapshot() === liveSnapshot,
+        liveRefActorIsActor: getSnapshotActorRef(liveSnapshot)!.actor === actor,
+      }).toEqual({
+        branchSelfIsNotActor: true,
+        branchRefActorIsBranchSelf: true,
+        branchRefSnapshotIsNext: true,
+        liveActorSnapshotIsLive: true,
+        liveRefActorIsActor: true,
+      })
     })
 
-    it('gives every planned snapshot its own current owner snapshot', () => {
+    it('gives every planned snapshot its own current owner snapshot', function*({ expect }) {
       const machine = createMachine({
         context: { count: 0 },
         on: {
@@ -1745,12 +1973,18 @@ describe('transition function', () => {
       })
       const [second] = transition(machine, first, { type: 'INCREMENT' })
 
-      expect(getSnapshotActorRef(first)!.actor.getSnapshot()).toBe(first)
-      expect(getSnapshotActorRef(second)!.actor.getSnapshot()).toBe(second)
-      expect(getSnapshotActorRef(liveSnapshot)!.actor).toBe(liveActor)
+      yield* expect({
+        firstOwnerIsFirst: getSnapshotActorRef(first)!.actor.getSnapshot() === first,
+        secondOwnerIsSecond: getSnapshotActorRef(second)!.actor.getSnapshot() === second,
+        liveRefActorIsLiveActor: getSnapshotActorRef(liveSnapshot)!.actor === liveActor,
+      }).toEqual({
+        firstOwnerIsFirst: true,
+        secondOwnerIsSecond: true,
+        liveRefActorIsLiveActor: true,
+      })
     })
 
-    it('keeps one session identity across a plan started from scratch', () => {
+    it('keeps one session identity across a plan started from scratch', function*({ expect }) {
       const machine = createMachine({
         context: { count: 0 },
         on: {
@@ -1762,12 +1996,12 @@ describe('transition function', () => {
       const [initial] = initialTransition(machine)
       const [next] = transition(machine, initial, { type: 'INCREMENT' })
 
-      expect(getSnapshotActorRef(next)!.actor.sessionId).toBe(
+      yield* expect(getSnapshotActorRef(next)!.actor.sessionId).toBe(
         getSnapshotActorRef(initial)!.actor.sessionId,
       )
     })
 
-    it('keeps one session identity across initial microsteps', () => {
+    it('keeps one session identity across initial microsteps', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -1777,17 +2011,20 @@ describe('transition function', () => {
       })
       const microsteps = getInitialMicrosteps(machine)
 
-      expect(microsteps).toHaveLength(2)
-      expect(
-        new Set(
+      yield* expect({
+        microstepCount: microsteps.length,
+        distinctSessionIds: new Set(
           microsteps.map(
             ([snapshot]) => getSnapshotActorRef(snapshot)!.actor.sessionId,
           ),
-        ),
-      ).toHaveLength(1)
+        ).size,
+      }).toEqual({
+        microstepCount: 2,
+        distinctSessionIds: 1,
+      })
     })
 
-    it('gives every microstep its own current owner snapshot', () => {
+    it('gives every microstep its own current owner snapshot', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -1799,12 +2036,9 @@ describe('transition function', () => {
       const [initial] = initialTransition(machine)
       const microsteps = getMicrosteps(machine, initial, { type: 'NEXT' })
 
-      expect(microsteps).toHaveLength(2)
-      for (const [snapshot] of microsteps) {
-        expect(getSnapshotActorRef(snapshot)!.actor.getSnapshot()).toBe(
-          snapshot,
-        )
-      }
+      const microstepOwnerMatches = microsteps.map(
+        ([snapshot]) => getSnapshotActorRef(snapshot)!.actor.getSnapshot() === snapshot,
+      )
       const firstMicrostep = microsteps[0]
       const secondMicrostep = microsteps[1]
       const firstMicrostepSnapshot = firstMicrostep?.[0]
@@ -1815,12 +2049,20 @@ describe('transition function', () => {
       ) {
         throw new Error('expected microstep snapshots')
       }
-      expect(getSnapshotActorRef(firstMicrostepSnapshot)!.actor).not.toBe(
-        getSnapshotActorRef(secondMicrostepSnapshot)!.actor,
-      )
+
+      yield* expect({
+        microstepCount: microsteps.length,
+        microstepOwnerMatches,
+        firstActorIsNotSecondActor: getSnapshotActorRef(firstMicrostepSnapshot)!.actor !==
+          getSnapshotActorRef(secondMicrostepSnapshot)!.actor,
+      }).toEqual({
+        microstepCount: 2,
+        microstepOwnerMatches: [true, true],
+        firstActorIsNotSecondActor: true,
+      })
     })
 
-    it('appends deferred starts to the final microstep', () => {
+    it('appends deferred starts to the final microstep', function*({ expect }) {
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(listener, { id: 'child' }),
       })
@@ -1828,16 +2070,16 @@ describe('transition function', () => {
       const microsteps = getInitialMicrosteps(machine)
       const effects = microsteps.flatMap(([, stepEffects]) => stepEffects)
 
-      expect(describeEffects(effects)).toEqual([
+      yield* expect(describeEffects(effects)).toEqual([
         'spawn(child)',
         'start(child)',
       ])
     })
 
-    it('represents context initializer spawns as executable effects', () => {
-      const started = vi.fn()
+    it('represents context initializer spawns as executable effects', function*({ expect }) {
+      const startedCalls: unknown[] = []
       const child = createCallbackLogic(() => {
-        started()
+        startedCalls.push(undefined)
       })
       const machine = createMachine({
         context: ({ spawn }) => ({
@@ -1847,16 +2089,23 @@ describe('transition function', () => {
 
       const [snapshot, effects] = initialTransition(machine)
 
-      expect(started).not.toHaveBeenCalled()
-      expect(describeEffects(effects)).toEqual([
-        'spawn(child)',
-        'start(child)',
-      ])
+      const effectLabelsBeforeExec = describeEffects(effects)
+      const startedCallsBeforeExec = startedCalls.length
       effects.forEach((effect) => void effect.exec())
       const snapshotChild = snapshot.children['child']
       if (snapshotChild === undefined) throw new Error('expected a child')
-      expect(snapshotChild.getSnapshot().status).toBe('active')
-      expect(started).toHaveBeenCalledOnce()
+
+      yield* expect({
+        startedCallsBeforeExec,
+        effectLabelsBeforeExec,
+        childStatus: snapshotChild.getSnapshot().status,
+        startedCalls,
+      }).toEqual({
+        startedCallsBeforeExec: 0,
+        effectLabelsBeforeExec: ['spawn(child)', 'start(child)'],
+        childStatus: 'active',
+        startedCalls: [undefined],
+      })
     })
   })
 
@@ -1866,7 +2115,7 @@ describe('transition function', () => {
       run: () => undefined,
     })
 
-    it('removes a dynamically spawned child after its matching done event', () => {
+    it('removes a dynamically spawned child after its matching done event', function*({ expect }) {
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(child, { id: 'child' }),
       })
@@ -1881,10 +2130,10 @@ describe('transition function', () => {
         output: 42,
       } as any)
 
-      expect(completed.children).toEqual({})
+      yield* expect(completed.children).toEqual({})
     })
 
-    it('removes a dynamically spawned child after its matching error event', () => {
+    it('removes a dynamically spawned child after its matching error event', function*({ expect }) {
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(child, { id: 'child' }),
         on: {
@@ -1902,10 +2151,10 @@ describe('transition function', () => {
         error: new Error('failed'),
       } as any)
 
-      expect(failed.children).toEqual({})
+      yield* expect(failed.children).toEqual({})
     })
 
-    it('keeps the child visible while handling its terminal event', () => {
+    it('keeps the child visible while handling its terminal event', function*({ expect }) {
       let observedChild: AnyActor | undefined
       let observedEvent: AnyEventObject | undefined
       const machine = createMachine({
@@ -1928,15 +2177,21 @@ describe('transition function', () => {
         output: 42,
       } as any)
 
-      expect(observedChild).toBe(childRef)
-      expect(observedEvent).toMatchObject({
-        sessionId: childRef.sessionId,
-        output: 42,
+      yield* expect({
+        observedChildIsChildRef: observedChild === childRef,
+        observedEvent,
+        completedChildren: completed.children,
+      }).toEqual({
+        observedChildIsChildRef: true,
+        observedEvent: expect.objectContaining({
+          sessionId: childRef.sessionId,
+          output: 42,
+        }),
+        completedChildren: {},
       })
-      expect(completed.children).toEqual({})
     })
 
-    it('does not remove a replacement child for a stale terminal event', () => {
+    it('does not remove a replacement child for a stale terminal event', function*({ expect }) {
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(child, { id: 'child' }),
         on: {
@@ -1962,11 +2217,16 @@ describe('transition function', () => {
         output: undefined,
       } as any)
 
-      expect(secondChild).not.toBe(firstChild)
-      expect(afterStaleDone.children['child']).toBe(secondChild)
+      yield* expect({
+        secondIsNotFirst: secondChild !== firstChild,
+        staleDoneChildIsSecond: afterStaleDone.children['child'] === secondChild,
+      }).toEqual({
+        secondIsNotFirst: true,
+        staleDoneChildIsSecond: true,
+      })
     })
 
-    it('does not take an invoke completion transition for a stale child', () => {
+    it('does not take an invoke completion transition for a stale child', function*({ expect }) {
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -1997,11 +2257,16 @@ describe('transition function', () => {
         output: undefined,
       } as any)
 
-      expect(afterStaleDone.value).toBe('active')
-      expect(afterStaleDone.children['child']).toBe(secondChild)
+      yield* expect({
+        value: afterStaleDone.value,
+        childIsSecond: afterStaleDone.children['child'] === secondChild,
+      }).toEqual({
+        value: 'active',
+        childIsSecond: true,
+      })
     })
 
-    it('ignores an unhandled error from a stale child', () => {
+    it('ignores an unhandled error from a stale child', function*({ expect }) {
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -2028,13 +2293,16 @@ describe('transition function', () => {
         error: new Error('stale'),
       } as any)
 
-      expect(afterStaleError.status).toBe('active')
-      expect(afterStaleError.children['child']).toBe(
-        secondSnapshot.children['child'],
-      )
+      yield* expect({
+        status: afterStaleError.status,
+        childIsSecondChild: afterStaleError.children['child'] === secondSnapshot.children['child'],
+      }).toEqual({
+        status: 'active',
+        childIsSecondChild: true,
+      })
     })
 
-    it('accepts legacy suffixed actor terminal events', () => {
+    it('accepts legacy suffixed actor terminal events', function*({ expect }) {
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(child, { id: 'child' }),
       })
@@ -2049,10 +2317,10 @@ describe('transition function', () => {
         output: undefined,
       } as any)
 
-      expect(completed.children).toEqual({})
+      yield* expect(completed.children).toEqual({})
     })
 
-    it('reports the pruned child in the final microstep', () => {
+    it('reports the pruned child in the final microstep', function*({ expect }) {
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(child, { id: 'child' }),
       })
@@ -2067,10 +2335,10 @@ describe('transition function', () => {
         output: undefined,
       } as any)
 
-      expect(microsteps.at(-1)?.[0].children).toEqual({})
+      yield* expect(microsteps.at(-1)?.[0].children).toEqual({})
     })
 
-    it('removes a completed dynamically spawned child on the live path', () => {
+    it('removes a completed dynamically spawned child on the live path', function*({ expect }) {
       const completingChild = createLogic({
         context: undefined,
         run: () => ({ status: 'done', output: 42 }),
@@ -2081,12 +2349,12 @@ describe('transition function', () => {
 
       const actor = createActor(machine).start()
 
-      expect(actor.getSnapshot().children).toEqual({})
+      yield* expect(actor.getSnapshot().children).toEqual({})
     })
   })
 
   describe('legacy suffixed internal events', () => {
-    it('accepts state completion events', () => {
+    it('accepts state completion events', function*({ expect }) {
       const machine = createMachine({
         initial: 'parent',
         states: {
@@ -2105,10 +2373,10 @@ describe('transition function', () => {
         output: undefined,
       } as any)
 
-      expect(completed.value).toBe('done')
+      yield* expect(completed.value).toBe('done')
     })
 
-    it('accepts delayed transition events', () => {
+    it('accepts delayed transition events', function*({ expect }) {
       const machine = createMachine({
         initial: 'waiting',
         states: {
@@ -2122,7 +2390,7 @@ describe('transition function', () => {
         type: 'xstate.after.10.(machine).waiting',
       } as any)
 
-      expect(completed.value).toBe('done')
+      yield* expect(completed.value).toBe('done')
     })
   })
 
@@ -2138,7 +2406,7 @@ describe('transition function', () => {
     }),
   })
 
-  it('initialTransition: defers listener/child starts to the end of the effects', () => {
+  it('initialTransition: defers listener/child starts to the end of the effects', function*({ expect }) {
     const machine = createMachine({
       entry: (_, enq) => {
         const child = enq.spawn(emittingLogic, { id: 'child' })
@@ -2148,7 +2416,7 @@ describe('transition function', () => {
 
     const [, effects] = initialTransition(machine)
 
-    expect(describeEffects(effects)).toEqual([
+    yield* expect(describeEffects(effects)).toEqual([
       'spawn(child)',
       'listen(child)',
       'start:listen(child)',
@@ -2156,7 +2424,7 @@ describe('transition function', () => {
     ])
   })
 
-  it('initialTransition: defers subscription/child starts to the end of the effects', () => {
+  it('initialTransition: defers subscription/child starts to the end of the effects', function*({ expect }) {
     const machine = createMachine({
       entry: (_, enq) => {
         const child = enq.spawn(completingLogic, { id: 'child' })
@@ -2168,7 +2436,7 @@ describe('transition function', () => {
 
     const [, effects] = initialTransition(machine)
 
-    expect(describeEffects(effects)).toEqual([
+    yield* expect(describeEffects(effects)).toEqual([
       'spawn(child)',
       'subscribe(child)',
       'start:subscribe(child)',
@@ -2176,168 +2444,180 @@ describe('transition function', () => {
     ])
   })
 
-  it('transition: cross-phase spawns with listeners from exit and entry defer starts to the end of the effects', () => {
-    const machine = createMachine({
-      initial: 'a',
-      context: {} as { spawnedOnExit: any },
-      states: {
-        a: {
-          on: {
-            GO: { target: 'b' },
+  it(
+    'transition: cross-phase spawns with listeners from exit and entry defer starts to the end of the effects',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        context: {} as { spawnedOnExit: any },
+        states: {
+          a: {
+            on: {
+              GO: { target: 'b' },
+            },
+            exit: (_, enq) => {
+              const spawnedOnExit = enq.spawn(emittingLogic, {
+                id: 'exitChild',
+              })
+              enq.listen(spawnedOnExit, 'someEvent', () => ({ type: 'HEARD' }))
+              return { context: { spawnedOnExit } }
+            },
           },
-          exit: (_, enq) => {
-            const spawnedOnExit = enq.spawn(emittingLogic, {
-              id: 'exitChild',
-            })
-            enq.listen(spawnedOnExit, 'someEvent', () => ({ type: 'HEARD' }))
-            return { context: { spawnedOnExit } }
-          },
-        },
-        b: {
-          entry: ({ context }, enq) => {
-            const spawnedOnEntry = enq.spawn(emittingLogic, {
-              id: 'entryChild',
-            })
-            enq.listen(spawnedOnEntry, 'someEvent', () => ({ type: 'HEARD' }))
-            enq.listen(context.spawnedOnExit, 'someEvent', () => ({
-              type: 'HEARD',
-            }))
-          },
-        },
-      },
-    })
-
-    const [state] = initialTransition(machine)
-    const [, effects] = transition(machine, state, { type: 'GO' })
-
-    expect(describeEffects(effects)).toEqual([
-      // authored-position records across both microsteps
-      'spawn(exitChild)',
-      'listen(exitChild)',
-      'spawn(entryChild)',
-      'listen(entryChild)',
-      'listen(exitChild)',
-      // appended attached-actor starts (authored order)
-      'start:listen(exitChild)',
-      'start:listen(entryChild)',
-      'start:listen(exitChild)',
-      // appended child starts (authored order)
-      'start(exitChild)',
-      'start(entryChild)',
-    ])
-  })
-
-  it('transition: a same-transition spawn+stop keeps its appended start (which no-ops at runtime)', () => {
-    const machine = createMachine({
-      initial: 'a',
-      context: {} as { spawnedChild: any },
-      states: {
-        a: {
-          on: {
-            GO: { target: 'b' },
-          },
-          exit: (_, enq) => {
-            const spawnedChild = enq.spawn(emittingLogic, { id: 'child' })
-            enq.stop(spawnedChild)
-            return { context: { spawnedChild } }
+          b: {
+            entry: ({ context }, enq) => {
+              const spawnedOnEntry = enq.spawn(emittingLogic, {
+                id: 'entryChild',
+              })
+              enq.listen(spawnedOnEntry, 'someEvent', () => ({ type: 'HEARD' }))
+              enq.listen(context.spawnedOnExit, 'someEvent', () => ({
+                type: 'HEARD',
+              }))
+            },
           },
         },
-        b: {
-          entry: ({ context }, enq) => {
-            enq.listen(context.spawnedChild, 'someEvent', () => ({
-              type: 'HEARD',
-            }))
+      })
+
+      const [state] = initialTransition(machine)
+      const [, effects] = transition(machine, state, { type: 'GO' })
+
+      yield* expect(describeEffects(effects)).toEqual([
+        // authored-position records across both microsteps
+        'spawn(exitChild)',
+        'listen(exitChild)',
+        'spawn(entryChild)',
+        'listen(entryChild)',
+        'listen(exitChild)',
+        // appended attached-actor starts (authored order)
+        'start:listen(exitChild)',
+        'start:listen(entryChild)',
+        'start:listen(exitChild)',
+        // appended child starts (authored order)
+        'start(exitChild)',
+        'start(entryChild)',
+      ])
+    },
+  )
+
+  it(
+    'transition: a same-transition spawn+stop keeps its appended start (which no-ops at runtime)',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        context: {} as { spawnedChild: any },
+        states: {
+          a: {
+            on: {
+              GO: { target: 'b' },
+            },
+            exit: (_, enq) => {
+              const spawnedChild = enq.spawn(emittingLogic, { id: 'child' })
+              enq.stop(spawnedChild)
+              return { context: { spawnedChild } }
+            },
+          },
+          b: {
+            entry: ({ context }, enq) => {
+              enq.listen(context.spawnedChild, 'someEvent', () => ({
+                type: 'HEARD',
+              }))
+            },
           },
         },
-      },
-    })
+      })
 
-    const [state] = initialTransition(machine)
-    const [, effects] = transition(machine, state, { type: 'GO' })
+      const [state] = initialTransition(machine)
+      const [, effects] = transition(machine, state, { type: 'GO' })
 
-    expect(describeEffects(effects)).toEqual([
-      'spawn(child)',
-      'stop(child)',
-      'listen(child)',
-      'start:listen(child)',
-      // still present; no-ops at runtime because the child was already stopped
-      'start(child)',
-    ])
-  })
+      yield* expect(describeEffects(effects)).toEqual([
+        'spawn(child)',
+        'stop(child)',
+        'listen(child)',
+        'start:listen(child)',
+        // still present; no-ops at runtime because the child was already stopped
+        'start(child)',
+      ])
+    },
+  )
 
-  it('transition: interleaved spawns and listeners in the same phase defer starts to the end (attached before child, each in authored order)', () => {
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: {
-          on: {
-            GO: { target: 'b' },
+  it(
+    'transition: interleaved spawns and listeners in the same phase defer starts to the end (attached before child, each in authored order)',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        states: {
+          a: {
+            on: {
+              GO: { target: 'b' },
+            },
+          },
+          b: {
+            entry: (_, enq) => {
+              const actorA = enq.spawn(emittingLogic, { id: 'actorA' })
+              const actorB = enq.spawn(emittingLogic, { id: 'actorB' })
+              enq.listen(actorB, 'someEvent', () => ({ type: 'HEARD_B' }))
+              enq.listen(actorA, 'someEvent', () => ({ type: 'HEARD_A' }))
+            },
           },
         },
-        b: {
-          entry: (_, enq) => {
-            const actorA = enq.spawn(emittingLogic, { id: 'actorA' })
-            const actorB = enq.spawn(emittingLogic, { id: 'actorB' })
-            enq.listen(actorB, 'someEvent', () => ({ type: 'HEARD_B' }))
-            enq.listen(actorA, 'someEvent', () => ({ type: 'HEARD_A' }))
+      })
+
+      const [state] = initialTransition(machine)
+      const [, effects] = transition(machine, state, { type: 'GO' })
+
+      yield* expect(describeEffects(effects)).toEqual([
+        'spawn(actorA)',
+        'spawn(actorB)',
+        'listen(actorB)',
+        'listen(actorA)',
+        // attached starts keep authored order (B then A)
+        'start:listen(actorB)',
+        'start:listen(actorA)',
+        // child starts keep authored order (A then B)
+        'start(actorA)',
+        'start(actorB)',
+      ])
+    },
+  )
+
+  it(
+    'transition: listening to a pre-existing actor spawns+starts only the listener actor (no new target start)',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        context: {} as { existingChild: any },
+        states: {
+          a: {
+            entry: (_, enq) => {
+              const existingChild = enq.spawn(emittingLogic, {
+                id: 'existing',
+              })
+              return { context: { existingChild } }
+            },
+            on: {
+              GO: { target: 'b' },
+            },
+          },
+          b: {
+            entry: ({ context }, enq) => {
+              enq.listen(context.existingChild, 'someEvent', () => ({
+                type: 'HEARD',
+              }))
+            },
           },
         },
-      },
-    })
+      })
 
-    const [state] = initialTransition(machine)
-    const [, effects] = transition(machine, state, { type: 'GO' })
+      const [state] = initialTransition(machine)
+      const [, effects] = transition(machine, state, { type: 'GO' })
 
-    expect(describeEffects(effects)).toEqual([
-      'spawn(actorA)',
-      'spawn(actorB)',
-      'listen(actorB)',
-      'listen(actorA)',
-      // attached starts keep authored order (B then A)
-      'start:listen(actorB)',
-      'start:listen(actorA)',
-      // child starts keep authored order (A then B)
-      'start(actorA)',
-      'start(actorB)',
-    ])
-  })
+      yield* expect(describeEffects(effects)).toEqual([
+        'listen(existing)',
+        'start:listen(existing)',
+      ])
+    },
+  )
 
-  it('transition: listening to a pre-existing actor spawns+starts only the listener actor (no new target start)', () => {
-    const machine = createMachine({
-      initial: 'a',
-      context: {} as { existingChild: any },
-      states: {
-        a: {
-          entry: (_, enq) => {
-            const existingChild = enq.spawn(emittingLogic, {
-              id: 'existing',
-            })
-            return { context: { existingChild } }
-          },
-          on: {
-            GO: { target: 'b' },
-          },
-        },
-        b: {
-          entry: ({ context }, enq) => {
-            enq.listen(context.existingChild, 'someEvent', () => ({
-              type: 'HEARD',
-            }))
-          },
-        },
-      },
-    })
-
-    const [state] = initialTransition(machine)
-    const [, effects] = transition(machine, state, { type: 'GO' })
-
-    expect(describeEffects(effects)).toEqual([
-      'listen(existing)',
-      'start:listen(existing)',
-    ])
-  })
-
-  it('initialTransition: spawn+listen+subscribeTo on the same child defers starts to the end', () => {
+  it('initialTransition: spawn+listen+subscribeTo on the same child defers starts to the end', function*({ expect }) {
     const machine = createMachine({
       entry: (_, enq) => {
         const child = enq.spawn(completingLogic, { id: 'child' })
@@ -2350,7 +2630,7 @@ describe('transition function', () => {
 
     const [, effects] = initialTransition(machine)
 
-    expect(describeEffects(effects)).toEqual([
+    yield* expect(describeEffects(effects)).toEqual([
       'spawn(child)',
       'listen(child)',
       'subscribe(child)',
@@ -2362,7 +2642,7 @@ describe('transition function', () => {
     ])
   })
 
-  it('initialTransition: invoke start is deferred to the end, after entry actions', () => {
+  it('initialTransition: invoke start is deferred to the end, after entry actions', function*({ expect }) {
     const machine = createMachine({
       invoke: {
         id: 'child',
@@ -2375,7 +2655,7 @@ describe('transition function', () => {
 
     const [, effects] = initialTransition(machine)
 
-    expect(describeEffects(effects)).toEqual([
+    yield* expect(describeEffects(effects)).toEqual([
       'spawn(child)',
       'listen(child)',
       'start:listen(child)',
@@ -2383,49 +2663,60 @@ describe('transition function', () => {
     ])
   })
 
-  it('initialTransition: effects can be executed by a manual executor loop with listener starting before child', () => {
-    const childLogic = createCallbackLogic(() => {})
+  it(
+    'initialTransition: effects can be executed by a manual executor loop with listener starting before child',
+    function*({ expect }) {
+      const childLogic = createCallbackLogic(() => {})
 
-    const machine = createMachine({
-      entry: (_, enq) => {
-        const child = enq.spawn(childLogic, { id: 'child' })
-        enq.listen(child, 'someEvent', () => ({ type: 'HEARD' }))
-      },
-    })
+      const machine = createMachine({
+        entry: (_, enq) => {
+          const child = enq.spawn(childLogic, { id: 'child' })
+          enq.listen(child, 'someEvent', () => ({ type: 'HEARD' }))
+        },
+      })
 
-    const [, effects] = initialTransition(machine)
+      const [, effects] = initialTransition(machine)
 
-    const spawnEffects = effects.filter(isEffect(XSTATE_SPAWN))
-    const childSpawn = spawnEffects.find((e) => e.logic === childLogic)!
-    const listenerSpawn = spawnEffects.find((e) => e.logic === listenerLogic)!
+      const spawnEffects = effects.filter(isEffect(XSTATE_SPAWN))
+      const childSpawn = spawnEffects.find((e) => e.logic === childLogic)!
+      const listenerSpawn = spawnEffects.find((e) => e.logic === listenerLogic)!
 
-    const childRef = childSpawn.actor
-    const listenerRef = listenerSpawn.actor
+      const childRef = childSpawn.actor
+      const listenerRef = listenerSpawn.actor
 
-    // These `as any` casts are permanent: `start()` is not part of the public
-    // ActorRef interface (it lives on the Actor class), so spying on it
-    // requires widening the ref type.
-    const childStart = vi.spyOn(childRef as any, 'start')
-    const listenerStart = vi.spyOn(listenerRef as any, 'start')
+      const childStartRecorder = childRef as unknown as { start: () => unknown }
+      const listenerStartRecorder = listenerRef as unknown as {
+        start: () => unknown
+      }
+      const childOriginalStart = childStartRecorder.start.bind(childRef)
+      const listenerOriginalStart = listenerStartRecorder.start.bind(listenerRef)
+      const startOrder: string[] = []
+      childStartRecorder.start = () => {
+        startOrder.push('child')
+        return childOriginalStart()
+      }
+      listenerStartRecorder.start = () => {
+        startOrder.push('listener')
+        return listenerOriginalStart()
+      }
 
-    for (const effect of effects) {
-      void effect.exec()
-    }
+      for (const effect of effects) {
+        void effect.exec()
+      }
 
-    expect(listenerStart).toHaveBeenCalled()
-    expect(childStart).toHaveBeenCalled()
-    const listenerStartOrder = listenerStart.mock.invocationCallOrder[0]
-    const childStartOrder = childStart.mock.invocationCallOrder[0]
-    if (listenerStartOrder === undefined || childStartOrder === undefined) {
-      throw new Error('expected invocation order')
-    }
-    expect(listenerStartOrder).toBeLessThan(childStartOrder)
-    expect(childRef.getSnapshot().status).toBe('active')
-  })
+      yield* expect({
+        startOrder,
+        childStatus: childRef.getSnapshot().status,
+      }).toEqual({
+        startOrder: ['listener', 'child'],
+        childStatus: 'active',
+      })
+    },
+  )
 
-  it('does not classify inherited object keys as built-in actions', () => {
-    expect(
-      isBuiltInExecutableAction({
+  it('does not classify inherited object keys as built-in actions', function*({ expect }) {
+    yield* expect({
+      builtIn: isBuiltInExecutableAction({
         kind: 'action',
         type: 'toString',
         params: undefined,
@@ -2433,10 +2724,10 @@ describe('transition function', () => {
         action: undefined,
         exec() {},
       }),
-    ).toBe(false)
+    }).toEqual({ builtIn: false })
   })
 
-  it('does not classify emitted reserved event names as built-in actions', () => {
+  it('does not classify emitted reserved event names as built-in actions', function*({ expect }) {
     const machine = createMachine({
       entry: (_, enq) => {
         enq.emit({ type: '@xstate.spawn' } as any)
@@ -2448,30 +2739,37 @@ describe('transition function', () => {
       (effect) => effect.type === XSTATE_SPAWN,
     )!
 
-    expect(isBuiltInExecutableAction(emittedEffect)).toBe(false)
-    expect(effects.filter(isEffect(XSTATE_START))).toHaveLength(0)
+    yield* expect({
+      builtIn: isBuiltInExecutableAction(emittedEffect),
+      startEffectCount: effects.filter(isEffect(XSTATE_START)).length,
+    }).toEqual({
+      builtIn: false,
+      startEffectCount: 0,
+    })
   })
 
-  it('does not classify user-created reserved action shapes as built-in actions', () => {
+  it('does not classify user-created reserved action shapes as built-in actions', function*({ expect }) {
     const actor = createActor(createMachine({}))
 
-    expect(
-      isBuiltInExecutableAction({
-        kind: 'action',
-        type: XSTATE_SPAWN,
-        params: undefined,
-        args: [actor],
-        action: undefined,
-        actor,
-        id: actor.id,
-        logic: actor.logic,
-        src: actor.src,
-        input: undefined,
-      } as any),
-    ).toBe(false)
+    const userCreatedSpawn = {
+      kind: 'action',
+      type: XSTATE_SPAWN,
+      params: undefined,
+      args: [actor],
+      action: undefined,
+      actor,
+      id: actor.id,
+      logic: actor.logic,
+      src: actor.src,
+      input: undefined,
+    } as unknown as ExecutableActionObject
+
+    yield* expect({
+      builtIn: isBuiltInExecutableAction(userCreatedSpawn),
+    }).toEqual({ builtIn: false })
   })
 
-  it('emit actions should be returned', async () => {
+  it('emit actions should be returned', function*({ expect }) {
     const machine = createMachine({
       // types: {
       //   emitted: {} as { type: 'counted'; count: number }
@@ -2504,19 +2802,22 @@ describe('transition function', () => {
 
     const [state] = initialTransition(machine)
 
-    expect(state.value).toEqual('a')
+    const stateValue = state.value
 
     const [, nextActions] = transition(machine, state, { type: 'NEXT' })
 
-    expect(nextActions).toContainEqual(
-      expect.objectContaining({
-        type: 'counted',
-        params: { count: 10 },
-      }),
-    )
+    yield* expect({ value: stateValue, nextActions }).toEqual({
+      value: 'a',
+      nextActions: expect.arrayContaining([
+        expect.objectContaining({
+          type: 'counted',
+          params: { count: 10 },
+        }),
+      ]),
+    })
   })
 
-  it('log actions should be returned', async () => {
+  it('log actions should be returned', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -2538,18 +2839,21 @@ describe('transition function', () => {
 
     const [state] = initialTransition(machine)
 
-    expect(state.value).toEqual('a')
+    const stateValue = state.value
 
     const [, nextActions] = transition(machine, state, { type: 'NEXT' })
 
-    expect(nextActions).toContainEqual(
-      expect.objectContaining({
-        args: ['count: 10'],
-      }),
-    )
+    yield* expect({ value: stateValue, nextActions }).toEqual({
+      value: 'a',
+      nextActions: expect.arrayContaining([
+        expect.objectContaining({
+          args: ['count: 10'],
+        }),
+      ]),
+    })
   })
 
-  it('should calculate the next snapshot for custom logic', () => {
+  it('should calculate the next snapshot for custom logic', function*({ expect }) {
     const logic = createLogic({
       context: { count: 0 },
       run: ({ context, event }) => {
@@ -2562,12 +2866,18 @@ describe('transition function', () => {
 
     const [init] = initialTransition(logic)
     const [s1] = transition(logic, init, { type: 'next' })
-    expect(s1.context.count).toEqual(1)
     const [s2] = transition(logic, s1, { type: 'next' })
-    expect(s2.context.count).toEqual(2)
+
+    yield* expect({
+      s1Count: s1.context.count,
+      s2Count: s2.context.count,
+    }).toEqual({
+      s1Count: 1,
+      s2Count: 2,
+    })
   })
 
-  it('should calculate the next snapshot for machine logic', () => {
+  it('should calculate the next snapshot for machine logic', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -2587,16 +2897,19 @@ describe('transition function', () => {
 
     const [init] = initialTransition(machine)
     const [s1] = transition(machine, init, { type: 'NEXT' })
-
-    expect(s1.value).toEqual('b')
-
     const [s2] = transition(machine, s1, { type: 'NEXT' })
 
-    expect(s2.value).toEqual('c')
+    yield* expect({ s1Value: s1.value, s2Value: s2.value }).toEqual({
+      s1Value: 'b',
+      s2Value: 'c',
+    })
   })
 
-  it('should not execute entry actions', () => {
-    const fn = vi.fn()
+  it('should not execute entry actions', function*({ expect }) {
+    const entryActionCalls: unknown[] = []
+    const fn = () => {
+      entryActionCalls.push(undefined)
+    }
 
     const machine = createMachine({
       initial: 'a',
@@ -2609,11 +2922,14 @@ describe('transition function', () => {
 
     initialTransition(machine)
 
-    expect(fn).not.toHaveBeenCalled()
+    yield* expect(entryActionCalls).toEqual([])
   })
 
-  it('should not execute transition actions', () => {
-    const fn = vi.fn()
+  it('should not execute transition actions', function*({ expect }) {
+    const transitionActionCalls: unknown[] = []
+    const fn = () => {
+      transitionActionCalls.push(undefined)
+    }
 
     const machine = createMachine({
       initial: 'a',
@@ -2633,11 +2949,16 @@ describe('transition function', () => {
     const [init] = initialTransition(machine)
     const [nextSnapshot] = transition(machine, init, { type: 'event' })
 
-    expect(fn).not.toHaveBeenCalled()
-    expect(nextSnapshot.value).toEqual('b')
+    yield* expect({
+      transitionActionCalls,
+      nextValue: nextSnapshot.value,
+    }).toEqual({
+      transitionActionCalls: [],
+      nextValue: 'b',
+    })
   })
 
-  it('delayed events example (experimental)', async () => {
+  it('delayed events example (experimental)', function*({ expect }) {
     const db = {
       state: undefined as any,
     }
@@ -2661,57 +2982,65 @@ describe('transition function', () => {
       },
     })
 
-    async function execute(action: ExecutableActionObject) {
-      if (
-        isBuiltInExecutableAction(action) &&
-        action.type === '@xstate.raise' &&
-        action.delay
-      ) {
-        const currentTime = Date.now()
-        const startedAt = currentTime
-        const elapsed = currentTime - startedAt
-        const timeRemaining = Math.max(0, action.delay - elapsed)
+    function execute(action: ExecutableActionObject): Effect.Effect<void> {
+      return Effect.gen(function*() {
+        if (
+          isBuiltInExecutableAction(action) &&
+          action.type === '@xstate.raise' &&
+          action.delay
+        ) {
+          const currentTime = Date.now()
+          const startedAt = currentTime
+          const elapsed = currentTime - startedAt
+          const timeRemaining = Math.max(0, action.delay - elapsed)
 
-        await new Promise((res) => setTimeout(res, timeRemaining))
-        postEvent(action.event as EventFrom<typeof machine>)
-      }
+          const { promise, resolve } = Promise.withResolvers<void>()
+          setTimeout(resolve, timeRemaining)
+          yield* Effect.promise(() => promise)
+          yield* postEvent(action.event as EventFrom<typeof machine>)
+        }
+      })
     }
 
     // POST /workflow
-    async function postStart() {
-      const [state, actions] = initialTransition(machine)
+    function postStart(): Effect.Effect<void> {
+      return Effect.gen(function*() {
+        const [state, actions] = initialTransition(machine)
 
-      db.state = JSON.stringify(state)
+        db.state = JSON.stringify(state)
 
-      // execute actions
-      for (const action of actions) {
-        await execute(action)
-      }
+        // execute actions
+        for (const action of actions) {
+          yield* execute(action)
+        }
+      })
     }
 
     // POST /workflow/{sessionId}
-    async function postEvent(event: EventFrom<typeof machine>) {
-      const [nextState, actions] = transition(
-        machine,
-        machine.resolveState(JSON.parse(db.state)),
-        event,
-      )
+    function postEvent(event: EventFrom<typeof machine>): Effect.Effect<void> {
+      return Effect.gen(function*() {
+        const [nextState, actions] = transition(
+          machine,
+          machine.resolveState(JSON.parse(db.state)),
+          event,
+        )
 
-      db.state = JSON.stringify(nextState)
+        db.state = JSON.stringify(nextState)
 
-      for (const action of actions) {
-        await execute(action)
-      }
+        for (const action of actions) {
+          yield* execute(action)
+        }
+      })
     }
 
-    await postStart()
-    postEvent({ type: 'next' })
+    yield* postStart()
+    yield* postEvent({ type: 'next' })
 
-    await sleep(15)
-    expect(JSON.parse(db.state).status).toBe('done')
+    yield* Effect.promise(() => sleep(15))
+    yield* expect(JSON.parse(db.state).status).toBe('done')
   })
 
-  it('serverless workflow example (experimental)', async () => {
+  it('serverless workflow example (experimental)', function*({ expect }) {
     const db = {
       state: undefined as any,
     }
@@ -2719,11 +3048,11 @@ describe('transition function', () => {
     const machine = createMachine({
       actors: {
         sendWelcomeEmail: createAsyncLogic({
-          run: async () => {
+          run: () => {
             calls.push('sendWelcomeEmail')
-            return {
+            return Promise.resolve({
               status: 'sent',
-            }
+            })
           },
         }),
       },
@@ -2738,7 +3067,7 @@ describe('transition function', () => {
         },
         logSent: {
           invoke: {
-            src: createAsyncLogic({ run: async () => {} }),
+            src: createAsyncLogic({ run: () => Promise.resolve() }),
             onDone: { target: 'finish' },
           },
         },
@@ -2748,70 +3077,79 @@ describe('transition function', () => {
 
     const calls: string[] = []
 
-    async function execute(action: ExecutableActionObject) {
-      if (!isBuiltInExecutableAction(action)) {
-        return
-      }
-      switch (action.type) {
-        case '@xstate.start': {
-          await action.exec()
-          const startedActor = action.actor as ReturnType<typeof createActor>
-          const output = await toPromise(startedActor)
-          postEvent(
-            createDoneActorEvent(
-              startedActor.id,
-              output,
-              startedActor.sessionId,
-            ),
-          )
-          break
+    function execute(action: ExecutableActionObject): Effect.Effect<void> {
+      return Effect.gen(function*() {
+        if (!isBuiltInExecutableAction(action)) {
+          return
         }
+        switch (action.type) {
+          case '@xstate.start': {
+            yield* Effect.promise(() => Promise.resolve(action.exec()))
+            const startedActor = action.actor as ReturnType<typeof createActor>
+            const output = yield* Effect.promise(() => toPromise(startedActor))
+            yield* postEvent(
+              createDoneActorEvent(
+                startedActor.id,
+                output,
+                startedActor.sessionId,
+              ),
+            )
+            break
+          }
 
-        default:
-          break
-      }
+          default:
+            break
+        }
+      })
     }
 
     // POST /workflow
-    async function postStart() {
-      const [state, actions] = initialTransition(machine)
+    function postStart(): Effect.Effect<void> {
+      return Effect.gen(function*() {
+        const [state, actions] = initialTransition(machine)
 
-      db.state = JSON.stringify(state)
+        db.state = JSON.stringify(state)
 
-      // execute actions
-      for (const action of actions) {
-        await execute(action)
-      }
+        // execute actions
+        for (const action of actions) {
+          yield* execute(action)
+        }
+      })
     }
 
     // POST /workflow/{sessionId}
-    async function postEvent(event: EventFrom<typeof machine>) {
-      const [nextState, actions] = transition(
-        machine,
-        machine.resolveState(JSON.parse(db.state)),
-        event,
-      )
+    function postEvent(event: EventFrom<typeof machine>): Effect.Effect<void> {
+      return Effect.gen(function*() {
+        const [nextState, actions] = transition(
+          machine,
+          machine.resolveState(JSON.parse(db.state)),
+          event,
+        )
 
-      db.state = JSON.stringify(nextState)
+        db.state = JSON.stringify(nextState)
 
-      // "sync" built-in actions: assign, raise, cancel, stop
-      // "external" built-in actions: sendTo, raise w/delay, log
-      for (const action of actions) {
-        await execute(action)
-      }
+        // "sync" built-in actions: assign, raise, cancel, stop
+        // "external" built-in actions: sendTo, raise w/delay, log
+        for (const action of actions) {
+          yield* execute(action)
+        }
+      })
     }
 
-    await postStart()
-    postEvent({ type: 'sent' })
+    yield* postStart()
+    yield* postEvent({ type: 'sent' })
 
-    expect(calls).toEqual(['sendWelcomeEmail'])
+    yield* expect(calls).toEqual(['sendWelcomeEmail'])
 
-    await sleep(10)
-    expect(JSON.parse(db.state).value).toBe('finish')
+    yield* Effect.promise(() => sleep(10))
+    yield* expect(JSON.parse(db.state).value).toBe('finish')
   })
 
-  it('should support transition functions', () => {
-    const fn = vi.fn()
+  it('should support transition functions', function*({ expect }) {
+    const transitionActionCalls: unknown[] = []
+    const fn = () => {
+      transitionActionCalls.push(undefined)
+    }
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -2834,11 +3172,16 @@ describe('transition function', () => {
 
     const [init] = initialTransition(machine)
     const [s1, actions] = transition(machine, init, { type: 'NEXT' })
-    expect(s1.value).toEqual('b')
-    expect(actions.length).toEqual(1)
+    yield* expect({
+      value: s1.value,
+      actionCount: actions.length,
+    }).toEqual({
+      value: 'b',
+      actionCount: 1,
+    })
   })
 
-  it('fast-paths flat static target/context transitions', () => {
+  it('fast-paths flat static target/context transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       context: { count: 0 },
@@ -2854,18 +3197,29 @@ describe('transition function', () => {
         b: {},
       },
     })
-    const getTransitionData = vi.spyOn(machine, 'getTransitionData')
+    const getTransitionDataCalls: unknown[] = []
+    machine.getTransitionData = () => {
+      getTransitionDataCalls.push('getTransitionData')
+      return []
+    }
 
     const [init] = initialTransition(machine)
     const [next, actions] = transition(machine, init, { type: 'NEXT' })
 
-    expect(next.value).toBe('b')
-    expect(next.context).toEqual({ count: 1 })
-    expect(actions).toEqual([])
-    expect(getTransitionData).not.toHaveBeenCalled()
+    yield* expect({
+      value: next.value,
+      context: next.context,
+      actions,
+      getTransitionDataCalls,
+    }).toEqual({
+      value: 'b',
+      context: { count: 1 },
+      actions: [],
+      getTransitionDataCalls: [],
+    })
   })
 
-  it('fast-paths flat static targetless context transitions', () => {
+  it('fast-paths flat static targetless context transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       context: { count: 0 },
@@ -2879,20 +3233,31 @@ describe('transition function', () => {
         },
       },
     })
-    const getTransitionData = vi.spyOn(machine, 'getTransitionData')
+    const getTransitionDataCalls: unknown[] = []
+    machine.getTransitionData = () => {
+      getTransitionDataCalls.push('getTransitionData')
+      return []
+    }
 
     const [init] = initialTransition(machine)
     const [next, actions] = transition(machine, init, { type: 'INC' })
 
-    expect(next.value).toBe('a')
-    expect(next.context).toEqual({ count: 1 })
-    expect(actions).toEqual([])
-    expect(getTransitionData).not.toHaveBeenCalled()
+    yield* expect({
+      value: next.value,
+      context: next.context,
+      actions,
+      getTransitionDataCalls,
+    }).toEqual({
+      value: 'a',
+      context: { count: 1 },
+      actions: [],
+      getTransitionDataCalls: [],
+    })
   })
 })
 
 describe('getNextTransitions', () => {
-  it('should return no transitions for an error snapshot', () => {
+  it('should return no transitions for an error snapshot', function*({ expect }) {
     const machineV1 = createMachine({
       version: '1',
       initial: 'a',
@@ -2908,11 +3273,16 @@ describe('getNextTransitions', () => {
       snapshot: persisted,
     }).getSnapshot()
 
-    expect(errorSnapshot.status).toBe('error')
-    expect(getNextTransitions(errorSnapshot)).toEqual([])
+    yield* expect({
+      status: errorSnapshot.status,
+      transitions: getNextTransitions(errorSnapshot),
+    }).toEqual({
+      status: 'error',
+      transitions: [],
+    })
   })
 
-  it('should return no transitions for a completed snapshot', () => {
+  it('should return no transitions for a completed snapshot', function*({ expect }) {
     const machine = createMachine({
       initial: 'done',
       on: { RESET: { target: '.done' } },
@@ -2920,11 +3290,16 @@ describe('getNextTransitions', () => {
     })
     const doneSnapshot = createActor(machine).getSnapshot()
 
-    expect(doneSnapshot.status).toBe('done')
-    expect(getNextTransitions(doneSnapshot)).toEqual([])
+    yield* expect({
+      status: doneSnapshot.status,
+      transitions: getNextTransitions(doneSnapshot),
+    }).toEqual({
+      status: 'done',
+      transitions: [],
+    })
   })
 
-  it('should return all transitions from current state', () => {
+  it('should return all transitions from current state', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -2945,12 +3320,14 @@ describe('getNextTransitions', () => {
 
     const transitions = getNextTransitions(state)
 
-    expect(transitions).toHaveLength(2)
     // Order should be deterministic: transitions appear in the order they're defined
-    expect(transitions.map((t) => t.eventType)).toEqual(['GO_B', 'GO_C'])
+    yield* expect(transitions.map((t) => t.eventType)).toEqual([
+      'GO_B',
+      'GO_C',
+    ])
   })
 
-  it('should include guarded transitions regardless of guard result', () => {
+  it('should include guarded transitions regardless of guard result', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       schemas: {
@@ -2988,12 +3365,14 @@ describe('getNextTransitions', () => {
 
     const transitions = getNextTransitions(state)
 
-    expect(transitions).toHaveLength(2)
     // Order should be deterministic: all GO_B transitions first (in order), then GO_C
-    expect(transitions.map((t) => t.eventType)).toEqual(['GO_B', 'GO_C'])
+    yield* expect(transitions.map((t) => t.eventType)).toEqual([
+      'GO_B',
+      'GO_C',
+    ])
   })
 
-  it('should include always (eventless) transitions', () => {
+  it('should include always (eventless) transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       schemas: {
@@ -3028,12 +3407,11 @@ describe('getNextTransitions', () => {
 
     const transitions = getNextTransitions(state)
 
-    expect(transitions).toHaveLength(2)
     // Order: on transitions first, then always transitions (in order they appear)
-    expect(transitions.map((t) => t.eventType)).toEqual(['GO_D', ''])
+    yield* expect(transitions.map((t) => t.eventType)).toEqual(['GO_D', ''])
   })
 
-  it('should include after (delayed) transitions', () => {
+  it('should include after (delayed) transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -3056,24 +3434,23 @@ describe('getNextTransitions', () => {
 
     const transitions = getNextTransitions(state)
 
-    expect(transitions).toHaveLength(2)
-    // Order: on transitions first (in definition order), then after transitions
-    expect(transitions.map((t) => t.eventType)).toEqual([
-      'GO_C',
-      'xstate.after',
-    ])
     const secondTransition = transitions[1]
     if (secondTransition === undefined) {
       throw new Error('expected a second transition')
     }
-    expect(secondTransition.matches).toEqual({
-      delay: 1000,
-      stateId: '(machine).a',
+    // Order: on transitions first (in definition order), then after transitions
+    yield* expect({
+      eventTypes: transitions.map((t) => t.eventType),
+      secondMatches: secondTransition.matches,
+      targets: transitions.map((t) => t.target?.[0]?.key),
+    }).toEqual({
+      eventTypes: ['GO_C', 'xstate.after'],
+      secondMatches: { delay: 1000, stateId: '(machine).a' },
+      targets: ['c', 'b'],
     })
-    expect(transitions.map((t) => t.target?.[0]?.key)).toEqual(['c', 'b'])
   })
 
-  it('should include transitions from parent states in depth-first order', () => {
+  it('should include transitions from parent states in depth-first order', function*({ expect }) {
     const machine = createMachine({
       initial: 'parent',
       states: {
@@ -3102,13 +3479,13 @@ describe('getNextTransitions', () => {
     const transitions = getNextTransitions(state)
 
     // Order: child state transitions first, then parent state transitions
-    expect(transitions.map((t) => t.eventType)).toEqual([
+    yield* expect(transitions.map((t) => t.eventType)).toEqual([
       'CHILD_EVENT',
       'PARENT_EVENT',
     ])
   })
 
-  it('should include all guarded transitions from different state nodes with same event type', () => {
+  it('should include all guarded transitions from different state nodes with same event type', function*({ expect }) {
     const machine = createMachine({
       initial: 'parent',
       states: {
@@ -3144,15 +3521,20 @@ describe('getNextTransitions', () => {
 
     const transitions = getNextTransitions(state)
 
-    expect(transitions).toHaveLength(2)
     const sameEventTransitions = transitions.filter(
       (t) => t.eventType === 'SAME_EVENT',
     )
-    // Wrapped into 1 transition in v6
-    expect(sameEventTransitions).toHaveLength(2)
+    yield* expect({
+      transitionCount: transitions.length,
+      // Wrapped into 1 transition in v6
+      sameEventCount: sameEventTransitions.length,
+    }).toEqual({
+      transitionCount: 2,
+      sameEventCount: 2,
+    })
   })
 
-  it('should return transitions from parallel states in document order', () => {
+  it('should return transitions from parallel states in document order', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -3195,7 +3577,7 @@ describe('getNextTransitions', () => {
 
     // Order: regionA atomic state first (depth-first), then regionB atomic state
     // Within each: child transitions first, then parent transitions
-    expect(transitions.map((t) => t.eventType)).toEqual([
+    yield* expect(transitions.map((t) => t.eventType)).toEqual([
       'A1_EVENT', // regionA.a1 (atomic)
       'REGION_A_EVENT', // regionA (parent)
       'B1_EVENT', // regionB.b1 (atomic)
@@ -3203,7 +3585,7 @@ describe('getNextTransitions', () => {
     ])
   })
 
-  it('should return transitions from deeply nested compound states in depth-first order', () => {
+  it('should return transitions from deeply nested compound states in depth-first order', function*({ expect }) {
     const machine = createMachine({
       initial: 'level1',
       on: {
@@ -3241,7 +3623,7 @@ describe('getNextTransitions', () => {
     const transitions = getNextTransitions(state)
 
     // Order: deepest state first, then ancestors up to root
-    expect(transitions.map((t) => t.eventType)).toEqual([
+    yield* expect(transitions.map((t) => t.eventType)).toEqual([
       'LEVEL3_EVENT', // level3 (atomic, deepest)
       'LEVEL2_EVENT', // level2 (parent of level3)
       'LEVEL1_EVENT', // level1 (grandparent)
@@ -3249,7 +3631,7 @@ describe('getNextTransitions', () => {
     ])
   })
 
-  it('should return transitions from parallel states with nested compound states', () => {
+  it('should return transitions from parallel states with nested compound states', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       on: {
@@ -3302,7 +3684,7 @@ describe('getNextTransitions', () => {
     // Order: regionA's atomic state (depth-first up to regionA),
     // then regionB's atomic state (depth-first up to regionB),
     // then root
-    expect(transitions.map((t) => t.eventType)).toEqual([
+    yield* expect(transitions.map((t) => t.eventType)).toEqual([
       'DEEP_A_EVENT', // regionA.nested.deep (atomic)
       'NESTED_A_EVENT', // regionA.nested
       'REGION_A_EVENT', // regionA

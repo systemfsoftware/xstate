@@ -1,4 +1,4 @@
-import { describe, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
 import {
   type ActorLogic,
@@ -15,11 +15,8 @@ import {
 } from '../src/index.js'
 
 describe('ContextFrom', () => {
-  it('should return context of a machine', () => {
+  it('should return context of a machine', function*({ expect }) {
     const machine = createMachine({
-      // types: {
-      //   context: {} as { counter: number }
-      // },
       schemas: {
         context: z.object({
           counter: z.number(),
@@ -43,18 +40,14 @@ describe('ContextFrom', () => {
     const obj = { completely: 'invalid' }
     // @ts-expect-error
     acceptMachineContext(obj)
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('active')
   })
 })
 
 describe('EventFrom', () => {
-  it('should return events for a machine', () => {
+  it('should return events for a machine', function*({ expect }) {
     const machine = createMachine({
-      // types: {
-      //   events: {} as
-      //     | { type: 'UPDATE_NAME'; value: string }
-      //     | { type: 'UPDATE_AGE'; value: number }
-      //     | { type: 'ANOTHER_EVENT' }
-      // }
       schemas: {
         events: {
           UPDATE_NAME: z.object({ value: z.string() }),
@@ -75,9 +68,11 @@ describe('EventFrom', () => {
       // @ts-expect-error
       type: 'UNKNOWN_EVENT',
     })
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('active')
   })
 
-  it('should return events for an actor', () => {
+  it('should return events for an actor', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -101,11 +96,13 @@ describe('EventFrom', () => {
       // @ts-expect-error
       type: 'UNKNOWN_EVENT',
     })
+
+    yield* expect(actor.getSnapshot().status).toEqual('active')
   })
 })
 
 describe('MachineSourcesFrom', () => {
-  it('should return sources for a machine', () => {
+  it('should return sources for a machine', function*({ expect }) {
     const machine = createMachine({
       context: {
         count: 100,
@@ -139,35 +136,38 @@ describe('MachineSourcesFrom', () => {
 
     // @ts-expect-error
     acceptMachineSources(100)
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('active')
   })
 
-  it('should reject an action that returns an arbitrary (non-void/assignment) value', () => {
-    createMachine({
+  it('should reject an action that returns an arbitrary (non-void/assignment) value', function*({ expect }) {
+    const machine = createMachine({
       actions: {
         // @ts-expect-error an action must return void or { context?, children? }
         foo: () => 'hello',
       },
     })
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('active')
   })
 })
 
 describe('StateValueFrom', () => {
-  it('should return any from a machine', () => {
+  it('should return any from a machine', function*({ expect }) {
     const machine = createMachine({})
 
     function matches(_value: StateValueFrom<typeof machine>) {}
 
     matches('just anything')
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('active')
   })
 })
 
 describe('SnapshotFrom', () => {
-  it('should return state type from a service that has concrete event type', () => {
+  it('should return state type from a service that has concrete event type', function*({ expect }) {
     const service = createActor(
       createMachine({
-        // types: {
-        //   events: {} as { type: 'FOO' }
-        // }
         schemas: {
           events: {
             FOO: z.object({}),
@@ -181,9 +181,11 @@ describe('SnapshotFrom', () => {
     acceptState(service.getSnapshot())
     // @ts-expect-error
     acceptState("isn't any")
+
+    yield* expect(service.getSnapshot().status).toEqual('active')
   })
 
-  it('should return state from a machine without context', () => {
+  it('should return state from a machine without context', function*({ expect }) {
     const machine = createMachine({})
 
     function acceptState(_state: SnapshotFrom<typeof machine>) {}
@@ -191,9 +193,11 @@ describe('SnapshotFrom', () => {
     acceptState(createActor(machine).getSnapshot())
     // @ts-expect-error
     acceptState("isn't any")
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('active')
   })
 
-  it('should return state from a machine with context', () => {
+  it('should return state from a machine with context', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -210,11 +214,13 @@ describe('SnapshotFrom', () => {
     acceptState(createActor(machine).getSnapshot())
     // @ts-expect-error
     acceptState("isn't any")
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('active')
   })
 })
 
 describe('ActorRefFrom', () => {
-  it('should return `ActorRef` based on actor logic', () => {
+  it('should return `ActorRef` based on actor logic', function*({ expect }) {
     const logic: ActorLogic<Snapshot<undefined>, { type: 'TEST' }> = {
       transition: (state) => [state, []],
       getInitialSnapshot: () => ({
@@ -238,11 +244,15 @@ describe('ActorRefFrom', () => {
     }
 
     acceptActorRef(createActor(logic).start())
+
+    yield* expect(createActor(logic).start().getSnapshot().status).toEqual(
+      'active',
+    )
   })
 })
 
 describe('tags', () => {
-  it('derives string from StateMachine', () => {
+  it('derives string from StateMachine', function*({ expect }) {
     const machine = createMachine({})
 
     type Tags = TagsFrom<typeof machine>
@@ -252,7 +262,8 @@ describe('tags', () => {
     acceptTag('a')
     acceptTag('b')
     acceptTag('c')
-    // d is a valid tag, as is any string
     acceptTag('d')
+
+    yield* expect(createActor(machine).getSnapshot().status).toEqual('active')
   })
 })

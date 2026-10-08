@@ -1,8 +1,10 @@
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { interval } from 'rxjs'
-import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import {
   type ActorRefFrom,
+  type AnyActorRef,
   createActor,
   createAsyncLogic,
   createCallbackLogic,
@@ -11,9 +13,8 @@ import {
 } from '../src/index.js'
 import { toSubscribable } from './utils.js'
 
-// TODO: deprecate syncSnapshot
 describe('spawnChild action', () => {
-  it('can spawn', () => {
+  it('can spawn', function*({ expect }) {
     const actor = createActor(
       createMachine({
         entry: (_, enq) => {
@@ -26,21 +27,15 @@ describe('spawnChild action', () => {
 
     actor.start()
 
-    expect(actor.getSnapshot().children['child']).toBeDefined()
+    yield* expect(Object.keys(actor.getSnapshot().children)).toEqual(['child'])
   })
 
-  it('can spawn from named actor', () => {
+  it('can spawn from named actor', function*({ expect }) {
     const fetchNum = createAsyncLogic({
       run: ({ input }: { input: number }) => Promise.resolve(input * 2),
     })
     const actor = createActor(
       createMachine({
-        // types: {
-        //   actors: {} as {
-        //     src: 'fetchNum';
-        //     logic: typeof fetchNum;
-        //   }
-        // },
         entry: (_, enq) => {
           enq.spawn(fetchNum, { id: 'child', input: 21 })
         },
@@ -51,14 +46,15 @@ describe('spawnChild action', () => {
 
     actor.start()
 
-    expect(actor.getSnapshot().children['child']).toBeDefined()
+    yield* expect(Object.keys(actor.getSnapshot().children)).toEqual(['child'])
   })
 
-  it('should accept `syncSnapshot` option', async () => {
+  it('should accept `syncSnapshot` option', function*({ expect }) {
     const { promise, resolve } = Promise.withResolvers<void>()
     const observableLogic = createObservableLogic<number, undefined>(
       () => toSubscribable(interval(10)),
     )
+    const unusedObservableRef = undefined as unknown as ActorRefFrom<typeof observableLogic>
     const observableMachine = createMachine({
       schemas: {
         context: z.object({
@@ -67,24 +63,19 @@ describe('spawnChild action', () => {
       },
       id: 'observable',
       initial: 'idle',
-      context: {
-        observableRef: undefined! as ActorRefFrom<typeof observableLogic>,
-      },
+      context: { observableRef: unusedObservableRef },
       states: {
         idle: {
-          entry: (_: unknown, enq: any) => {
+          entry: (_, enq) => {
             enq.spawn(observableLogic, {
               id: 'int',
               syncSnapshot: true,
             })
           },
           on: {
-            'xstate.snapshot.int': ({
-              event,
-            }: {
-              event: { snapshot: { context: number } }
-            }) => {
-              if (event.snapshot.context === 5) {
+            'xstate.snapshot.int': ({ event }) => {
+              const snapshot = event as { snapshot?: { context?: number } }
+              if (snapshot.snapshot?.context === 5) {
                 return {
                   target: 'success',
                 }
@@ -96,7 +87,7 @@ describe('spawnChild action', () => {
         success: {
           type: 'final',
         },
-      } as any,
+      },
     })
 
     const observableService = createActor(observableMachine)
@@ -107,16 +98,19 @@ describe('spawnChild action', () => {
     })
 
     observableService.start()
-    await promise
+    yield* Effect.promise(() => promise)
+    yield* expect(observableService.getSnapshot().value).toEqual('success')
   })
 
-  it('should handle a dynamic id', () => {
-    const spy = vi.fn()
+  it('should handle a dynamic id', function*({ expect }) {
+    const calls: Array<Array<unknown>> = []
 
     const childMachine = createMachine({
       on: {
         FOO: (_, enq) => {
-          enq(spy)
+          enq((...args: Array<unknown>) => {
+            calls.push(args)
+          })
         },
       },
     })
@@ -131,7 +125,6 @@ describe('spawnChild action', () => {
         childId: 'myChild',
       },
       entry: ({ context, self }, enq) => {
-        // TODO: This should all be abstracted in enq.spawn(…)
         const child = createActor(childMachine, {
           id: context.childId,
           parent: self,
@@ -148,11 +141,14 @@ describe('spawnChild action', () => {
 
     createActor(machine).start()
 
-    expect(spy).toHaveBeenCalledTimes(1)
+    yield* expect(calls).toEqual([[]])
   })
 
-  it('does not start a child that is spawned and stopped in the same entry', () => {
-    const started = vi.fn()
+  it('does not start a child that is spawned and stopped in the same entry', function*({ expect }) {
+    const starts: string[] = []
+    const started = () => {
+      starts.push('started')
+    }
 
     const machine = createMachine({
       entry: (_, enq) => {
@@ -168,46 +164,51 @@ describe('spawnChild action', () => {
 
     const actor = createActor(machine).start()
 
-    // The appended start effect no-ops at runtime because the child was already
-    // stopped in the same transition, so its callback logic never runs.
-    expect(started).not.toHaveBeenCalled()
-    expect(actor.getSnapshot().children['child']).toBeUndefined()
+    yield* expect({
+      starts,
+      childKeys: Object.keys(actor.getSnapshot().children),
+    }).toEqual({ starts: [], childKeys: [] })
   })
 
-  it('does not start a child that is spawned in one microstep and stopped in a later microstep of the same macrostep', () => {
-    const started = vi.fn()
+  it(
+    'does not start a child that is spawned in one microstep and stopped in a later microstep of the same macrostep',
+    function*({ expect }) {
+      const starts: string[] = []
+      const started = () => {
+        starts.push('started')
+      }
 
-    const machine = createMachine({
-      context: {} as { child: any },
-      initial: 'a',
-      states: {
-        a: {
-          entry: (_, enq) => {
-            const child = enq.spawn(
-              createCallbackLogic(() => {
-                started()
-              }),
-              { id: 'child' },
-            )
-            return { context: { child } }
+      const machine = createMachine({
+        context: {} as { child: AnyActorRef },
+        initial: 'a',
+        states: {
+          a: {
+            entry: (_, enq) => {
+              const child = enq.spawn(
+                createCallbackLogic(() => {
+                  started()
+                }),
+                { id: 'child' },
+              )
+              return { context: { child } }
+            },
+            always: { target: 'b' },
           },
-          always: { target: 'b' },
-        },
-        b: {
-          entry: ({ context }, enq) => {
-            enq.stop(context.child)
+          b: {
+            entry: ({ context }, enq) => {
+              enq.stop(context.child)
+            },
           },
         },
-      },
-    })
+      })
 
-    const actor = createActor(machine).start()
+      const actor = createActor(machine).start()
 
-    // All starts are deferred to the end of the macrostep's effects, while
-    // stops execute at their authored positions — so the child is stopped
-    // before its deferred start runs, and that start is a no-op.
-    expect(started).not.toHaveBeenCalled()
-    expect(actor.getSnapshot().value).toBe('b')
-    expect(actor.getSnapshot().children['child']).toBeUndefined()
-  })
+      yield* expect({
+        starts,
+        value: actor.getSnapshot().value,
+        childKeys: Object.keys(actor.getSnapshot().children),
+      }).toEqual({ starts: [], value: 'b', childKeys: [] })
+    },
+  )
 })

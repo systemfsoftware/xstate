@@ -1,15 +1,55 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import z from 'zod'
 import { createAsyncLogic, TimeoutError } from '../src/actors/promise.js'
 import { createActor, createMachine, initialTransition, setup, transition } from '../src/index.js'
 
-afterEach(() => {
-  vi.useRealTimers()
-})
+function createManualClock() {
+  let now = 0
+  let nextId = 0
+  const scheduled = new Map<number, { at: number; fn: (...args: unknown[]) => void }>()
+
+  const clock = {
+    now: () => now,
+    setTimeout: (fn: (...args: unknown[]) => void, timeout: number) => {
+      const id = ++nextId
+      scheduled.set(id, { at: now + timeout, fn })
+      return id
+    },
+    clearTimeout: (id: number) => {
+      scheduled.delete(id)
+    },
+  }
+
+  return {
+    clock,
+    advance(ms: number) {
+      now += ms
+      for (let pass = 0; pass < 100; pass++) {
+        const due = [...scheduled.entries()]
+          .filter(([, timer]) => timer.at <= now)
+          .sort((a, b) => a[1].at - b[1].at)
+        if (due.length === 0) {
+          break
+        }
+        for (const [id, timer] of due) {
+          scheduled.delete(id)
+          timer.fn()
+        }
+      }
+    },
+  }
+}
+
+const afterRealTime = (milliseconds: number): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, milliseconds)
+  return promise
+}
 
 describe('async logic timeout', () => {
-  it('aborts and errors when createAsyncLogic exceeds its timeout', () => {
-    vi.useFakeTimers()
+  it('aborts and errors when createAsyncLogic exceeds its timeout', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     let signal: AbortSignal | undefined
     const logic = createAsyncLogic({
@@ -20,27 +60,34 @@ describe('async logic timeout', () => {
         return new Promise(() => {})
       },
     })
-    const actor = createActor(logic)
+    const actor = createActor(logic, { clock })
     actor.subscribe({ error: () => {} })
 
     actor.start()
-    vi.advanceTimersByTime(10)
+    advance(10)
 
-    expect(logic.id).toBe('slow-task')
-    expect(signal?.aborted).toBe(true)
-    expect(actor.getSnapshot()).toEqual(
-      expect.objectContaining({
+    yield* expect({
+      id: logic.id,
+      aborted: signal?.aborted,
+      snapshot: actor.getSnapshot(),
+    }).toEqual({
+      id: 'slow-task',
+      aborted: true,
+      snapshot: expect.objectContaining({
         status: 'error',
         error: expect.any(TimeoutError),
       }),
-    )
+    })
   })
 })
 
 describe('state-level timeout', () => {
-  it('transitions via onTimeout when duration elapses', () => {
-    vi.useFakeTimers()
-    const timeoutSpy = vi.fn()
+  it('transitions via onTimeout when duration elapses', function*({ expect }) {
+    const { clock, advance } = createManualClock()
+    const timeoutCalls: unknown[][] = []
+    const onTimeoutCall = (...args: unknown[]) => {
+      timeoutCalls.push(args)
+    }
 
     const machine = createMachine({
       initial: 'waiting',
@@ -48,7 +95,7 @@ describe('state-level timeout', () => {
         waiting: {
           timeout: 1000,
           onTimeout: ({ event }, enq) => {
-            enq(timeoutSpy, event)
+            enq(onTimeoutCall, event)
             return { target: 'escalated' }
           },
         },
@@ -56,22 +103,29 @@ describe('state-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
-    expect(actor.getSnapshot().value).toBe('waiting')
+    const actor = createActor(machine, { clock }).start()
+    const atStart = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(500)
-    expect(actor.getSnapshot().value).toBe('waiting')
+    advance(500)
+    const afterHalf = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(600)
-    expect(actor.getSnapshot().value).toBe('escalated')
-    expect(timeoutSpy).toHaveBeenCalledWith({
-      type: 'xstate.timeout',
-      stateId: '(machine).waiting',
+    advance(600)
+
+    yield* expect({
+      atStart,
+      afterHalf,
+      afterTimeout: actor.getSnapshot().value,
+      timeoutCalls,
+    }).toEqual({
+      atStart: 'waiting',
+      afterHalf: 'waiting',
+      afterTimeout: 'escalated',
+      timeoutCalls: [[{ type: 'xstate.timeout', stateId: '(machine).waiting' }]],
     })
   })
 
-  it('cancels the timeout when the state is exited by another event', () => {
-    vi.useFakeTimers()
+  it('cancels the timeout when the state is exited by another event', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     const machine = createMachine({
       initial: 'waiting',
@@ -86,17 +140,20 @@ describe('state-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
     actor.send({ type: 'APPROVE' })
-    expect(actor.getSnapshot().value).toBe('approved')
+    const afterApprove = actor.getSnapshot().value
 
-    // advance past the timeout - should NOT reach 'escalated'
-    vi.advanceTimersByTime(5000)
-    expect(actor.getSnapshot().value).toBe('approved')
+    advance(5000)
+
+    yield* expect({
+      afterApprove,
+      afterTimeout: actor.getSnapshot().value,
+    }).toEqual({ afterApprove: 'approved', afterTimeout: 'approved' })
   })
 
-  it('coexists with `after` on the same state (independent timers)', () => {
-    vi.useFakeTimers()
+  it('coexists with `after` on the same state (independent timers)', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     const machine = createMachine({
       initial: 'waiting',
@@ -111,15 +168,19 @@ describe('state-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
+    const atStart = actor.getSnapshot().value
 
-    // `after: 500` fires first - state leaves `waiting`, timeout is cancelled
-    vi.advanceTimersByTime(600)
-    expect(actor.getSnapshot().value).toBe('periodic')
+    advance(600)
+
+    yield* expect({ atStart, afterAfter: actor.getSnapshot().value }).toEqual({
+      atStart: 'waiting',
+      afterAfter: 'periodic',
+    })
   })
 
-  it('accepts a cross-state context patch (typed against the target state schema)', () => {
-    vi.useFakeTimers()
+  it('accepts a cross-state context patch (typed against the target state schema)', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     const machine = setup({
       schemas: {
@@ -158,14 +219,24 @@ describe('state-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
-    vi.advanceTimersByTime(1000)
-    expect(actor.getSnapshot().value).toBe('expired')
-    expect(actor.getSnapshot().context).toEqual({ reason: 'timeout' })
+    const actor = createActor(machine, { clock }).start()
+    const atStart = actor.getSnapshot().value
+
+    advance(1000)
+
+    yield* expect({
+      atStart,
+      afterTimeout: actor.getSnapshot().value,
+      afterTimeoutContext: actor.getSnapshot().context,
+    }).toEqual({
+      atStart: 'running',
+      afterTimeout: 'expired',
+      afterTimeoutContext: { reason: 'timeout' },
+    })
   })
 
-  it('rejects a cross-state context patch that does not match the target state schema', () => {
-    setup({
+  it('rejects a cross-state context patch that does not match the target state schema', function*({ expect }) {
+    const machine = setup({
       schemas: {
         context: z.object({
           reason: z.union([z.literal('timeout'), z.null()]),
@@ -199,10 +270,12 @@ describe('state-level timeout', () => {
         expired: { type: 'final' },
       },
     })
+
+    yield* expect(initialTransition(machine)[0].value).toEqual('running')
   })
 
-  it('supports onTimeout with object form { target }', () => {
-    vi.useFakeTimers()
+  it('supports onTimeout with object form { target }', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     const machine = createMachine({
       initial: 'waiting',
@@ -215,13 +288,19 @@ describe('state-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
-    vi.advanceTimersByTime(600)
-    expect(actor.getSnapshot().value).toBe('escalated')
+    const actor = createActor(machine, { clock }).start()
+    const atStart = actor.getSnapshot().value
+
+    advance(600)
+
+    yield* expect({ atStart, afterTimeout: actor.getSnapshot().value }).toEqual({
+      atStart: 'waiting',
+      afterTimeout: 'escalated',
+    })
   })
 
-  it('supports a dynamic timeout function', () => {
-    vi.useFakeTimers()
+  it('supports a dynamic timeout function', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     const machine = createMachine({
       context: { slaMs: 1500 },
@@ -235,17 +314,21 @@ describe('state-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
 
-    vi.advanceTimersByTime(1000)
-    expect(actor.getSnapshot().value).toBe('waiting')
+    advance(1000)
+    const afterOneSecond = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(600)
-    expect(actor.getSnapshot().value).toBe('escalated')
+    advance(600)
+
+    yield* expect({
+      afterOneSecond,
+      afterTimeout: actor.getSnapshot().value,
+    }).toEqual({ afterOneSecond: 'waiting', afterTimeout: 'escalated' })
   })
 
-  it('supports a referenced delay', () => {
-    vi.useFakeTimers()
+  it('supports a referenced delay', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     const machine = createMachine({
       delays: {
@@ -261,19 +344,25 @@ describe('state-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
 
-    vi.advanceTimersByTime(700)
-    expect(actor.getSnapshot().value).toBe('waiting')
+    advance(700)
+    const afterSevenHundred = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(100)
-    expect(actor.getSnapshot().value).toBe('escalated')
+    advance(100)
+
+    yield* expect({
+      afterSevenHundred,
+      afterTimeout: actor.getSnapshot().value,
+    }).toEqual({ afterSevenHundred: 'waiting', afterTimeout: 'escalated' })
   })
 
-  it('keeps `timeout` and `after` independent on the same state', () => {
-    vi.useFakeTimers()
-
-    const afterSpy = vi.fn()
+  it('keeps `timeout` and `after` independent on the same state', function*({ expect }) {
+    const { clock, advance } = createManualClock()
+    const afterCalls: unknown[][] = []
+    const afterCall = (...args: unknown[]) => {
+      afterCalls.push(args)
+    }
 
     const machine = createMachine({
       initial: 'waiting',
@@ -281,7 +370,7 @@ describe('state-level timeout', () => {
         waiting: {
           after: {
             500: ({ context, event, guards, actions }, enq) => {
-              enq(afterSpy)
+              enq(afterCall)
             },
           },
           timeout: 1000,
@@ -291,38 +380,66 @@ describe('state-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
 
-    vi.advanceTimersByTime(600)
-    expect(actor.getSnapshot().value).toBe('waiting')
-    expect(afterSpy).toHaveBeenCalledTimes(1)
+    advance(600)
+    const afterSixHundred = actor.getSnapshot().value
+    const afterCallsAtSixHundred = [...afterCalls]
 
-    vi.advanceTimersByTime(500)
-    expect(actor.getSnapshot().value).toBe('escalated')
+    advance(500)
+
+    yield* expect({
+      afterSixHundred,
+      afterCallsAtSixHundred,
+      afterTimeout: actor.getSnapshot().value,
+    }).toEqual({
+      afterSixHundred: 'waiting',
+      afterCallsAtSixHundred: [[]],
+      afterTimeout: 'escalated',
+    })
   })
 
-  it('throws at construction when timeout is set without onTimeout', () => {
-    expect(() =>
-      createMachine({
-        initial: 'waiting',
-        states: {
-          waiting: {
-            timeout: 1000,
-          } as any,
+  it('throws at construction when timeout is set without onTimeout', function*({ expect }) {
+    const invalidDefinition = {
+      initial: 'waiting',
+      states: {
+        waiting: {
+          timeout: 1000,
         },
-      })
-    ).toThrow(/onTimeout/)
+      },
+    } as unknown as Parameters<typeof createMachine>[0]
+
+    yield* expect(() => createMachine(invalidDefinition)).toThrow(/onTimeout/)
   })
 
-  it('passes state input to entry, exit, on, timeout, onTimeout, and after', () => {
-    vi.useFakeTimers()
+  it('passes state input to entry, exit, on, timeout, onTimeout, and after', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
-    const entrySpy = vi.fn()
-    const exitSpy = vi.fn()
-    const timeoutSpy = vi.fn()
-    const onTimeoutSpy = vi.fn()
-    const onPingSpy = vi.fn()
-    const afterSpy = vi.fn()
+    const entryCalls: unknown[][] = []
+    const entryCall = (...args: unknown[]) => {
+      entryCalls.push(args)
+    }
+    const exitCalls: unknown[][] = []
+    const exitCall = (...args: unknown[]) => {
+      exitCalls.push(args)
+    }
+    const timeoutCalls: unknown[][] = []
+    const timeoutCall = (...args: unknown[]) => {
+      timeoutCalls.push(args)
+    }
+    const onTimeoutCalls: unknown[][] = []
+    const onTimeoutCall = (...args: unknown[]) => {
+      onTimeoutCalls.push(args)
+    }
+    const onPingCalls: unknown[][] = []
+    const onPingCall = (...args: unknown[]) => {
+      onPingCalls.push(args)
+    }
+    const afterCalls: unknown[][] = []
+    const afterCall = (...args: unknown[]) => {
+      afterCalls.push(args)
+    }
+
     const machine = setup({
       schemas: {
         events: {
@@ -357,18 +474,18 @@ describe('state-level timeout', () => {
         },
         active: {
           entry: ({ input }, enq) => {
-            enq(entrySpy, input.duration)
+            enq(entryCall, input.duration)
           },
           exit: ({ input }, enq) => {
-            enq(exitSpy, input.duration)
+            enq(exitCall, input.duration)
           },
           timeout: ({ input }) => {
-            timeoutSpy(input.duration)
+            timeoutCall(input.duration)
 
             return input.duration
           },
           onTimeout: ({ input }, enq) => {
-            enq(onTimeoutSpy, input.duration)
+            enq(onTimeoutCall, input.duration)
 
             return {
               target: 'idle',
@@ -376,50 +493,77 @@ describe('state-level timeout', () => {
           },
           on: {
             ping: ({ input }, enq) => {
-              onPingSpy(input.duration)
+              onPingCall(input.duration)
             },
           },
           after: {
             1000: ({ input }) => {
-              afterSpy(input.duration)
+              afterCall(input.duration)
             },
           },
         },
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
 
     actor.send({ type: 'activate', duration: 500 })
 
-    expect(actor.getSnapshot().value).toBe('active')
-    expect(entrySpy).toHaveBeenCalledWith(500)
-    // timeout resolves eagerly on entry; onTimeout waits for the delay
-    expect(timeoutSpy).toHaveBeenCalledWith(500)
-    expect(onTimeoutSpy).not.toHaveBeenCalled()
+    const activeValue = actor.getSnapshot().value
+    const entryCallsAtActive = [...entryCalls]
+    const timeoutCallsAtActive = [...timeoutCalls]
+    const onTimeoutCallsAtActive = [...onTimeoutCalls]
 
-    // on handler receives state input
     actor.send({ type: 'ping' })
-    expect(onPingSpy).toHaveBeenCalledWith(500)
+    const onPingCallsAfterPing = [...onPingCalls]
 
-    vi.advanceTimersByTime(500)
-    expect(actor.getSnapshot().value).toBe('idle')
-    expect(onTimeoutSpy).toHaveBeenCalledWith(500)
-    expect(exitSpy).toHaveBeenCalledWith(500)
-    // after fires after timeout since timeout (500ms) < after (1000ms)
-    expect(afterSpy).not.toHaveBeenCalled()
+    advance(500)
+    const idleValue = actor.getSnapshot().value
+    const onTimeoutCallsAfterTimeout = [...onTimeoutCalls]
+    const exitCallsAfterTimeout = [...exitCalls]
+    const afterCallsAfterTimeout = [...afterCalls]
 
-    // re-enter active with longer duration so after fires first
     actor.send({ type: 'activate', duration: 2000 })
-    expect(actor.getSnapshot().value).toBe('active')
+    const reenteredValue = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(1000)
-    expect(afterSpy).toHaveBeenCalledWith(2000)
+    advance(1000)
+
+    yield* expect({
+      activeValue,
+      entryCallsAtActive,
+      timeoutCallsAtActive,
+      onTimeoutCallsAtActive,
+      onPingCallsAfterPing,
+      idleValue,
+      onTimeoutCallsAfterTimeout,
+      exitCallsAfterTimeout,
+      afterCallsAfterTimeout,
+      reenteredValue,
+      afterCallsAfterAfter: [...afterCalls],
+    }).toEqual({
+      activeValue: 'active',
+      entryCallsAtActive: [[500]],
+      timeoutCallsAtActive: [[500]],
+      onTimeoutCallsAtActive: [],
+      onPingCallsAfterPing: [[500]],
+      idleValue: 'idle',
+      onTimeoutCallsAfterTimeout: [[500]],
+      exitCallsAfterTimeout: [[500]],
+      afterCallsAfterTimeout: [],
+      reenteredValue: 'active',
+      afterCallsAfterAfter: [[2000]],
+    })
   })
 
-  it('passes the correct state input to nested states', () => {
-    const parentSpy = vi.fn()
-    const childSpy = vi.fn()
+  it('passes the correct state input to nested states', function*({ expect }) {
+    const parentCalls: unknown[][] = []
+    const parentCall = (...args: unknown[]) => {
+      parentCalls.push(args)
+    }
+    const childCalls: unknown[][] = []
+    const childCall = (...args: unknown[]) => {
+      childCalls.push(args)
+    }
 
     const machine = setup({
       schemas: {
@@ -458,14 +602,14 @@ describe('state-level timeout', () => {
           },
           on: {
             ping: ({ input }) => {
-              parentSpy(input.label)
+              parentCall(input.label)
             },
           },
           states: {
             child: {
               on: {
                 ping: ({ input }) => {
-                  childSpy(input.label)
+                  childCall(input.label)
                 },
               },
             },
@@ -477,13 +621,15 @@ describe('state-level timeout', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'ping' })
 
-    expect(childSpy).toHaveBeenCalledWith('child')
-    expect(parentSpy).toHaveBeenCalledWith('parent')
+    yield* expect({ childCalls, parentCalls }).toEqual({
+      childCalls: [['child']],
+      parentCalls: [['parent']],
+    })
   })
 })
 
 describe('invoke-level timeout', () => {
-  it('preserves the canonical invoke timeout event on the pure path', () => {
+  it('preserves the canonical invoke timeout event on the pure path', function*({ expect }) {
     let observedEvent: unknown
     const machine = createMachine({
       initial: 'working',
@@ -508,23 +654,33 @@ describe('invoke-level timeout', () => {
       throw new Error('expected a child actor')
     }
 
-    const [timedOut] = transition(machine, working, {
+    const timeoutEvent = {
       type: 'xstate.timeout.actor',
       actorId: 'child',
       sessionId: child.sessionId,
-    } as any)
+    } as unknown as Parameters<typeof transition>[2]
 
-    expect(timedOut.value).toBe('timedOut')
-    expect(observedEvent).toEqual({
-      type: 'xstate.timeout.actor',
-      actorId: 'child',
-      sessionId: child.sessionId,
+    const [timedOut] = transition(machine, working, timeoutEvent)
+
+    yield* expect({
+      value: timedOut.value,
+      observedEvent,
+    }).toEqual({
+      value: 'timedOut',
+      observedEvent: {
+        type: 'xstate.timeout.actor',
+        actorId: 'child',
+        sessionId: child.sessionId,
+      },
     })
   })
 
-  it('transitions via invoke.onTimeout when the invoke exceeds its timeout', async () => {
-    vi.useFakeTimers()
-    const timeoutSpy = vi.fn()
+  it('transitions via invoke.onTimeout when the invoke exceeds its timeout', function*({ expect }) {
+    const { clock, advance } = createManualClock()
+    const timeoutCalls: unknown[][] = []
+    const onTimeoutCall = (...args: unknown[]) => {
+      timeoutCalls.push(args)
+    }
 
     const machine = createMachine({
       initial: 'working',
@@ -533,11 +689,11 @@ describe('invoke-level timeout', () => {
           invoke: {
             id: 'child',
             src: createAsyncLogic({
-              run: () => new Promise((resolve) => setTimeout(resolve, 10_000)),
+              run: () => new Promise(() => {}),
             }),
             timeout: 1000,
             onTimeout: ({ event }, enq) => {
-              enq(timeoutSpy, event)
+              enq(onTimeoutCall, event)
               return { target: 'timedOut' }
             },
             onDone: { target: 'done' },
@@ -548,20 +704,28 @@ describe('invoke-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
-    expect(actor.getSnapshot().value).toBe('working')
+    const actor = createActor(machine, { clock }).start()
+    const atStart = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(1100)
-    expect(actor.getSnapshot().value).toBe('timedOut')
-    expect(timeoutSpy).toHaveBeenCalledWith({
-      type: 'xstate.timeout.actor',
-      actorId: 'child',
-      sessionId: expect.any(String),
+    advance(1100)
+
+    yield* expect({
+      atStart,
+      afterTimeout: actor.getSnapshot().value,
+      timeoutCalls,
+    }).toEqual({
+      atStart: 'working',
+      afterTimeout: 'timedOut',
+      timeoutCalls: [[{
+        type: 'xstate.timeout.actor',
+        actorId: 'child',
+        sessionId: expect.any(String),
+      }]],
     })
   })
 
-  it('does NOT fire onTimeout if the invoke completes first', async () => {
-    vi.useFakeTimers()
+  it.live('does NOT fire onTimeout if the invoke completes first', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     const machine = createMachine({
       initial: 'working',
@@ -579,20 +743,22 @@ describe('invoke-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
 
-    // flush the resolved promise microtasks
-    await vi.runAllTimersAsync()
+    yield* Effect.promise(() => afterRealTime(0))
 
-    expect(actor.getSnapshot().value).toBe('done')
+    const afterCompletion = actor.getSnapshot().value
 
-    // further advance - should NOT reach timedOut
-    vi.advanceTimersByTime(10_000)
-    expect(actor.getSnapshot().value).toBe('done')
+    advance(10_000)
+
+    yield* expect({ afterCompletion, afterTimeout: actor.getSnapshot().value }).toEqual({
+      afterCompletion: 'done',
+      afterTimeout: 'done',
+    })
   })
 
-  it('cancels the timeout when the invoke completes and the parent state stays active', async () => {
-    vi.useFakeTimers()
+  it.live('cancels the timeout when the invoke completes and the parent state stays active', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     const machine = createMachine({
       initial: 'working',
@@ -608,20 +774,26 @@ describe('invoke-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
 
-    await vi.runAllTimersAsync()
+    yield* Effect.promise(() => afterRealTime(0))
 
-    expect(actor.getSnapshot().value).toBe('working')
+    const afterCompletion = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(10_000)
-    expect(actor.getSnapshot().value).toBe('working')
+    advance(10_000)
+
+    yield* expect({ afterCompletion, afterTimeout: actor.getSnapshot().value }).toEqual({
+      afterCompletion: 'working',
+      afterTimeout: 'working',
+    })
   })
 
-  it('cancels the timeout when invoke.onDone only enqueues actions', async () => {
-    vi.useFakeTimers()
-
-    const emittedSpy = vi.fn()
+  it.live('cancels the timeout when invoke.onDone only enqueues actions', function*({ expect }) {
+    const { clock, advance } = createManualClock()
+    const emittedCalls: unknown[][] = []
+    const onEmitted = (...args: unknown[]) => {
+      emittedCalls.push(args)
+    }
 
     const machine = createMachine({
       initial: 'working',
@@ -640,21 +812,30 @@ describe('invoke-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine)
-    actor.on('invokeDone', emittedSpy)
+    const actor = createActor(machine, { clock })
+    actor.on('invokeDone', onEmitted)
     actor.start()
 
-    await vi.runAllTimersAsync()
+    yield* Effect.promise(() => afterRealTime(0))
 
-    expect(actor.getSnapshot().value).toBe('working')
-    expect(emittedSpy).toHaveBeenCalledTimes(1)
+    const afterCompletion = actor.getSnapshot().value
+    const emittedCallsAfterCompletion = emittedCalls.length
 
-    vi.advanceTimersByTime(10_000)
-    expect(actor.getSnapshot().value).toBe('working')
+    advance(10_000)
+
+    yield* expect({
+      afterCompletion,
+      emittedCallsAfterCompletion,
+      afterTimeout: actor.getSnapshot().value,
+    }).toEqual({
+      afterCompletion: 'working',
+      emittedCallsAfterCompletion: 1,
+      afterTimeout: 'working',
+    })
   })
 
-  it('supports a dynamic invoke-level timeout', () => {
-    vi.useFakeTimers()
+  it('supports a dynamic invoke-level timeout', function*({ expect }) {
+    const { clock, advance } = createManualClock()
 
     const machine = createMachine({
       context: { timeoutMs: 2000 },
@@ -663,7 +844,7 @@ describe('invoke-level timeout', () => {
         working: {
           invoke: {
             src: createAsyncLogic({
-              run: () => new Promise((resolve) => setTimeout(resolve, 60_000)),
+              run: () => new Promise(() => {}),
             }),
             timeout: ({ context }) => context.timeoutMs,
             onTimeout: { target: 'timedOut' },
@@ -675,29 +856,33 @@ describe('invoke-level timeout', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
 
-    vi.advanceTimersByTime(1000)
-    expect(actor.getSnapshot().value).toBe('working')
+    advance(1000)
+    const afterOneSecond = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(1500)
-    expect(actor.getSnapshot().value).toBe('timedOut')
+    advance(1500)
+
+    yield* expect({
+      afterOneSecond,
+      afterTimeout: actor.getSnapshot().value,
+    }).toEqual({ afterOneSecond: 'working', afterTimeout: 'timedOut' })
   })
 
-  it('throws at construction when invoke.timeout is set without onTimeout', () => {
-    expect(() =>
-      createMachine({
-        initial: 'working',
-        states: {
-          working: {
-            invoke: {
-              src: createAsyncLogic({ run: () => Promise.resolve('ok') }),
-              timeout: 1000,
-            } as any,
+  it('throws at construction when invoke.timeout is set without onTimeout', function*({ expect }) {
+    const invalidDefinition = {
+      initial: 'working',
+      states: {
+        working: {
+          invoke: {
+            src: createAsyncLogic({ run: () => Promise.resolve('ok') }),
+            timeout: 1000,
           },
-          done: {},
         },
-      })
-    ).toThrow(/onTimeout/)
+        done: {},
+      },
+    } as unknown as Parameters<typeof createMachine>[0]
+
+    yield* expect(() => createMachine(invalidDefinition)).toThrow(/onTimeout/)
   })
 })
