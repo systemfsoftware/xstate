@@ -1,6 +1,7 @@
-import { createMachine, types } from '@systemfsoftware/xstate'
+import { describe, it } from '@systemfsoftware/vitest'
+import { createMachine, type EventFrom, type SnapshotFrom, types } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import * as fc from 'fast-check'
-import { describe, expect, it } from 'vitest'
 import {
   fastCheckAdapter,
   getCurrentScheduler,
@@ -22,12 +23,10 @@ const counterMachine = createMachine({
   },
 })
 
-/**
- * A counter whose write is committed on a scheduler task instead of inline, so
- * a read may or may not observe the write depending on the ordering the
- * scheduler picks.
- */
-const racyCounterSut: TestSut<any, any> = {
+type CounterSnapshot = SnapshotFrom<typeof counterMachine>
+type CounterEvent = EventFrom<typeof counterMachine>
+
+const racyCounterSut: TestSut<CounterSnapshot, CounterEvent> = {
   create: () => {
     const scheduler = getCurrentScheduler()
     let committed = 0
@@ -52,11 +51,20 @@ const racyCounterSut: TestSut<any, any> = {
   projectModel: (snapshot) => snapshot.context.count,
 }
 
+function schedulerReport(
+  failure: ModelTestFailure | undefined,
+): FastCheckSchedulerReport {
+  const data = failure?.replay?.data
+  if (data === null || typeof data !== 'object' || !('scheduler' in data)) {
+    throw new Error('expected the failing run to carry a scheduler report')
+  }
+  return data.scheduler as FastCheckSchedulerReport
+}
+
 describe('scheduled property runs', () => {
-  it('finds an ordering where the SUT read races the write', async () => {
-    let failure: ModelTestFailure | undefined
-    try {
-      await propertyTest(counterMachine, {
+  it('finds an ordering where the SUT read races the write', function*({ expect }) {
+    const failure = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
         seed: 7,
         numRuns: 50,
         maxCommands: 6,
@@ -64,26 +72,31 @@ describe('scheduled property runs', () => {
         events: { INC: fc.constant({}) },
         sut: withScheduledSut(racyCounterSut),
         invariant: () => {},
-      })
-    } catch (error) {
-      failure = error as ModelTestFailure
-    }
-
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    const report = (
-      failure!.replay?.data as { scheduler: FastCheckSchedulerReport }
-    ).scheduler
-    expect(report.ordering.length).toBeGreaterThan(0)
-    expect(report.tasks.some((task) => task.label === 'commit')).toBe(true)
-    expect(report.tasks.every((task) => typeof task.taskId === 'number')).toBe(
-      true,
+      }).then(
+        () => undefined,
+        (error) => error as ModelTestFailure,
+      )
     )
+
+    const report = schedulerReport(failure)
+    yield* expect({
+      isFailure: failure instanceof ModelTestFailure,
+      hasOrdering: report.ordering.length > 0,
+      hasCommitTask: report.tasks.some((task) => task.label === 'commit'),
+      allTaskIdsNumeric: report.tasks.every(
+        (task) => typeof task.taskId === 'number',
+      ),
+    }).toEqual({
+      isFailure: true,
+      hasOrdering: true,
+      hasCommitTask: true,
+      allTaskIdsNumeric: true,
+    })
   })
 
-  it('reports the schedule of the failing run, not of a later passing one', async () => {
-    let failure: ModelTestFailure | undefined
-    try {
-      await propertyTest(counterMachine, {
+  it('reports the schedule of the failing run, not of a later passing one', function*({ expect }) {
+    const failure = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
         seed: 7,
         numRuns: 50,
         maxCommands: 6,
@@ -91,74 +104,81 @@ describe('scheduled property runs', () => {
         events: { INC: fc.constant({}) },
         sut: withScheduledSut(racyCounterSut),
         invariant: () => {},
-      })
-    } catch (error) {
-      failure = error as ModelTestFailure
-    }
+      }).then(
+        () => undefined,
+        (error) => error as ModelTestFailure,
+      )
+    )
 
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    const report = (
-      failure!.replay?.data as { scheduler: FastCheckSchedulerReport }
-    ).scheduler
-    const sentEvents = failure!.trace.timeline.filter(
+    const report = schedulerReport(failure)
+    const sentEvents = (failure?.trace.timeline ?? []).filter(
       (entry) => entry.kind === 'event',
     ).length
-    // One `commit` task per `INC` the counterexample sent: a report captured
-    // from a later, passing shrink candidate would not line up.
-    expect(report.tasks.filter((task) => task.label === 'commit').length).toBe(
-      sentEvents,
+    yield* expect({
+      isFailure: failure instanceof ModelTestFailure,
+      commitTasks: report.tasks.filter((task) => task.label === 'commit').length,
+    }).toEqual({ isFailure: true, commitTasks: sentEvents })
+  })
+
+  it('passes for a SUT that commits before resolving', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 7,
+        numRuns: 25,
+        maxCommands: 6,
+        scheduler: true,
+        events: { INC: fc.constant({}) },
+        sut: withScheduledSut<CounterSnapshot, CounterEvent>({
+          create: () => {
+            let count = 0
+            return {
+              send: (event) => {
+                if (event.type === 'INC') {
+                  count += 1
+                }
+              },
+              read: () => count,
+            }
+          },
+          projectModel: (snapshot) => snapshot.context.count,
+        }),
+        invariant: () => {},
+      })
+    )
+
+    yield* expect(result.coverage.runs).toSatisfy(
+      (runs) => runs > 0,
+      'the campaign ran at least once',
     )
   })
 
-  it('passes for a SUT that commits before resolving', async () => {
-    await propertyTest(counterMachine, {
-      seed: 7,
-      numRuns: 25,
-      maxCommands: 6,
-      scheduler: true,
-      events: { INC: fc.constant({}) },
-      sut: withScheduledSut({
-        create: () => {
-          let count = 0
-          return {
-            send: (event) => {
-              if (event.type === 'INC') {
-                count += 1
-              }
-            },
-            read: () => count,
-          }
-        },
-        projectModel: (snapshot: any) => snapshot.context.count,
-      }),
-      invariant: () => {},
-    })
-  })
-
-  it('leaves runs unscheduled when the option is off', async () => {
+  it('leaves runs unscheduled when the option is off', function*({ expect }) {
     let observed: unknown
-    await propertyTest(counterMachine, {
-      seed: 7,
-      numRuns: 5,
-      maxCommands: 3,
-      events: { INC: fc.constant({}) },
-      sut: withScheduledSut({
-        create: () => {
-          observed = getCurrentScheduler()
-          let count = 0
-          return {
-            send: (event) => {
-              if (event.type === 'INC') {
-                count += 1
-              }
-            },
-            read: () => count,
-          }
-        },
-        projectModel: (snapshot: any) => snapshot.context.count,
-      }),
-      invariant: () => {},
-    })
-    expect(observed).toBeUndefined()
+    yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 7,
+        numRuns: 5,
+        maxCommands: 3,
+        events: { INC: fc.constant({}) },
+        sut: withScheduledSut<CounterSnapshot, CounterEvent>({
+          create: () => {
+            observed = getCurrentScheduler()
+            let count = 0
+            return {
+              send: (event) => {
+                if (event.type === 'INC') {
+                  count += 1
+                }
+              },
+              read: () => count,
+            }
+          },
+          projectModel: (snapshot) => snapshot.context.count,
+        }),
+        invariant: () => {},
+      })
+    )
+
+    yield* expect(observed).toEqual(undefined)
   })
 })

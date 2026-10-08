@@ -47,13 +47,7 @@ import {
   normalizeEventDescriptors,
 } from './eventDescriptors.js'
 import { ensuringFinalizerWins } from './finalizerError.js'
-import {
-  createOutcomeStub,
-  PropertyOutcomeRegistry,
-  provideActors,
-  releaseActiveOutcomeRegistry,
-  setActiveOutcomeRegistry,
-} from './outcomes.js'
+import { createOutcomeStub, PropertyOutcomeRegistry, provideActors } from './outcomes.js'
 import { consoleLineLogger, formatTestStatistics } from './report.js'
 import { type EventFromSource, type InputFromSource, type SnapshotFromSource } from './sourceTypes.js'
 import { createSeededRng, fnv1a } from './utils.js'
@@ -1808,7 +1802,6 @@ export class PropertyScenarioRunner<
             executionConfig.registry.seed(
               executionConfig.seededOutcomes ?? [],
             )
-            setActiveOutcomeRegistry(executionConfig.registry)
             const execution = new PropertyExecutionEngine(
               this.logic,
               this.input,
@@ -2322,10 +2315,6 @@ export class PropertyScenarioRunner<
               errors.push(Cause.squash(stopExit.cause))
             }
             this.execution = undefined
-            const executionConfig = this.executionConfig
-            if (executionConfig !== undefined) {
-              releaseActiveOutcomeRegistry(executionConfig.registry)
-            }
           }
           const disposeContext: TestSutDisposeContext = {
             passed: this.finished,
@@ -3204,10 +3193,13 @@ export interface TestOptions<
    */
   readonly failures?: TestFailureStore
   /**
-   * Prints `formatTestStatistics(coverage)` after a passing campaign: the
+   * Reports `formatTestStatistics(coverage)` after a passing campaign: the
    * distribution of executed event cases and the share of runs per label.
+   * `true` prints it through the package's console logger; a function
+   * receives the same string once, instead of the print; `false`, or leaving
+   * it out, reports nothing.
    */
-  readonly statistics?: boolean
+  readonly statistics?: boolean | ((report: string) => void)
   /**
    * Projects a snapshot onto the value printed for each step of a failure
    * trace. Defaults to `{ value, context }` for machine snapshots.
@@ -3790,7 +3782,7 @@ const propertyTestProgram = <
       ...options.actors,
     }
     for (const src of Object.keys(options.outcomes ?? {})) {
-      providedActors[src] = createOutcomeStub(src)
+      providedActors[src] = createOutcomeStub(src, outcomeRegistry)
     }
     // Coverage ids are keyed by transition-definition identity, so the machine
     // that gets provided must be the same one coverage is declared from.
@@ -4494,7 +4486,9 @@ const propertyTestProgram = <
       }
     }
 
-    if (options.statistics !== undefined) {
+    if (typeof options.statistics === 'function') {
+      options.statistics(formatTestStatistics(finalCoverage))
+    } else if (options.statistics === true) {
       logTestStatistics(finalCoverage)
     }
     yield* complete({ passed: true })
@@ -4735,7 +4729,7 @@ const replayTestProgram = <TSource extends ActorLogic<any, any, any>>(
     ]
     if (mode === 'executed') {
       for (const src of stubbedSources) {
-        providedActors[src] ??= createOutcomeStub(src)
+        providedActors[src] ??= createOutcomeStub(src, outcomeRegistry)
       }
     }
     const logic = Object.keys(providedActors).length !== 0

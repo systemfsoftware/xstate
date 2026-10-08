@@ -1,5 +1,6 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine, initialTransition, types } from '@systemfsoftware/xstate'
-import { describe, expect, it } from 'vitest'
+import { Effect } from 'effect'
 import { ModelTestFailure, propertyTest, replayTest, type TestFixture } from '../../src/engine/index.js'
 import { constant, randomAdapter } from './propertyTestAdapter.js'
 
@@ -17,14 +18,21 @@ const counterMachine = createMachine({
   },
 })
 
-const failingInvariant = ({ snapshot }: { snapshot: any }) => {
-  expect(snapshot.context.count).toBeLessThan(5)
+const failingInvariant = ({ snapshot }: { snapshot: unknown }) => {
+  const machineSnapshot = snapshot as { context: { count: number } }
+  if (machineSnapshot.context.count >= 5) {
+    throw new Error(`count reached ${machineSnapshot.context.count}`)
+  }
 }
 
-/**
- * A hand-written `formatVersion: 1` fixture, mirroring what
- * `normalizeFixtureTimeline` migrates into a v2 timeline.
- */
+const catchFailure = (run: () => Promise<unknown>): Promise<ModelTestFailure> =>
+  run().then(
+    () => {
+      throw new Error('Expected the campaign to fail')
+    },
+    (error: unknown) => error as ModelTestFailure,
+  )
+
 const legacyFixture = {
   formatVersion: 1,
   machine: { id: 'counter' },
@@ -35,84 +43,117 @@ const legacyFixture = {
 } as const
 
 describe('replayTest', () => {
-  it('replays a v2 fixture produced by a failing property test', async () => {
-    let failure!: ModelTestFailure
-    try {
-      await propertyTest(counterMachine, {
-        adapter: randomAdapter({ seed: 1, numRuns: 5, maxCommands: 2 }),
-        events: { INC: constant({ value: 5 }) },
+  it('replays a v2 fixture produced by a failing property test', function*({ expect }) {
+    const failure = yield* Effect.promise(() =>
+      catchFailure(() =>
+        propertyTest(counterMachine, {
+          adapter: randomAdapter({ seed: 1, numRuns: 5, maxCommands: 2 }),
+          events: { INC: constant({ value: 5 }) },
+          invariant: failingInvariant,
+        })
+      )
+    )
+    yield* expect(failure.fixture).toMatchObject({ formatVersion: 2 })
+
+    const replayed = (yield* Effect.promise(() =>
+      replayTest(counterMachine, failure.fixture!, {
         invariant: failingInvariant,
-      })
-    } catch (error) {
-      failure = error as ModelTestFailure
-    }
-    expect(failure.fixture).toMatchObject({ formatVersion: 2 })
+      }).catch((error: unknown) => error)
+    )) as ModelTestFailure
 
-    const replayed = (await replayTest(counterMachine, failure.fixture!, {
-      invariant: failingInvariant,
-    }).catch((error) => error)) as ModelTestFailure
-
-    expect(replayed).toBeInstanceOf(ModelTestFailure)
-    expect(replayed.trace.steps).toHaveLength(failure.trace.steps.length)
+    yield* expect({
+      isModelTestFailure: replayed instanceof ModelTestFailure,
+      stepCount: replayed.trace.steps.length,
+    }).toEqual({
+      isModelTestFailure: true,
+      stepCount: failure.trace.steps.length,
+    })
   })
 
-  it('migrates a formatVersion 1 fixture', async () => {
-    const replayed = (await replayTest(counterMachine, legacyFixture, {
-      invariant: failingInvariant,
-    }).catch((error) => error)) as ModelTestFailure
+  it('migrates a formatVersion 1 fixture', function*({ expect }) {
+    const replayed = (yield* Effect.promise(() =>
+      replayTest(counterMachine, legacyFixture, {
+        invariant: failingInvariant,
+      }).catch((error: unknown) => error)
+    )) as ModelTestFailure
 
-    expect(replayed).toBeInstanceOf(ModelTestFailure)
-    expect(replayed.trace.steps).toHaveLength(1)
     const firstStep = replayed.trace.steps[0]
     if (firstStep === undefined) {
       throw new Error('expected a first step')
     }
-    expect(firstStep.phase).toBe('generated')
-    expect(firstStep.event).toEqual({ type: 'INC', value: 5 })
+    yield* expect({
+      isModelTestFailure: replayed instanceof ModelTestFailure,
+      stepCount: replayed.trace.steps.length,
+      firstPhase: firstStep.phase,
+      firstEvent: firstStep.event,
+    }).toEqual({
+      isModelTestFailure: true,
+      stepCount: 1,
+      firstPhase: 'generated',
+      firstEvent: { type: 'INC', value: 5 },
+    })
   })
 
-  it('migrates prefix events from a formatVersion 1 fixture', async () => {
-    const replayed = (await replayTest(
-      counterMachine,
-      {
-        ...legacyFixture,
-        prefixEvents: [{ type: 'INC', value: 3 }],
-        events: [{ type: 'INC', value: 3 }],
-        failedAt: 2,
-      },
-      { invariant: failingInvariant },
-    ).catch((error) => error)) as ModelTestFailure
+  it('migrates prefix events from a formatVersion 1 fixture', function*({ expect }) {
+    const replayed = (yield* Effect.promise(() =>
+      replayTest(
+        counterMachine,
+        {
+          ...legacyFixture,
+          prefixEvents: [{ type: 'INC', value: 3 }],
+          events: [{ type: 'INC', value: 3 }],
+          failedAt: 2,
+        },
+        { invariant: failingInvariant },
+      ).catch((error: unknown) => error)
+    )) as ModelTestFailure
 
-    expect(replayed).toBeInstanceOf(ModelTestFailure)
-    expect(replayed.trace.prefixEvents).toEqual([{ type: 'INC', value: 3 }])
-    expect(replayed.trace.events).toEqual([{ type: 'INC', value: 3 }])
+    yield* expect({
+      isModelTestFailure: replayed instanceof ModelTestFailure,
+      prefixEvents: replayed.trace.prefixEvents,
+      events: replayed.trace.events,
+    }).toEqual({
+      isModelTestFailure: true,
+      prefixEvents: [{ type: 'INC', value: 3 }],
+      events: [{ type: 'INC', value: 3 }],
+    })
   })
 
-  it('rejects a fixture recorded against another machine id', async () => {
-    await expect(
+  it('rejects a fixture recorded against another machine id', function*({ expect }) {
+    const rejection = yield* Effect.promise(() =>
       replayTest(
         counterMachine,
         { ...legacyFixture, machine: { id: 'other' } },
         { invariant: () => {} },
-      ),
-    ).rejects.toThrow(
-      'Property replay fixture targets machine "other", received "counter"',
+      ).catch((reason: unknown) => reason)
     )
+    const name = rejection instanceof Error ? rejection.name : String(rejection)
+    const message = rejection instanceof Error ? rejection.message : String(rejection)
+
+    yield* expect({ name, message }).toEqual({
+      name: 'Error',
+      message: 'Property replay fixture targets machine "other", received "counter"',
+    })
   })
 
-  it('rejects a fixture recorded against another machine version', async () => {
-    await expect(
+  it('rejects a fixture recorded against another machine version', function*({ expect }) {
+    const rejection = yield* Effect.promise(() =>
       replayTest(
         counterMachine,
         { ...legacyFixture, machine: { id: 'counter', version: '2.0.0' } },
         { invariant: () => {} },
-      ),
-    ).rejects.toThrow(
-      'Property replay fixture targets machine version "2.0.0", received "(unversioned)"',
+      ).catch((reason: unknown) => reason)
     )
+    const name = rejection instanceof Error ? rejection.name : String(rejection)
+    const message = rejection instanceof Error ? rejection.message : String(rejection)
+
+    yield* expect({ name, message }).toEqual({
+      name: 'Error',
+      message: 'Property replay fixture targets machine version "2.0.0", received "(unversioned)"',
+    })
   })
 
-  it('requires `restoreSnapshot` when the fixture starts from a snapshot', async () => {
+  it('requires `restoreSnapshot` when the fixture starts from a snapshot', function*({ expect }) {
     const [snapshot] = initialTransition(counterMachine)
     const fixture: TestFixture = {
       formatVersion: 2,
@@ -122,20 +163,30 @@ describe('replayTest', () => {
       failedAt: 0,
     }
 
-    await expect(
-      replayTest(counterMachine, fixture, { invariant: () => {} }),
-    ).rejects.toThrow(
-      'Property replay fixture contains a snapshot but no restoreSnapshot function was provided',
+    const rejection = yield* Effect.promise(() =>
+      replayTest(counterMachine, fixture, { invariant: () => {} }).catch((reason: unknown) => reason)
     )
+    const name = rejection instanceof Error ? rejection.name : String(rejection)
+    const message = rejection instanceof Error ? rejection.message : String(rejection)
+
+    yield* expect({ name, message }).toEqual({
+      name: 'Error',
+      message: 'Property replay fixture contains a snapshot but no restoreSnapshot function was provided',
+    })
   })
 
-  it('throws when the replay does not reproduce the recorded failure', async () => {
-    await expect(
+  it('throws when the replay does not reproduce the recorded failure', function*({ expect }) {
+    const rejection = yield* Effect.promise(() =>
       replayTest(counterMachine, legacyFixture, {
         invariant: () => {},
-      }),
-    ).rejects.toThrow(
-      'Property replay did not reproduce the recorded failure at step 1',
+      }).catch((reason: unknown) => reason)
     )
+    const name = rejection instanceof Error ? rejection.name : String(rejection)
+    const message = rejection instanceof Error ? rejection.message : String(rejection)
+
+    yield* expect({ name, message }).toEqual({
+      name: 'ReplayNotReproducedError',
+      message: 'Property replay did not reproduce the recorded failure at step 1',
+    })
   })
 })

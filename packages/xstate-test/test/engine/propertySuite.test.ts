@@ -1,5 +1,6 @@
+import { describe } from '@systemfsoftware/vitest'
 import { createMachine } from '@systemfsoftware/xstate'
-import { describe, expect, it } from 'vitest'
+import { Effect } from 'effect'
 import {
   describeTestSuite,
   generateTestSuite,
@@ -19,7 +20,6 @@ const trafficMachine = createMachine({
   },
 })
 
-/** The same machine with `green -> STOP -> red` removed. */
 const mutatedMachine = createMachine({
   id: 'traffic',
   initial: 'red',
@@ -30,11 +30,14 @@ const mutatedMachine = createMachine({
   },
 })
 
-/** `STOP` always parks the light on red. */
-const invariant = ({ snapshot, event }: { snapshot: any; event: any }) => {
-  expect(typeof snapshot.value).toBe('string')
-  if (event?.type === 'STOP') {
-    expect(snapshot.value).toBe('red')
+const invariant = (
+  { snapshot, event }: { snapshot: { value: unknown }; event: { type?: string } | undefined },
+) => {
+  if (typeof snapshot.value !== 'string') {
+    throw new Error(`expected a string state value, got ${String(snapshot.value)}`)
+  }
+  if (event?.type === 'STOP' && snapshot.value !== 'red') {
+    throw new Error(`STOP must park the light on red, got ${snapshot.value}`)
   }
 }
 
@@ -48,127 +51,156 @@ const generate = () =>
     invariant,
   })
 
-describe('generateTestSuite', () => {
-  it('covers every reachable transition with few fixtures', async () => {
-    const suite = await generate()
+describe('generateTestSuite', (it) => {
+  it('covers every reachable transition with few fixtures', function*({ expect }) {
+    const suite = yield* Effect.promise(() => generate())
 
-    expect(suite.formatVersion).toBe(1)
-    expect(suite.machineId).toBe('traffic')
-    expect(suite.generatedAt).toBeUndefined()
     const transitionsDimension = suite.coverage.dimensions['transitions']
     if (transitionsDimension === undefined) {
       throw new Error('expected a transitions dimension')
     }
-    expect(transitionsDimension.uncovered).toEqual([])
-    expect(suite.fixtures.length).toBeLessThanOrEqual(4)
-    expect(suite.fixtures.length).toBeGreaterThan(0)
-
     const eventTypes = new Set(
       suite.fixtures.flatMap((fixture) =>
         fixture.timeline.map((entry) => entry.command.type === 'event' ? entry.command.event.type : '')
       ),
     )
-    expect(eventTypes).toContain('NEXT')
-    expect(eventTypes).toContain('STOP')
+    yield* expect({
+      formatVersion: suite.formatVersion,
+      machineId: suite.machineId,
+      generatedAt: suite.generatedAt,
+      uncovered: transitionsDimension.uncovered,
+      fixtureCountInRange: suite.fixtures.length >= 1 && suite.fixtures.length <= 4,
+      eventTypes: [...eventTypes].sort(),
+    }).toEqual({
+      formatVersion: 1,
+      machineId: 'traffic',
+      generatedAt: undefined,
+      uncovered: [],
+      fixtureCountInRange: true,
+      eventTypes: ['NEXT', 'STOP'],
+    })
   })
 
-  it('is deterministic', async () => {
-    expect(serializeTestSuite(await generate())).toBe(
-      serializeTestSuite(await generate()),
+  it('is deterministic', function*({ expect }) {
+    const first = yield* Effect.promise(() => generate())
+    const second = yield* Effect.promise(() => generate())
+
+    yield* expect(serializeTestSuite(first)).toBe(serializeTestSuite(second))
+  })
+
+  it('keeps every distinct trace with `select: "all"`', function*({ expect }) {
+    const minimal = yield* Effect.promise(() => generate())
+    const all = yield* Effect.promise(() =>
+      generateTestSuite(trafficMachine, {
+        adapter: randomAdapter({ seed: 7, numRuns: 20, maxCommands: 6 }),
+        events: { NEXT: constant({}), STOP: constant({}) },
+        invariant,
+        select: 'all',
+      })
     )
+
+    yield* expect(all.fixtures.length).toBeGreaterThan(minimal.fixtures.length)
   })
 
-  it('keeps every distinct trace with `select: "all"`', async () => {
-    const minimal = await generate()
-    const all = await generateTestSuite(trafficMachine, {
-      adapter: randomAdapter({ seed: 7, numRuns: 20, maxCommands: 6 }),
-      events: { NEXT: constant({}), STOP: constant({}) },
-      invariant,
-      select: 'all',
-    })
+  it('respects `maxFixtures`', function*({ expect }) {
+    const suite = yield* Effect.promise(() =>
+      generateTestSuite(trafficMachine, {
+        adapter: randomAdapter({ seed: 7, numRuns: 20, maxCommands: 6 }),
+        events: { NEXT: constant({}), STOP: constant({}) },
+        invariant,
+        maxFixtures: 1,
+      })
+    )
 
-    expect(all.fixtures.length).toBeGreaterThan(minimal.fixtures.length)
+    yield* expect(suite.fixtures.length).toBe(1)
   })
 
-  it('respects `maxFixtures`', async () => {
-    const suite = await generateTestSuite(trafficMachine, {
-      adapter: randomAdapter({ seed: 7, numRuns: 20, maxCommands: 6 }),
-      events: { NEXT: constant({}), STOP: constant({}) },
-      invariant,
-      maxFixtures: 1,
-    })
+  it('records `generatedAt` when supplied', function*({ expect }) {
+    const suite = yield* Effect.promise(() =>
+      generateTestSuite(trafficMachine, {
+        adapter: randomAdapter({ seed: 7, numRuns: 5, maxCommands: 4 }),
+        events: { NEXT: constant({}) },
+        invariant,
+        generatedAt: '2026-01-01T00:00:00.000Z',
+      })
+    )
 
-    expect(suite.fixtures).toHaveLength(1)
-  })
-
-  it('records `generatedAt` when supplied', async () => {
-    const suite = await generateTestSuite(trafficMachine, {
-      adapter: randomAdapter({ seed: 7, numRuns: 5, maxCommands: 4 }),
-      events: { NEXT: constant({}) },
-      invariant,
-      generatedAt: '2026-01-01T00:00:00.000Z',
-    })
-
-    expect(suite.generatedAt).toBe('2026-01-01T00:00:00.000Z')
+    yield* expect(suite.generatedAt).toBe('2026-01-01T00:00:00.000Z')
   })
 })
 
-describe('replayTestSuite', () => {
-  it('passes against the machine it was generated from', async () => {
-    const suite = await generate()
-    const result = await replayTestSuite(trafficMachine, suite, {
-      invariant,
-    })
+describe('replayTestSuite', (it) => {
+  it('passes against the machine it was generated from', function*({ expect }) {
+    const suite = yield* Effect.promise(() => generate())
+    const result = yield* Effect.promise(() =>
+      replayTestSuite(trafficMachine, suite, {
+        invariant,
+      })
+    )
 
-    expect(result.failed).toEqual([])
-    expect(result.passed).toBe(suite.fixtures.length)
+    yield* expect(result).toEqual({ failed: [], passed: suite.fixtures.length })
   })
 
-  it('reports failures naming the fixture when the machine changes', async () => {
-    const suite = await generate()
-    const result = await replayTestSuite(mutatedMachine, suite, {
-      invariant,
-    })
+  it('reports failures naming the fixture when the machine changes', function*({ expect }) {
+    const suite = yield* Effect.promise(() => generate())
+    const result = yield* Effect.promise(() =>
+      replayTestSuite(mutatedMachine, suite, {
+        invariant,
+      })
+    )
 
-    expect(result.failed.length).toBeGreaterThan(0)
-    expect(result.passed + result.failed.length).toBe(suite.fixtures.length)
     const firstFailure = result.failed[0]
     if (firstFailure === undefined) {
       throw new Error('expected a failed fixture')
     }
-    expect(firstFailure.title).toMatch(/^fixture \d+: /)
     const failingFixture = suite.fixtures[firstFailure.index]
     if (failingFixture === undefined) {
       throw new Error('expected the failing fixture')
     }
-    expect(firstFailure.fixture).toBe(failingFixture)
+    yield* expect({
+      failedCountAboveZero: result.failed.length > 0,
+      total: result.passed + result.failed.length,
+      fixtureCount: suite.fixtures.length,
+      titleNamesFixture: /^fixture \d+: /.test(firstFailure.title),
+      sameFixture: firstFailure.fixture === failingFixture,
+    }).toEqual({
+      failedCountAboveZero: true,
+      total: suite.fixtures.length,
+      fixtureCount: suite.fixtures.length,
+      titleNamesFixture: true,
+      sameFixture: true,
+    })
   })
 })
 
-describe('serializeTestSuite', () => {
-  it('round-trips through JSON', async () => {
-    const suite = await generate()
+describe('serializeTestSuite', (it) => {
+  it('round-trips through JSON', function*({ expect }) {
+    const suite = yield* Effect.promise(() => generate())
     const parsed = parseTestSuite(serializeTestSuite(suite))
 
-    expect(parsed.fixtures).toEqual(suite.fixtures)
-    expect(parsed.machineId).toBe('traffic')
-
-    const result = await replayTestSuite(trafficMachine, parsed, {
-      invariant,
+    yield* expect({ fixtures: parsed.fixtures, machineId: parsed.machineId }).toEqual({
+      fixtures: suite.fixtures,
+      machineId: 'traffic',
     })
-    expect(result.failed).toEqual([])
+
+    const result = yield* Effect.promise(() =>
+      replayTestSuite(trafficMachine, parsed, {
+        invariant,
+      })
+    )
+    yield* expect(result.failed).toEqual([])
   })
 
-  it('rejects unknown format versions', () => {
-    expect(() => parseTestSuite(JSON.stringify({ formatVersion: 99, fixtures: [] }))).toThrow(
+  it('rejects unknown format versions', function*({ expect }) {
+    yield* expect(() => parseTestSuite(JSON.stringify({ formatVersion: 99, fixtures: [] }))).toThrow(
       /Unsupported property suite format version: 99/,
     )
   })
 })
 
-describe('describeTestSuite', () => {
-  it('registers one test per fixture', async () => {
-    const suite = await generate()
+describe('describeTestSuite', (it) => {
+  it('registers one test per fixture', function*({ expect }) {
+    const suite = yield* Effect.promise(() => generate())
     const registered: string[] = []
     const blocks: string[] = []
 
@@ -183,20 +215,14 @@ describe('describeTestSuite', () => {
       },
     })
 
-    expect(blocks).toEqual(['property suite (traffic)'])
-    expect(registered).toHaveLength(suite.fixtures.length)
-    expect(registered[0]).toMatch(/^fixture 1: /)
+    yield* expect({
+      blocks,
+      registeredCount: registered.length,
+      firstTitle: registered[0],
+    }).toEqual({
+      blocks: ['property suite (traffic)'],
+      registeredCount: suite.fixtures.length,
+      firstTitle: expect.stringMatching(/^fixture 1: /),
+    })
   })
-})
-
-// Vitest 5 refuses a suite declared inside a running test, so the suite is declared at collection time with the
-// vitest globals: each generated fixture becomes its own case, which passes only when its replay passes.
-const globalsSuite = await generate()
-
-describe('describeTestSuite (vitest globals)', () => {
-  it('generates fixtures to declare', () => {
-    expect(globalsSuite.fixtures.length).toBeGreaterThan(0)
-  })
-
-  describeTestSuite(globalsSuite, trafficMachine, { invariant, describe, it })
 })

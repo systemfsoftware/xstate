@@ -1,5 +1,6 @@
-import { createMachine, types } from '@systemfsoftware/xstate'
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { createMachine, type EventFrom, type SnapshotFrom, types } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import {
   ModelTestFailure,
   propertyTest,
@@ -10,15 +11,15 @@ import {
 } from '../../src/engine/index.js'
 import { constant, randomAdapter, record } from './propertyTestAdapter.js'
 
-/**
- * The same machine, the same `sut`, and the same oracles run through both
- * entry points. Only the generation strategy differs.
- */
+interface MetaSession {
+  metaCalls?: string[]
+}
+
 const counterMachine = createMachine({
   id: 'counter',
   schemas: {
     context: types<{ count: number }>(),
-    meta: types<{ test: (session: any) => void }>(),
+    meta: types<{ test: (session: MetaSession) => void }>(),
     events: {
       INC: types<{ value: number }>(),
       RESET: types<{}>(),
@@ -29,12 +30,11 @@ const counterMachine = createMachine({
   states: {
     counting: {
       meta: {
-        test: (session: any) => {
+        test: (session: MetaSession) => {
           session?.metaCalls?.push('counting')
         },
       },
       on: {
-        // Bounded so graph traversal terminates.
         INC: ({ context, event }) => ({
           context: {
             count: Math.min(3, context.count + event.value),
@@ -45,7 +45,7 @@ const counterMachine = createMachine({
     },
     done: {
       meta: {
-        test: (session: any) => {
+        test: (session: MetaSession) => {
           session?.metaCalls?.push('done')
         },
       },
@@ -53,6 +53,9 @@ const counterMachine = createMachine({
     },
   },
 })
+
+type CounterSnapshot = SnapshotFrom<typeof counterMachine>
+type CounterEvent = EventFrom<typeof counterMachine>
 
 const events = {
   INC: record({ value: constant(1) }),
@@ -64,18 +67,17 @@ interface Recorder {
   metaCalls: string[]
 }
 
-/**
- * An in-memory system under test. With `bugAt`, it stops counting once it
- * reaches that value, so the model and the SUT diverge.
- */
-function createSut(recorder: Recorder, bugAt?: number): TestSut<any, any> {
+function createSut(
+  recorder: Recorder,
+  bugAt?: number,
+): TestSut<CounterSnapshot, CounterEvent> {
   return {
-    projectModel: (snapshot: any) => snapshot.context.count,
+    projectModel: (snapshot) => snapshot.context.count,
     create: () => {
       let count = 0
       const session = {
         metaCalls: recorder.metaCalls,
-        send: (event: any) => {
+        send: (event: CounterEvent) => {
           if (event.type === 'INC') {
             if (bugAt !== undefined && count >= bugAt) {
               return
@@ -85,7 +87,7 @@ function createSut(recorder: Recorder, bugAt?: number): TestSut<any, any> {
         },
         read: () => count,
         states: {
-          '*': (snapshot: any) => {
+          '*': (snapshot: CounterSnapshot) => {
             recorder.stateCalls.push(String(snapshot.value))
           },
         },
@@ -105,80 +107,127 @@ function dimensionUniverse(coverage: TestCoverage, key: 'transitions') {
 }
 
 describe('path and property symmetry', () => {
-  it('produces the same coverage shape from both strategies', async () => {
+  it('produces the same coverage shape from both strategies', function*({ expect }) {
     const pathRecorder: Recorder = { stateCalls: [], metaCalls: [] }
     const propertyRecorder: Recorder = { stateCalls: [], metaCalls: [] }
+    const pathCounts: number[] = []
+    const propertyCounts: number[] = []
 
-    const pathRun = await testPaths(counterMachine, {
-      events,
-      sut: createSut(pathRecorder),
-      invariant: ({ snapshot }) => {
-        expect(snapshot.context.count).toBeGreaterThanOrEqual(0)
-      },
-    })
-    const propertyRun = await propertyTest(counterMachine, {
-      adapter: randomAdapter({ seed: 5, numRuns: 20, maxCommands: 5 }),
-      events,
-      sut: createSut(propertyRecorder),
-      invariant: ({ snapshot }) => {
-        expect(snapshot.context.count).toBeGreaterThanOrEqual(0)
-      },
-    })
-
-    expect(Object.keys(pathRun.coverage).sort()).toEqual(
-      Object.keys(propertyRun.coverage).sort(),
+    const pathRun = yield* Effect.promise(() =>
+      testPaths(counterMachine, {
+        events,
+        sut: createSut(pathRecorder),
+        invariant: ({ snapshot }) => {
+          pathCounts.push(snapshot.context.count)
+        },
+      })
     )
-    expect(dimensionUniverse(pathRun.coverage, 'transitions')).toEqual(
-      dimensionUniverse(propertyRun.coverage, 'transitions'),
+    const propertyRun = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        adapter: randomAdapter({ seed: 5, numRuns: 20, maxCommands: 5 }),
+        events,
+        sut: createSut(propertyRecorder),
+        invariant: ({ snapshot }) => {
+          propertyCounts.push(snapshot.context.count)
+        },
+      })
     )
-    // Paths only reach a subset of the universe, never something outside it.
-    for (const id of pathRun.coverage.transitions.covered) {
-      expect(dimensionUniverse(propertyRun.coverage, 'transitions')).toContain(
-        id,
-      )
-    }
 
-    expect(pathRun.coverage.exploration.strategy).toBe('paths')
-    expect(pathRun.coverage.exploration.pathGenerator).toBe('shortest')
-    expect(pathRun.coverage.exploration.pathCount).toBe(pathRun.results.length)
-    expect(propertyRun.coverage.exploration.strategy).toBe('property')
+    const pathKeys = Object.keys(pathRun.coverage).sort()
+    const propertyKeys = Object.keys(propertyRun.coverage).sort()
+    const pathUniverse = dimensionUniverse(pathRun.coverage, 'transitions')
+    const propertyUniverse = dimensionUniverse(propertyRun.coverage, 'transitions')
 
-    // `states` and `meta.test` fire on both sides.
-    expect(pathRecorder.stateCalls.length).toBeGreaterThan(0)
-    expect(pathRecorder.metaCalls.length).toBeGreaterThan(0)
-    expect(propertyRecorder.stateCalls.length).toBeGreaterThan(0)
-    expect(propertyRecorder.metaCalls.length).toBeGreaterThan(0)
+    yield* expect({
+      pathKeys,
+      pathUniverse,
+      pathCount: pathRun.coverage.exploration.pathCount,
+      coveredByPropertyUniverse: propertyUniverse,
+      pathStrategy: pathRun.coverage.exploration.strategy,
+      pathGenerator: pathRun.coverage.exploration.pathGenerator,
+      propertyStrategy: propertyRun.coverage.exploration.strategy,
+      pathStateCallsPositive: pathRecorder.stateCalls.length > 0,
+      pathMetaCallsPositive: pathRecorder.metaCalls.length > 0,
+      propertyStateCallsPositive: propertyRecorder.stateCalls.length > 0,
+      propertyMetaCallsPositive: propertyRecorder.metaCalls.length > 0,
+      pathCountsNonNegative: pathCounts.every((count) => count >= 0),
+      propertyCountsNonNegative: propertyCounts.every((count) => count >= 0),
+    }).toEqual({
+      pathKeys: propertyKeys,
+      pathUniverse: propertyUniverse,
+      pathCount: pathRun.results.length,
+      coveredByPropertyUniverse: expect.arrayContaining([
+        ...pathRun.coverage.transitions.covered,
+      ]),
+      pathStrategy: 'paths',
+      pathGenerator: 'shortest',
+      propertyStrategy: 'property',
+      pathStateCallsPositive: true,
+      pathMetaCallsPositive: true,
+      propertyStateCallsPositive: true,
+      propertyMetaCallsPositive: true,
+      pathCountsNonNegative: true,
+      propertyCountsNonNegative: true,
+    })
   })
 
-  it('fails the same way and replays from either fixture', async () => {
+  it('fails the same way and replays from either fixture', function*({ expect }) {
     const recorder: Recorder = { stateCalls: [], metaCalls: [] }
 
-    const pathFailure = (await testPaths(counterMachine, {
-      events,
-      samples: 1,
-      sut: createSut(recorder, 1),
-    }).catch((error) => error)) as ModelTestFailure
-    const propertyFailure = (await propertyTest(counterMachine, {
-      adapter: randomAdapter({ seed: 11, numRuns: 50, maxCommands: 6 }),
-      events,
-      sut: createSut(recorder, 1),
-    }).catch((error) => error)) as ModelTestFailure
+    const pathFailure = (yield* Effect.promise(() =>
+      testPaths(counterMachine, {
+        events,
+        samples: 1,
+        sut: createSut(recorder, 1),
+      }).catch((error) => error)
+    )) as ModelTestFailure
+    const propertyFailure = (yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        adapter: randomAdapter({ seed: 11, numRuns: 50, maxCommands: 6 }),
+        events,
+        sut: createSut(recorder, 1),
+      }).catch((error) => error)
+    )) as ModelTestFailure
 
+    const replayFailures: unknown[] = []
     for (const failure of [pathFailure, propertyFailure]) {
-      expect(failure).toBeInstanceOf(ModelTestFailure)
-      expect(failure.trace).toBeDefined()
-      expect(failure.fixture).toBeDefined()
-      expect(failure.coverage).toBeDefined()
-    }
-    expect(pathFailure.coverage!.exploration.strategy).toBe('paths')
-    expect(propertyFailure.coverage!.exploration.strategy).toBe('property')
-
-    for (const failure of [pathFailure, propertyFailure]) {
-      await expect(
+      const error = yield* Effect.promise(() =>
         replayTest(counterMachine, failure.fixture!, {
           sut: createSut({ stateCalls: [], metaCalls: [] }, 1),
-        }),
-      ).rejects.toBeInstanceOf(ModelTestFailure)
+        }).then(
+          () => undefined,
+          (cause) => cause,
+        )
+      )
+      replayFailures.push(error)
     }
+
+    yield* expect({
+      pathIsFailure: pathFailure instanceof ModelTestFailure,
+      propertyIsFailure: propertyFailure instanceof ModelTestFailure,
+      pathFixtureMachineId: pathFailure.fixture?.machine?.id,
+      propertyFixtureMachineId: propertyFailure.fixture?.machine?.id,
+      pathFixtureFormatVersion: pathFailure.fixture?.formatVersion,
+      propertyFixtureFormatVersion: propertyFailure.fixture?.formatVersion,
+      pathTraceHasTimeline: Array.isArray(pathFailure.trace.timeline),
+      propertyTraceHasTimeline: Array.isArray(propertyFailure.trace.timeline),
+      pathStrategy: pathFailure.coverage!.exploration.strategy,
+      propertyStrategy: propertyFailure.coverage!.exploration.strategy,
+      pathReplayFailed: replayFailures[0] instanceof ModelTestFailure,
+      propertyReplayFailed: replayFailures[1] instanceof ModelTestFailure,
+    }).toEqual({
+      pathIsFailure: true,
+      propertyIsFailure: true,
+      pathFixtureMachineId: 'counter',
+      propertyFixtureMachineId: 'counter',
+      pathFixtureFormatVersion: 2,
+      propertyFixtureFormatVersion: 2,
+      pathTraceHasTimeline: true,
+      propertyTraceHasTimeline: true,
+      pathStrategy: 'paths',
+      propertyStrategy: 'property',
+      pathReplayFailed: true,
+      propertyReplayFailed: true,
+    })
   })
 })

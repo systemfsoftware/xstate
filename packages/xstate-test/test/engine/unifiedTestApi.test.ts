@@ -1,6 +1,7 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine, types } from '@systemfsoftware/xstate'
 import { getSimplePaths } from '@systemfsoftware/xstate/graph'
-import { describe, expect, it } from 'vitest'
+import { Effect } from 'effect'
 import { testPaths } from '../../src/engine/testPaths.js'
 
 const toggleMachine = createMachine({
@@ -13,35 +14,44 @@ const toggleMachine = createMachine({
   },
 })
 
-describe('testPaths option validation', () => {
-  it('accepts `outcomes` for a machine with no invoked actors', async () => {
-    const { coverage } = await testPaths(toggleMachine, {
-      mode: 'executed',
-      outcomes: { fetcher: () => ({ ok: true, output: 1 }) },
-    })
+/** The rejection of `run`, or `undefined` when it resolved. */
+const rejection = (run: () => Promise<unknown>): Effect.Effect<unknown> =>
+  Effect.promise(() => run().then(() => undefined, (cause: unknown) => cause))
 
-    // No path resolves `fetcher`, so no `outcome` command is ever issued.
-    expect(coverage.clockAdvances).toBe(0)
+describe('testPaths option validation', () => {
+  it('accepts `outcomes` for a machine with no invoked actors', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      testPaths(toggleMachine, {
+        mode: 'executed',
+        outcomes: { fetcher: () => ({ ok: true, output: 1 }) },
+      })
+    )
+
+    yield* expect(coverage.clockAdvances).toBe(0)
   })
 
-  it('rejects `commands`', async () => {
-    await expect(
-      testPaths(toggleMachine, { commands: { advance: () => 1 } } as never),
-    ).rejects.toThrow(/not supported by path generation/)
+  it('rejects `commands`', function*({ expect }) {
+    const error = yield* rejection(() => testPaths(toggleMachine, { commands: { advance: () => 1 } } as never))
+
+    yield* expect({ message: error instanceof Error ? error.message : undefined }).toEqual({
+      message: expect.stringContaining('not supported by path generation'),
+    })
   })
 
   it.each([0, -1, 1.5, Number.NaN])(
     'rejects `samples: %s`',
-    async (samples) => {
-      await expect(testPaths(toggleMachine, { samples })).rejects.toThrow(
-        /`samples` must be an integer of at least 1/,
-      )
+    function*(samples, { expect }) {
+      const error = yield* rejection(() => testPaths(toggleMachine, { samples }))
+
+      yield* expect({ message: error instanceof Error ? error.message : undefined }).toEqual({
+        message: expect.stringContaining('`samples` must be an integer of at least 1'),
+      })
     },
   )
 })
 
 describe('testPaths event types', () => {
-  it('offers declared event types a wildcard handler accepts', async () => {
+  it('offers declared event types a wildcard handler accepts', function*({ expect }) {
     const seen: string[] = []
     const wildcardMachine = createMachine({
       id: 'wildcard',
@@ -53,85 +63,90 @@ describe('testPaths event types', () => {
       },
     })
 
-    await testPaths(wildcardMachine, {
-      events: { ANYTHING: () => ({}) },
-      sut: {
-        create: () => ({
-          send: (event) => {
-            seen.push(event.type)
-          },
-        }),
-      },
-    })
+    yield* Effect.promise(() =>
+      testPaths(wildcardMachine, {
+        events: { ANYTHING: () => ({}) },
+        sut: {
+          create: () => ({
+            send: (event) => {
+              seen.push(event.type)
+            },
+          }),
+        },
+      })
+    )
 
-    expect(seen).toContain('ANYTHING')
+    yield* expect(seen).toContain('ANYTHING')
   })
 })
 
 describe('legacy `TestParam` detection', () => {
-  it('rejects pre-2.0 event executors passed as generators', async () => {
-    await expect(
+  it('rejects pre-2.0 event executors passed as generators', function*({ expect }) {
+    const error = yield* rejection(() =>
       testPaths(toggleMachine, {
         events: {
-          // A pre-2.0 executor: it performs an effect and returns nothing
-          // useful, so it must not be mistaken for a payload generator.
           TOGGLE: (() => 'performed') as never,
         },
-      }),
-    ).rejects.toThrow(/pre-2\.0 event executor/)
+      })
+    )
+
+    yield* expect({ message: error instanceof Error ? error.message : undefined }).toEqual({
+      message: expect.stringMatching(/pre-2\.0 event executor/),
+    })
   })
 })
 
 describe('per-case seeding', () => {
-  async function sampledPayloads(
-    events: Record<string, unknown>,
-  ): Promise<unknown[]> {
-    const payloads: unknown[] = []
-    const machine = createMachine({
-      id: 'payloads',
-      initial: 'idle',
-      schemas: { events: { A: types<{ n: number }>(), B: types<{}>() } },
-      states: { idle: { on: { A: { target: 'idle' }, B: { target: 'idle' } } } },
+  const sampledPayloads = (events: Record<string, unknown>): Effect.Effect<unknown[]> =>
+    Effect.promise(() => {
+      const payloads: unknown[] = []
+      const machine = createMachine({
+        id: 'payloads',
+        initial: 'idle',
+        schemas: { events: { A: types<{ n: number }>(), B: types<{}>() } },
+        states: { idle: { on: { A: { target: 'idle' }, B: { target: 'idle' } } } },
+      })
+      return testPaths(machine, {
+        pathGenerator: 'simple',
+        limit: 20,
+        events: events as never,
+        sut: {
+          create: () => ({
+            send: (event: { readonly type: string; readonly n?: number }) => {
+              if (event.type === 'A') {
+                payloads.push(event.n)
+              }
+            },
+          }),
+        },
+      }).then(() => payloads)
     })
-    await testPaths(machine, {
-      pathGenerator: 'simple',
-      limit: 20,
-      events: events as never,
-      sut: {
-        create: () => ({
-          send: (event: any) => {
-            if (event.type === 'A') {
-              payloads.push(event.n)
-            }
-          },
-        }),
-      },
-    })
-    return payloads
-  }
 
-  it('does not shift a case when another event type is added', async () => {
+  it('does not shift a case when another event type is added', function*({ expect }) {
     let counter = 0
     const a = () => ({ n: counter++ })
-    const before = await sampledPayloads({ A: a })
+    const before = yield* sampledPayloads({ A: a })
     counter = 0
-    const after = await sampledPayloads({ B: () => ({}), A: a })
-    expect(after).toEqual(before)
+    const after = yield* sampledPayloads({ B: () => ({}), A: a })
+
+    yield* expect(after).toEqual(before)
   })
 })
 
 describe('allowDuplicatePaths', () => {
-  it('deduplicates paths from a custom path generator', async () => {
-    const generator: any = (logic: any, options: any) => getSimplePaths(logic, options)
+  it('deduplicates paths from a custom path generator', function*({ expect }) {
+    const deduplicated = yield* Effect.promise(() =>
+      testPaths(toggleMachine, {
+        pathGenerator: (logic, options) => getSimplePaths(logic, options),
+      })
+    )
+    const all = yield* Effect.promise(() =>
+      testPaths(toggleMachine, {
+        pathGenerator: (logic, options) => getSimplePaths(logic, options),
+        allowDuplicatePaths: true,
+      })
+    )
 
-    const deduplicated = await testPaths(toggleMachine, {
-      pathGenerator: generator,
-    })
-    const all = await testPaths(toggleMachine, {
-      pathGenerator: generator,
-      allowDuplicatePaths: true,
-    })
-
-    expect(deduplicated.results.length).toBeLessThan(all.results.length)
+    yield* expect(deduplicated.results.length).toBeLessThan(all.results.length)
   })
 })
