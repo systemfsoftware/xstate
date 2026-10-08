@@ -172,7 +172,7 @@
             # change moves this hash. A store that already holds the old output
             # reuses it silently; `nix build --rebuild` on xstate-pnpm-deps.drv
             # refetches and prints the new value.
-            hash = "sha256-+ILTaxzdKeOpNm7P2l7ICCe+fjOLtCf2levrt4rzVIE=";
+            hash = "sha256-rbOjo1/aZQQpj0XvaLDSu5D/tT3NG31Z5qS/wXOh/9c=";
           }) [ "pnpm-store" ];
           unwrapped = pkgs.callPackage ./nix/comment-checker.nix {
             hashes = "${comment-checker}/nix/release-hashes.json";

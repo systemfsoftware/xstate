@@ -1,3 +1,4 @@
+import { composeStories } from '@storybook/react-vite'
 import { describe, it } from '@systemfsoftware/vitest'
 import { createAtom as upstreamCreateAtom, createStore as upstreamCreateStore } from '@systemfsoftware/xstate-store'
 import { Effect } from 'effect'
@@ -5,18 +6,8 @@ import { type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { type Locator, page } from 'vitest/browser'
-import {
-  createAtom,
-  createAtomConfig,
-  createStore,
-  createStoreHook,
-  createStoreLogic,
-  type StoreInspectionEvent,
-  useAtom,
-  useAtomState,
-  useSelector,
-  useStore,
-} from './index.js'
+import { createAtom, createAtomConfig, createStore, createStoreLogic } from './index.js'
+import * as stories from './index.stories.js'
 
 interface Mounted {
   readonly container: HTMLDivElement
@@ -38,6 +29,21 @@ const unmount = ({ container, root }: Mounted): void => {
   container.remove()
 }
 
+const {
+  SelectorStore,
+  AtomSelectorStore,
+  FullSnapshotStore,
+  CompareOnlyStore,
+  ConfigStore,
+  InspectToggleStore,
+  LogicStore,
+  AtomStore,
+  AtomConfigStore,
+  AtomStateAtomStore,
+  AtomStateConfigStore,
+  StoreHookStore,
+} = composeStories(stories)
+
 describe('@xstate/store-react', () => {
   describe('useSelector', () => {
     it('should work with a selector', function*({ expect }) {
@@ -48,16 +54,13 @@ describe('@xstate/store-react', () => {
         },
       })
 
-      const Counter = () => {
-        const count = useSelector(store, (s) => s.context.count)
-        return (
-          <div data-testid='count' onClick={() => store.send({ type: 'inc' })}>
-            {count}
-          </div>
-        )
-      }
-
-      const screen = mount(<Counter />)
+      const screen = mount(
+        <SelectorStore
+          store={store}
+          selector={(snapshot) => snapshot.context.count}
+          onClick={() => store.send({ type: 'inc' })}
+        />,
+      )
       try {
         const before = screen.view.getByTestId('count').element().textContent
         screen.view.getByTestId('count').element().dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -83,12 +86,7 @@ describe('@xstate/store-react', () => {
         on: {},
       })
 
-      const Counter = () => {
-        const snapshot = useSelector(store)
-        return <div data-testid='count'>{snapshot.context.count}</div>
-      }
-
-      const screen = mount(<Counter />)
+      const screen = mount(<FullSnapshotStore store={store} />)
       try {
         yield* expect(screen.view.getByTestId('count').element().textContent).toBe('0')
       } finally {
@@ -99,16 +97,13 @@ describe('@xstate/store-react', () => {
     it('should work with atoms', function*({ expect }) {
       const atom = createAtom(0)
 
-      const Counter = () => {
-        const count = useSelector(atom, (s) => s)
-        return (
-          <div data-testid='count' onClick={() => atom.set((prev) => prev + 1)}>
-            {count}
-          </div>
-        )
-      }
-
-      const screen = mount(<Counter />)
+      const screen = mount(
+        <AtomSelectorStore
+          store={atom}
+          selector={(snapshot) => snapshot}
+          onClick={() => atom.set((prev) => prev + 1)}
+        />,
+      )
       try {
         const before = screen.view.getByTestId('count').element().textContent
         screen.view.getByTestId('count').element().dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -141,12 +136,14 @@ describe('@xstate/store-react', () => {
         return a === b
       }
 
-      const Counter = () => {
-        const count = useSelector(store, (s) => s.context.count, compare)
-        return <div data-testid='count'>{count}</div>
-      }
-
-      const screen = mount(<Counter />)
+      const screen = mount(
+        <SelectorStore
+          store={store}
+          selector={(snapshot) => snapshot.context.count}
+          compare={compare}
+          onClick={() => {}}
+        />,
+      )
       try {
         flushSync(() => store.send({ type: 'rename', label: 'done' }))
 
@@ -170,26 +167,20 @@ describe('@xstate/store-react', () => {
   describe('useStore', () => {
     it('should create a stable store reference', function*({ expect }) {
       const storeRefs: object[] = []
-
-      const Counter = () => {
-        const store = useStore({
-          context: { count: 0 },
-          on: {
-            inc: (ctx: { count: number }) => ({ ...ctx, count: ctx.count + 1 }),
-          },
-        })
-
-        storeRefs.push(store)
-        const count = useSelector(store, (s) => s.context.count)
-
-        return (
-          <div data-testid='count' onClick={() => store.send({ type: 'inc' })}>
-            {count}
-          </div>
-        )
+      const definition = {
+        context: { count: 0 },
+        on: {
+          inc: (ctx: { count: number }) => ({ ...ctx, count: ctx.count + 1 }),
+        },
       }
 
-      const screen = mount(<Counter />)
+      const screen = mount(
+        <ConfigStore
+          definition={definition}
+          selector={(snapshot) => snapshot.context.count}
+          onStoreRef={(store) => storeRefs.push(store)}
+        />,
+      )
       try {
         const before = screen.view.getByTestId('count').element().textContent
         screen.view.getByTestId('count').element().dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -221,19 +212,14 @@ describe('@xstate/store-react', () => {
       })
       const storeRefs: object[] = []
 
-      const Counter = () => {
-        const store = useStore(counterLogic, { initialCount: 10 })
-        storeRefs.push(store)
-        const count = useSelector(store, (s) => s.context.count)
-
-        return (
-          <div data-testid='count' onClick={() => store.trigger.inc()}>
-            {count}
-          </div>
-        )
-      }
-
-      const screen = mount(<Counter />)
+      const screen = mount(
+        <LogicStore
+          logic={counterLogic}
+          input={{ initialCount: 10 }}
+          selector={(snapshot) => snapshot.context.count}
+          onStoreRef={(store) => storeRefs.push(store)}
+        />,
+      )
       try {
         const before = screen.view.getByTestId('count').element().textContent
         screen.view.getByTestId('count').element().dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -256,27 +242,20 @@ describe('@xstate/store-react', () => {
 
     it('should subscribe an inspector via the inspect option', function*({ expect }) {
       const events: string[] = []
-
-      const Counter = () => {
-        const store = useStore(
-          {
-            context: { count: 0 },
-            on: {
-              inc: (ctx: { count: number }) => ({ count: ctx.count + 1 }),
-            },
-          },
-          { inspect: (ev) => events.push(ev.event.type) },
-        )
-        const count = useSelector(store, (s) => s.context.count)
-
-        return (
-          <div data-testid='count' onClick={() => store.send({ type: 'inc' })}>
-            {count}
-          </div>
-        )
+      const definition = {
+        context: { count: 0 },
+        on: {
+          inc: (ctx: { count: number }) => ({ count: ctx.count + 1 }),
+        },
       }
 
-      const screen = mount(<Counter />)
+      const screen = mount(
+        <ConfigStore
+          definition={definition}
+          selector={(snapshot) => snapshot.context.count}
+          inspect={(event) => events.push(event.event.type)}
+        />,
+      )
       const onSubscribe: string[] = []
       const afterClick: string[] = []
 
@@ -302,27 +281,20 @@ describe('@xstate/store-react', () => {
 
     it('should not resubscribe the inspector across re-renders', function*({ expect }) {
       const snapshotEvents: string[] = []
-
-      const Counter = () => {
-        const store = useStore(
-          {
-            context: { count: 0 },
-            on: {
-              inc: (ctx: { count: number }) => ({ count: ctx.count + 1 }),
-            },
-          },
-          { inspect: (ev) => snapshotEvents.push(ev.event.type) },
-        )
-        const count = useSelector(store, (s) => s.context.count)
-
-        return (
-          <div data-testid='count' onClick={() => store.send({ type: 'inc' })}>
-            {count}
-          </div>
-        )
+      const definition = {
+        context: { count: 0 },
+        on: {
+          inc: (ctx: { count: number }) => ({ count: ctx.count + 1 }),
+        },
       }
 
-      const screen = mount(<Counter />)
+      const screen = mount(
+        <ConfigStore
+          definition={definition}
+          selector={(snapshot) => snapshot.context.count}
+          inspect={(event) => snapshotEvents.push(event.event.type)}
+        />,
+      )
       try {
         screen.view.getByTestId('count').element().dispatchEvent(new MouseEvent('click', { bubbles: true }))
         screen.view.getByTestId('count').element().dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -335,30 +307,21 @@ describe('@xstate/store-react', () => {
 
     it('should subscribe an inspector enabled after mount', function*({ expect }) {
       const events: string[] = []
-
-      const Counter = ({
-        inspect,
-      }: {
-        inspect?: (event: StoreInspectionEvent) => void
-      }) => {
-        const store = useStore(
-          {
-            context: { count: 0 },
-            on: {
-              inc: (ctx: { count: number }) => ({ count: ctx.count + 1 }),
-            },
-          },
-          { ...(inspect === undefined ? {} : { inspect }) },
-        )
-
-        return <button onClick={() => store.send({ type: 'inc' })}>inc</button>
+      const definition = {
+        context: { count: 0 },
+        on: {
+          inc: (ctx: { count: number }) => ({ count: ctx.count + 1 }),
+        },
       }
 
-      const screen = mount(<Counter />)
+      const screen = mount(<InspectToggleStore definition={definition} />)
       try {
         flushSync(() =>
           screen.root.render(
-            <Counter inspect={(event) => events.push(event.event.type)} />,
+            <InspectToggleStore
+              definition={definition}
+              inspect={(event) => events.push(event.event.type)}
+            />,
           )
         )
 
@@ -386,22 +349,14 @@ describe('@xstate/store-react', () => {
       })
       const events: string[] = []
 
-      const Counter = () => {
-        const store = useStore(
-          counterLogic,
-          { initialCount: 10 },
-          { inspect: (ev) => events.push(ev.event.type) },
-        )
-        const count = useSelector(store, (s) => s.context.count)
-
-        return (
-          <div data-testid='count' onClick={() => store.trigger.inc()}>
-            {count}
-          </div>
-        )
-      }
-
-      const screen = mount(<Counter />)
+      const screen = mount(
+        <LogicStore
+          logic={counterLogic}
+          input={{ initialCount: 10 }}
+          selector={(snapshot) => snapshot.context.count}
+          inspect={(event) => events.push(event.event.type)}
+        />,
+      )
       try {
         yield* expect({
           text: screen.view.getByTestId('count').element().textContent,
@@ -417,12 +372,7 @@ describe('@xstate/store-react', () => {
     it('should return the atom value', function*({ expect }) {
       const atom = createAtom(42)
 
-      const TestComponent = () => {
-        const value = useAtom(atom)
-        return <div data-testid='value'>{value}</div>
-      }
-
-      const screen = mount(<TestComponent />)
+      const screen = mount(<AtomStore atom={atom} />)
       try {
         yield* expect(screen.view.getByTestId('value').element().textContent).toBe('42')
       } finally {
@@ -433,24 +383,9 @@ describe('@xstate/store-react', () => {
     it('should update when atom changes', function*({ expect }) {
       const atom = createAtom(0)
 
-      const TestComponent = () => {
-        const count = useAtom(atom)
-        return (
-          <div>
-            <div data-testid='count'>{count}</div>
-            <button
-              data-testid='increment'
-              onClick={() => atom.set((c) => c + 1)}
-            >
-              +
-            </button>
-          </div>
-        )
-      }
-
-      const screen = mount(<TestComponent />)
+      const screen = mount(<AtomStore atom={atom} />)
       try {
-        const before = screen.view.getByTestId('count').element().textContent
+        const before = screen.view.getByTestId('value').element().textContent
 
         screen.view.getByTestId('increment').element().dispatchEvent(new MouseEvent('click', { bubbles: true }))
         const after = yield* Effect.promise(() =>
@@ -474,15 +409,9 @@ describe('@xstate/store-react', () => {
         return input.initialCount
       })
 
-      const TestComponent = () => {
-        const count = useAtom(config, { initialCount: 10 })
-
-        return <div data-testid='count'>{count}</div>
-      }
-
-      const screen = mount(<TestComponent />)
+      const screen = mount(<AtomConfigStore config={config} input={{ initialCount: 10 }} />)
       try {
-        yield* expect(screen.view.getByTestId('count').element().textContent).toBe('10')
+        yield* expect(screen.view.getByTestId('value').element().textContent).toBe('10')
       } finally {
         unmount(screen)
       }
@@ -494,23 +423,12 @@ describe('@xstate/store-react', () => {
       const atom = createAtom(0)
       const atomRefs: object[] = []
 
-      const TestComponent = () => {
-        const [count, countAtom] = useAtomState(atom)
-        atomRefs.push(countAtom)
-        return (
-          <div>
-            <div data-testid='count'>{count}</div>
-            <button
-              data-testid='increment'
-              onClick={() => countAtom.set((c) => c + 1)}
-            >
-              +
-            </button>
-          </div>
-        )
-      }
-
-      const screen = mount(<TestComponent />)
+      const screen = mount(
+        <AtomStateAtomStore
+          atom={atom}
+          onAtomRef={(ref) => atomRefs.push(ref)}
+        />,
+      )
       try {
         const before = screen.view.getByTestId('count').element().textContent
 
@@ -538,23 +456,13 @@ describe('@xstate/store-react', () => {
       })
       const atomRefs: object[] = []
 
-      const TestComponent = () => {
-        const [count, countAtom] = useAtomState(config, { initialCount: 10 })
-        atomRefs.push(countAtom)
-        return (
-          <div>
-            <div data-testid='count'>{count}</div>
-            <button
-              data-testid='increment'
-              onClick={() => countAtom.set((c) => c + 1)}
-            >
-              +
-            </button>
-          </div>
-        )
-      }
-
-      const screen = mount(<TestComponent />)
+      const screen = mount(
+        <AtomStateConfigStore
+          config={config}
+          input={{ initialCount: 10 }}
+          onAtomRef={(ref) => atomRefs.push(ref)}
+        />,
+      )
       try {
         const before = screen.view.getByTestId('count').element().textContent
 
@@ -579,24 +487,19 @@ describe('@xstate/store-react', () => {
 
   describe('createStoreHook', () => {
     it('should create a reusable store hook', function*({ expect }) {
-      const useCountStore = createStoreHook({
+      const definition = {
         context: { count: 0 },
         on: {
           inc: (ctx: { count: number }) => ({ ...ctx, count: ctx.count + 1 }),
         },
-      })
-
-      const Counter = () => {
-        const [count, store] = useCountStore((s) => s.context.count)
-        return (
-          <div>
-            <div data-testid='count'>{count}</div>
-            <button onClick={() => store.trigger.inc()}>+</button>
-          </div>
-        )
       }
 
-      const screen = mount(<Counter />)
+      const screen = mount(
+        <StoreHookStore
+          definition={definition}
+          selector={(snapshot) => snapshot.context.count}
+        />,
+      )
       try {
         const before = screen.view.getByTestId('count').element().textContent
         screen.view.getByRole('button').element().dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -642,13 +545,15 @@ describe('@xstate/store-react', () => {
 it('honors a comparator when the selector is omitted', function*({ expect }) {
   const atom = createAtom({ count: 0, ignored: 0 })
   let renders = 0
-  function View() {
-    const value = useSelector(atom, undefined, (a, b) => a?.count === b?.count)
-    renders++
-    return <div>{value.count}</div>
-  }
-
-  const screen = mount(<View />)
+  const screen = mount(
+    <CompareOnlyStore
+      store={atom}
+      compare={(a, b) => a?.count === b?.count}
+      onRender={() => {
+        renders++
+      }}
+    />,
+  )
   try {
     const initialRenders = renders
 

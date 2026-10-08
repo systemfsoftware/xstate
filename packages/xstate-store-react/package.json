@@ -50,7 +50,6 @@
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "vitest-browser-react": "catalog:",
     "zod": "4.4.3"
   },
   "publishConfig": {
