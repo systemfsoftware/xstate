@@ -574,6 +574,17 @@ interface RuntimeSystem<T extends ActorSystemInfo> {
   _rejectionListeners?: Set<(rejection: EventRejection) => void>
 }
 
+interface RuntimeSystemOptions<T extends ActorSystemInfo> {
+  clock: Clock
+  wallClock?: WallClock | undefined
+  crypto?: CryptoSource | undefined
+  logger: (...args: unknown[]) => void
+  reportUnhandledError?: ((error: unknown) => void) | undefined
+  warn: (message: string) => void
+  snapshot?: unknown
+  createActorRef: ActorSystem<T>['createActorRef']
+}
+
 class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
   public _identity: ExecutionIdentity
   public _snapshot: ActorSystem<T>['_snapshot']
@@ -633,16 +644,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
 
   constructor(
     private _rootActor: AnyActor,
-    options: {
-      clock: Clock
-      wallClock?: WallClock | undefined
-      crypto?: CryptoSource | undefined
-      logger: (...args: any[]) => void
-      reportUnhandledError?: ((error: unknown) => void) | undefined
-      warn: (message: string) => void
-      snapshot?: unknown
-      createActorRef: ActorSystem<T>['createActorRef']
-    },
+    options: RuntimeSystemOptions<T>,
   ) {
     this._identity = ambientExecutionIdentity ?? {
       systemId: createSystemId(options.crypto),
@@ -1107,16 +1109,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
 /** @internal */
 export function createRuntimeSystem<T extends ActorSystemInfo>(
   rootActor: AnyActor,
-  options: {
-    clock: Clock
-    wallClock?: WallClock | undefined
-    crypto?: CryptoSource | undefined
-    logger: (...args: any[]) => void
-    reportUnhandledError?: ((error: unknown) => void) | undefined
-    warn: (message: string) => void
-    snapshot?: unknown
-    createActorRef: ActorSystem<T>['createActorRef']
-  },
+  options: RuntimeSystemOptions<T>,
 ): ActorSystem<T> {
   return new RuntimeSystem(rootActor, options)
 }
