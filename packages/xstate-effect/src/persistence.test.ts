@@ -387,7 +387,7 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     yield* expect(observed).toEqual({ requested: [1000, 400], childStatus: 'active' })
   })
 
-  const restoreComparisonTimeoutWithHeadroomMs = 15_000
+  const sweepTimeoutWithHeadroomMs = 15_000
 
   it('matches an uninterrupted run when restored at every step of every shortest path', function*({ expect }) {
     const world = yield* makeWorld()
@@ -414,7 +414,9 @@ describe('createEffectActor with a persisted snapshot', (it) => {
     }
 
     yield* expect(restoredValues(comparisons)).toEqual(expectedValues(comparisons))
-  }, restoreComparisonTimeoutWithHeadroomMs)
+  }, sweepTimeoutWithHeadroomMs)
+
+  const generatedComparisonTimeoutMs = 7_000
 
   it('matches an uninterrupted run for generated events, clock advances and persist points', function*({ expect }) {
     const world = yield* makeWorld()
@@ -430,18 +432,18 @@ describe('createEffectActor with a persisted snapshot', (it) => {
       ),
       { seed: 5773, numRuns: 40 },
     )
-    const comparisons: Comparison[] = []
+    const distinctRuns = new Map<string, readonly [ReadonlyArray<Command>, number]>()
     for (const [commands, point] of samples) {
-      comparisons.push(
-        yield* world.compareUninterrupted(
-          commands,
-          point % (commands.length + 1),
-        ),
-      )
+      const persistAt = point % (commands.length + 1)
+      distinctRuns.set(JSON.stringify([commands, persistAt]), [commands, persistAt])
+    }
+    const comparisons: Comparison[] = []
+    for (const [commands, persistAt] of distinctRuns.values()) {
+      comparisons.push(yield* world.compareUninterrupted(commands, persistAt))
     }
 
     yield* expect(restoredValues(comparisons)).toEqual(expectedValues(comparisons))
-  }, restoreComparisonTimeoutWithHeadroomMs)
+  }, generatedComparisonTimeoutMs)
 
   it('resumes a pending delayed transition with its remaining delay', function*({ expect }) {
     const machine = createMachine({
