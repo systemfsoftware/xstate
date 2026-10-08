@@ -205,6 +205,7 @@ export function resolveOutput<
   context: TContext,
   event: TExpressionEvent,
   self: AnyActor,
+  warn: (message: string) => void,
   input?: Record<string, unknown>,
 ): unknown {
   if (typeof mapper === 'function') {
@@ -231,7 +232,7 @@ export function resolveOutput<
     typeof mapper === 'object' &&
     Object.values(mapper).some((val) => typeof val === 'function')
   ) {
-    self.system._warn(
+    warn(
       `Dynamically mapping values to individual properties is deprecated. Use a single function that returns the mapped object instead.\nFound object containing properties whose values are possibly mapping functions: ${
         Object.entries(
           mapper,
