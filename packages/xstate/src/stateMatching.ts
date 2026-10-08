@@ -29,7 +29,7 @@ const regionMatches = (parentRegion: StateValue | undefined, childRegion: StateV
 const matchesRegions = (parent: StateValue, child: StateValueMap): boolean =>
   typeof parent === 'string'
     ? parent in child
-    : Object.entries(parent).every(([key, parentRegion]) => regionMatches(parentRegion, child[key]))
+    : Object.keys(parent).every((key) => regionMatches(parent[key], child[key]))
 
 function regionsMatch(parent: StateValue, child: StateValue): boolean {
   return typeof child === 'string' ? parent === child : matchesRegions(parent, child)

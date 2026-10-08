@@ -700,7 +700,8 @@ const observedProvidedEffectAction = Effect.gen(function*() {
     },
   )
   actor.send({ type: 'AUDIT' })
-  yield* untilOnLiveClock(() => recorded.length > 0, { timeoutMs: 50 })
+  // Measured up to 74 ms from send to record with four busy loops on one core; 50 ms failed, 1 s holds.
+  yield* untilOnLiveClock(() => recorded.length > 0)
 
   return recorded
 })
