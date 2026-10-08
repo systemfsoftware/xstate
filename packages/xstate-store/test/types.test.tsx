@@ -1,11 +1,11 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor } from '@systemfsoftware/xstate'
-import { describe, it } from 'vitest'
 import { z } from 'zod'
 import { createStore, createStoreLogic, fromStore, type StoreSchemas } from '../src/index.js'
 
 describe('emitted', () => {
-  it('can emit a known event', () => {
-    createStore({
+  it('can emit a known event', function*({ expect }) {
+    const store = createStore({
       context: {},
       schemas: {
         emitted: {
@@ -19,10 +19,12 @@ describe('emitted', () => {
         },
       },
     })
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it("can't emit an unknown event", () => {
-    createStore({
+  it("can't emit an unknown event", function*({ expect }) {
+    const store = createStore({
       context: {},
       schemas: {
         emitted: {
@@ -39,10 +41,12 @@ describe('emitted', () => {
         },
       },
     })
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it("can't emit a known event with wrong payload", () => {
-    createStore({
+  it("can't emit a known event with wrong payload", function*({ expect }) {
+    const store = createStore({
       context: {},
       schemas: {
         emitted: {
@@ -60,9 +64,11 @@ describe('emitted', () => {
         },
       },
     })
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it('can subscribe to a known event', () => {
+  it('can subscribe to a known event', function*({ expect }) {
     const store = createStore<
       {},
       {},
@@ -78,9 +84,11 @@ describe('emitted', () => {
     store.on('increased', (ev) => {
       ev satisfies { type: 'increased'; upBy: number }
     })
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it("can't subscribe to a unknown event", () => {
+  it("can't subscribe to a unknown event", function*({ expect }) {
     const store = createStore({
       schemas: {
         emitted: {
@@ -98,9 +106,11 @@ describe('emitted', () => {
       'unknown',
       (ev) => {},
     )
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it('wildcard listener receives union of all emitted events', () => {
+  it('wildcard listener receives union of all emitted events', function*({ expect }) {
     const store = createStore({
       schemas: {
         emitted: {
@@ -120,10 +130,12 @@ describe('emitted', () => {
       // @ts-expect-error
       ev satisfies { type: 'unknown' }
     })
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it('works with a discriminated union event payload', () => {
-    createStore({
+  it('works with a discriminated union event payload', function*({ expect }) {
+    const store = createStore({
       context: {},
       schemas: {
         emitted: {
@@ -146,11 +158,13 @@ describe('emitted', () => {
         },
       },
     })
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 })
 
 describe('trigger', () => {
-  it('works with a distributive event payload', () => {
+  it('works with a distributive event payload', function*({ expect }) {
     const store = createStore({
       context: {},
       on: {
@@ -173,9 +187,11 @@ describe('trigger', () => {
       // @ts-expect-error
       message: 'foo',
     })
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it('uses schema-declared events for trigger typing', () => {
+  it('uses schema-declared events for trigger typing', function*({ expect }) {
     const store = createStore({
       schemas: {
         events: {
@@ -197,9 +213,11 @@ describe('trigger', () => {
       // @ts-expect-error
       message: 'foo',
     })
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it('preserves inferred trigger typing when only emitted schemas are declared', () => {
+  it('preserves inferred trigger typing when only emitted schemas are declared', function*({ expect }) {
     const store = createStore({
       schemas: {
         emitted: {
@@ -224,10 +242,12 @@ describe('trigger', () => {
       // @ts-expect-error
       store.trigger.unknown()
     }
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 
-  it('uses schema-declared events for enqueued trigger typing', () => {
-    createStore({
+  it('uses schema-declared events for enqueued trigger typing', function*({ expect }) {
+    const store = createStore({
       schemas: {
         events: {
           log: z.discriminatedUnion('level', [
@@ -258,11 +278,13 @@ describe('trigger', () => {
         },
       },
     })
+
+    yield* expect(store.getSnapshot().context).toEqual({})
   })
 })
 
 describe('can', () => {
-  it('uses event payload types', () => {
+  it('uses event payload types', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       schemas: {
@@ -287,11 +309,16 @@ describe('can', () => {
       // @ts-expect-error
       by: 'one',
     })
+
+    yield* expect({
+      context: store.getSnapshot().context,
+      incrementAllowed: store.can.increment({ by: 1 }),
+    }).toEqual({ context: { count: 0 }, incrementAllowed: true })
   })
 })
 
 describe('logic selectors', () => {
-  it('infers selected values from a store', () => {
+  it('infers selected values from a store', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -308,9 +335,14 @@ describe('logic selectors', () => {
       // @ts-expect-error
       count.get() satisfies string
     }
+
+    yield* expect({ count: count.get(), label: label.get() }).toEqual({
+      count: 0,
+      label: 'Count: 0',
+    })
   })
 
-  it('infers input and selector values from reusable store logic', () => {
+  it('infers input and selector values from reusable store logic', function*({ expect }) {
     const counterLogic = createStoreLogic({
       context: (input: { initialCount: number }) => ({
         count: input.initialCount,
@@ -342,13 +374,18 @@ describe('logic selectors', () => {
       // @ts-expect-error
       store.selectors.label.get() satisfies number
     }
+
+    yield* expect({
+      count: store.selectors.count.get(),
+      label: store.selectors.label.get(),
+    }).toEqual({ count: 1, label: 'Count: 1' })
   })
 })
 
 describe('schemas', () => {
   const stringSchema = z.string()
 
-  it('requires event and emitted schemas to define object payloads', () => {
+  it('requires event and emitted schemas to define object payloads', function*({ expect }) {
     // @ts-expect-error event schemas must describe object payloads
     createStore({
       schemas: {
@@ -370,9 +407,11 @@ describe('schemas', () => {
       context: {},
       on: {},
     })
+
+    yield* expect(createStore({ context: {}, on: {} }).getSnapshot().context).toEqual({})
   })
 
-  it('uses schema-declared context for snapshot typing', () => {
+  it('uses schema-declared context for snapshot typing', function*({ expect }) {
     const schemas = {
       context: z.object({ count: z.number(), label: z.string() }),
     }
@@ -390,9 +429,14 @@ describe('schemas', () => {
 
     // @ts-expect-error
     store.getSnapshot().context.label satisfies number
+
+    yield* expect(store.getSnapshot().context).toEqual({
+      count: 0,
+      label: 'ready',
+    })
   })
 
-  it('merges schema-declared context with inferred event types', () => {
+  it('merges schema-declared context with inferred event types', function*({ expect }) {
     const store = createStore({
       schemas: {
         context: z.object({ count: z.number(), label: z.string() }),
@@ -416,11 +460,16 @@ describe('schemas', () => {
       // @ts-expect-error
       store.trigger.rename({})
     }
+
+    yield* expect(store.getSnapshot().context).toEqual({
+      count: 0,
+      label: 'done',
+    })
   })
 })
 
 describe('fromStore schemas', () => {
-  it('preserves inferred event types when only emitted schemas are declared', () => {
+  it('preserves inferred event types when only emitted schemas are declared', function*({ expect }) {
     const logic = fromStore({
       context: (count: number) => ({ count }),
       schemas: {
@@ -460,9 +509,11 @@ describe('fromStore schemas', () => {
         () => {},
       )
     }
+
+    yield* expect(actor.getSnapshot().context).toEqual({ count: 1 })
   })
 
-  it('uses schema-declared events for send typing', () => {
+  it('uses schema-declared events for send typing', function*({ expect }) {
     const logic = fromStore({
       context: {
         count: 0,
@@ -492,9 +543,11 @@ describe('fromStore schemas', () => {
       // @ts-expect-error
       actor.send({ type: 'unknown' })
     }
+
+    yield* expect(actor.getSnapshot().context).toEqual({ count: 0 })
   })
 
-  it('uses schema-declared context for snapshot typing', () => {
+  it('uses schema-declared context for snapshot typing', function*({ expect }) {
     const logic = fromStore({
       schemas: {
         context: z.object({ count: z.number(), label: z.string() }),
@@ -512,5 +565,7 @@ describe('fromStore schemas', () => {
 
     // @ts-expect-error
     snapshot.context.label satisfies number
+
+    yield* expect(snapshot.context).toEqual({ count: 0, label: 'ready' })
   })
 })

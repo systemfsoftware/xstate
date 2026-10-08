@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createStore } from './index.js'
 
 interface TestContext {
@@ -13,7 +13,7 @@ interface TestContext {
 }
 
 describe('select', () => {
-  it('should get current value', () => {
+  it('should get current value', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -32,10 +32,10 @@ describe('select', () => {
     })
 
     const name = store.select((state) => state.user.name).get()
-    expect(name).toBe('John')
+    yield* expect(name).toBe('John')
   })
 
-  it('should subscribe to changes', () => {
+  it('should subscribe to changes', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -53,15 +53,16 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
-    store.select((state) => state.user.name).subscribe(callback)
+    const selected: string[] = []
+    store.select((state) => state.user.name).subscribe((value) => {
+      selected.push(value)
+    })
     store.send({ type: 'UPDATE_NAME', name: 'Jane' })
 
-    expect(callback).toHaveBeenCalledTimes(1)
-    expect(callback).toHaveBeenCalledWith('Jane')
+    yield* expect(selected).toEqual(['Jane'])
   })
 
-  it('should not notify if selected value has not changed', () => {
+  it('should not notify if selected value has not changed', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -79,14 +80,16 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
-    store.select((state) => state.user.name).subscribe(callback)
+    const selected: string[] = []
+    store.select((state) => state.user.name).subscribe((value) => {
+      selected.push(value)
+    })
     store.send({ type: 'UPDATE_THEME', theme: 'light' })
 
-    expect(callback).not.toHaveBeenCalled()
+    yield* expect(selected).toEqual([])
   })
 
-  it('should support custom equality function', () => {
+  it('should support custom equality function', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -104,23 +107,28 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
+    const selected: Array<{ name: string; theme: string }> = []
     const selector = (context: TestContext) => ({
       name: context.user.name,
       theme: context.settings.theme,
     })
     const equalityFn = (a: { name: string }, b: { name: string }) => a.name === b.name // Only compare names
 
-    store.select(selector, equalityFn).subscribe(callback)
+    store.select(selector, equalityFn).subscribe((value) => {
+      selected.push(value)
+    })
 
     store.send({ type: 'UPDATE_THEME', theme: 'light' })
-    expect(callback).not.toHaveBeenCalled()
+    const callsAfterTheme = [...selected]
 
     store.send({ type: 'UPDATE_NAME', name: 'Jane' })
-    expect(callback).toHaveBeenCalledTimes(1)
+    yield* expect({ callsAfterTheme, callsAfterName: selected }).toEqual({
+      callsAfterTheme: [],
+      callsAfterName: [{ name: 'Jane', theme: 'light' }],
+    })
   })
 
-  it('should unsubscribe correctly', () => {
+  it('should unsubscribe correctly', function*({ expect }) {
     const store = createStore({
       context: {
         user: { name: 'John', age: 30 },
@@ -138,17 +146,19 @@ describe('select', () => {
       },
     })
 
-    const callback = vi.fn()
+    const selected: string[] = []
     const subscription = store
       .select((state) => state.user.name)
-      .subscribe(callback)
+      .subscribe((value) => {
+        selected.push(value)
+      })
     subscription.unsubscribe()
     store.send({ type: 'UPDATE_NAME', name: 'Jane' })
 
-    expect(callback).not.toHaveBeenCalled()
+    yield* expect(selected).toEqual([])
   })
 
-  it('should handle updates with multiple subscribers', () => {
+  it('should handle updates with multiple subscribers', function*({ expect }) {
     interface PositionContext {
       position: {
         x: number
@@ -179,20 +189,18 @@ describe('select', () => {
       },
     })
 
-    // Mock DOM manipulation callback
-    const renderCallback = vi.fn()
+    const renderCalls: Array<{ x: number; y: number }> = []
     store
       .select((state) => state.position)
       .subscribe((position) => {
-        renderCallback(position)
+        renderCalls.push(position)
       })
 
-    // Mock logger callback for x position only
-    const loggerCallback = vi.fn()
+    const loggerCalls: number[] = []
     store
       .select((state) => state.position.x)
       .subscribe((x) => {
-        loggerCallback(x)
+        loggerCalls.push(x)
       })
 
     // Simulate position update
@@ -200,44 +208,24 @@ describe('select', () => {
       position: { x: 100, y: 200 },
     })
 
-    // Verify render callback received full position update
-    expect(renderCallback).toHaveBeenCalledTimes(1)
-    expect(renderCallback).toHaveBeenCalledWith({ x: 100, y: 200 })
-
-    // Verify logger callback received only x position
-    expect(loggerCallback).toHaveBeenCalledTimes(1)
-    expect(loggerCallback).toHaveBeenCalledWith(100)
-
     // Simulate another update
     store.trigger.positionUpdated({
       position: { x: 150, y: 300 },
     })
-
-    expect(renderCallback).toHaveBeenCalledTimes(2)
-    expect(renderCallback).toHaveBeenLastCalledWith({ x: 150, y: 300 })
-    expect(loggerCallback).toHaveBeenCalledTimes(2)
-    expect(loggerCallback).toHaveBeenLastCalledWith(150)
 
     // Simulate changing only the y position
     store.trigger.positionUpdated({
       position: { x: 150, y: 400 },
     })
 
-    expect(renderCallback).toHaveBeenCalledTimes(3)
-    expect(renderCallback).toHaveBeenLastCalledWith({ x: 150, y: 400 })
-
-    // loggerCallback should not have been called
-    expect(loggerCallback).toHaveBeenCalledTimes(2)
-
     // Simulate changing only the user
     store.trigger.userUpdated({
       user: { name: 'Jane', age: 25 },
     })
 
-    // renderCallback should not have been called
-    expect(renderCallback).toHaveBeenCalledTimes(3)
-
-    // loggerCallback should not have been called
-    expect(loggerCallback).toHaveBeenCalledTimes(2)
+    yield* expect({ render: renderCalls, logger: loggerCalls }).toEqual({
+      render: [{ x: 100, y: 200 }, { x: 150, y: 300 }, { x: 150, y: 400 }],
+      logger: [100, 150],
+    })
   })
 })

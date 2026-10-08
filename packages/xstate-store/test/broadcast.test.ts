@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { createStore } from '../src/index.js'
 import {
   createBroadcastStorage,
@@ -8,50 +9,71 @@ import {
   subscribeToBroadcastStorage,
 } from '../src/persist.js'
 
-type Listener = (event: { data: unknown }) => void
+const broadcastChannelSlot = globalThis as unknown as {
+  BroadcastChannel?: unknown
+}
 
-const channels = new Map<string, Set<MockBroadcastChannel>>()
+function createBroadcastWorld() {
+  type Listener = (event: { data: unknown }) => void
 
-class MockBroadcastChannel {
-  public listeners = new Set<Listener>()
+  const channels = new Map<string, Set<MockBroadcastChannel>>()
 
-  constructor(public name: string) {
-    let entries = channels.get(name)
-    if (!entries) {
-      entries = new Set()
-      channels.set(name, entries)
+  class MockBroadcastChannel {
+    public listeners = new Set<Listener>()
+
+    constructor(public name: string) {
+      let entries = channels.get(name)
+      if (!entries) {
+        entries = new Set()
+        channels.set(name, entries)
+      }
+      entries.add(this)
     }
-    entries.add(this)
-  }
 
-  postMessage(data: unknown) {
-    const entries = channels.get(this.name)
-    if (!entries) {
-      return
-    }
-
-    for (const channel of entries) {
-      if (channel === this) {
-        continue
+    postMessage(data: unknown) {
+      const entries = channels.get(this.name)
+      if (!entries) {
+        return
       }
 
-      for (const listener of channel.listeners) {
-        listener({ data })
+      for (const channel of entries) {
+        if (channel === this) {
+          continue
+        }
+
+        for (const listener of channel.listeners) {
+          listener({ data })
+        }
       }
+    }
+
+    addEventListener(_type: 'message', listener: Listener) {
+      this.listeners.add(listener)
+    }
+
+    removeEventListener(_type: 'message', listener: Listener) {
+      this.listeners.delete(listener)
+    }
+
+    close() {
+      channels.get(this.name)?.delete(this)
+      this.listeners.clear()
     }
   }
 
-  addEventListener(_type: 'message', listener: Listener) {
-    this.listeners.add(listener)
-  }
+  return { MockBroadcastChannel }
+}
 
-  removeEventListener(_type: 'message', listener: Listener) {
-    this.listeners.delete(listener)
-  }
+function installBroadcastChannel(MockBroadcastChannel: unknown): () => void {
+  const original = broadcastChannelSlot.BroadcastChannel
+  broadcastChannelSlot.BroadcastChannel = MockBroadcastChannel
 
-  close() {
-    channels.get(this.name)?.delete(this)
-    this.listeners.clear()
+  return () => {
+    if (original === undefined) {
+      delete broadcastChannelSlot.BroadcastChannel
+    } else {
+      broadcastChannelSlot.BroadcastChannel = original
+    }
   }
 }
 
@@ -84,118 +106,152 @@ function waitForMicrotask(): Promise<void> {
   })
 }
 
-describe('broadcast storage', () => {
-  beforeEach(() => {
-    channels.clear()
-    ;(globalThis as any).BroadcastChannel = MockBroadcastChannel
-  })
+describe('broadcast storage', (it) => {
+  it.live('broadcasts queued persisted writes only after each async write completes', function*({
+    expect,
+  }) {
+    const { MockBroadcastChannel } = createBroadcastWorld()
+    const restore = installBroadcastChannel(MockBroadcastChannel)
+    try {
+      const completions: Array<() => void> = []
+      let saved: string | null = null
+      const baseStorage: StateStorage = {
+        getItem: () => saved,
+        removeItem: () => {},
+        setItem: (_name, value) =>
+          new Promise<void>((resolve) => {
+            completions.push(() => {
+              saved = value
+              resolve()
+            })
+          }),
+      }
+      const storage = createBroadcastStorage(baseStorage)
+      const receiver = new MockBroadcastChannel('xstate-store')
+      const counts: number[] = []
+      receiver.addEventListener('message', () => {
+        counts.push(JSON.parse(saved!).context.count)
+      })
+      const store = createCounterStore(storage)
+      store.trigger.inc()
+      store.trigger.inc()
 
-  afterEach(() => {
-    channels.clear()
-    delete (globalThis as any).BroadcastChannel
-  })
+      yield* expect({
+        completions: completions.length,
+        counts: [...counts],
+      }).toEqual({ completions: 1, counts: [] })
 
-  it('broadcasts queued persisted writes only after each async write completes', async () => {
-    const completions: Array<() => void> = []
-    let saved: string | null = null
-    const baseStorage: StateStorage = {
-      getItem: () => saved,
-      removeItem: () => {},
-      setItem: (_name, value) =>
-        new Promise<void>((resolve) => {
-          completions.push(() => {
-            saved = value
-            resolve()
-          })
-        }),
+      const flushed = flushStorage(store)
+      const firstCompletion = completions[0]
+      if (firstCompletion === undefined) {
+        throw new Error('expected a first completion')
+      }
+      firstCompletion()
+      yield* Effect.promise(() => waitForMicrotask())
+
+      yield* expect({ counts: [...counts], completions: completions.length }).toEqual(
+        { counts: [1], completions: 2 },
+      )
+
+      const secondCompletion = completions[1]
+      if (secondCompletion === undefined) {
+        throw new Error('expected a second completion')
+      }
+      secondCompletion()
+      yield* Effect.promise(() => Promise.resolve(flushed))
+
+      yield* expect(counts).toEqual([1, 2])
+    } finally {
+      restore()
     }
-    const storage = createBroadcastStorage(baseStorage)
-    const receiver = new MockBroadcastChannel('xstate-store')
-    const counts: number[] = []
-    receiver.addEventListener('message', () => {
-      counts.push(JSON.parse(saved!).context.count)
-    })
-    const store = createCounterStore(storage)
-    store.trigger.inc()
-    store.trigger.inc()
-    expect(completions).toHaveLength(1)
-    expect(counts).toEqual([])
-    const flushed = flushStorage(store)
-    const firstCompletion = completions[0]
-    if (firstCompletion === undefined) {
-      throw new Error('expected a first completion')
+  })
+
+  it('broadcasts writes to other storage adapters on the same channel', function*({
+    expect,
+  }) {
+    const { MockBroadcastChannel } = createBroadcastWorld()
+    const restore = installBroadcastChannel(MockBroadcastChannel)
+    try {
+      const baseStorage = createMemoryStorage()
+      const storage = createBroadcastStorage(baseStorage)
+      const receiver = new MockBroadcastChannel('xstate-store')
+      const messages: unknown[] = []
+
+      receiver.addEventListener('message', (event) => {
+        messages.push(event.data)
+      })
+
+      storage.setItem('counter', JSON.stringify({ context: { count: 1 } }))
+
+      yield* expect(messages).toEqual([
+        { type: 'xstate-store-update', name: 'counter' },
+      ])
+    } finally {
+      restore()
     }
-    firstCompletion()
-    await waitForMicrotask()
-    expect(counts).toEqual([1])
-    expect(completions).toHaveLength(2)
-    const secondCompletion = completions[1]
-    if (secondCompletion === undefined) {
-      throw new Error('expected a second completion')
+  })
+
+  it.live('rehydrates subscribed stores when another tab writes persisted state', function*({
+    expect,
+  }) {
+    const { MockBroadcastChannel } = createBroadcastWorld()
+    const restore = installBroadcastChannel(MockBroadcastChannel)
+    try {
+      const baseStorage = createMemoryStorage()
+      const storage1 = createBroadcastStorage(baseStorage)
+      const storage2 = createBroadcastStorage(baseStorage)
+      const store1 = createCounterStore(storage1)
+      const store2 = createCounterStore(storage2)
+      const unsubscribe = subscribeToBroadcastStorage(store2)
+
+      store1.trigger.inc()
+      yield* Effect.promise(() => waitForMicrotask())
+
+      yield* expect({
+        store1: store1.getSnapshot().context.count,
+        store2: store2.getSnapshot().context.count,
+      }).toEqual({ store1: 1, store2: 1 })
+
+      unsubscribe()
+    } finally {
+      restore()
     }
-    secondCompletion()
-    await flushed
-    expect(counts).toEqual([1, 2])
   })
 
-  it('broadcasts writes to other storage adapters on the same channel', () => {
-    const baseStorage = createMemoryStorage()
-    const storage = createBroadcastStorage(baseStorage)
-    const receiver = new MockBroadcastChannel('xstate-store')
-    const messages: unknown[] = []
+  it.live('does not rehydrate from unrelated storage names', function*({
+    expect,
+  }) {
+    const { MockBroadcastChannel } = createBroadcastWorld()
+    const restore = installBroadcastChannel(MockBroadcastChannel)
+    try {
+      const baseStorage = createMemoryStorage()
+      const storage = createBroadcastStorage(baseStorage)
+      const store = createCounterStore(storage)
+      const unsubscribe = subscribeToBroadcastStorage(store)
+      const sender = new MockBroadcastChannel('xstate-store')
 
-    receiver.addEventListener('message', (event) => {
-      messages.push(event.data)
-    })
+      baseStorage.setItem(
+        'other',
+        JSON.stringify({ context: { count: 100 }, version: 0 }),
+      )
+      sender.postMessage({ type: 'xstate-store-update', name: 'other' })
+      yield* Effect.promise(() => waitForMicrotask())
 
-    storage.setItem('counter', JSON.stringify({ context: { count: 1 } }))
+      yield* expect(store.getSnapshot().context.count).toEqual(0)
 
-    expect(messages).toEqual([
-      { type: 'xstate-store-update', name: 'counter' },
-    ])
+      unsubscribe()
+      sender.close()
+    } finally {
+      restore()
+    }
   })
 
-  it('rehydrates subscribed stores when another tab writes persisted state', async () => {
-    const baseStorage = createMemoryStorage()
-    const storage1 = createBroadcastStorage(baseStorage)
-    const storage2 = createBroadcastStorage(baseStorage)
-    const store1 = createCounterStore(storage1)
-    const store2 = createCounterStore(storage2)
-    const unsubscribe = subscribeToBroadcastStorage(store2)
-
-    store1.trigger.inc()
-    await waitForMicrotask()
-
-    expect(store1.getSnapshot().context.count).toBe(1)
-    expect(store2.getSnapshot().context.count).toBe(1)
-
-    unsubscribe()
-  })
-
-  it('does not rehydrate from unrelated storage names', async () => {
-    const baseStorage = createMemoryStorage()
-    const storage = createBroadcastStorage(baseStorage)
-    const store = createCounterStore(storage)
-    const unsubscribe = subscribeToBroadcastStorage(store)
-    const sender = new MockBroadcastChannel('xstate-store')
-
-    baseStorage.setItem(
-      'other',
-      JSON.stringify({ context: { count: 100 }, version: 0 }),
-    )
-    sender.postMessage({ type: 'xstate-store-update', name: 'other' })
-    await waitForMicrotask()
-
-    expect(store.getSnapshot().context.count).toBe(0)
-
-    unsubscribe()
-    sender.close()
-  })
-
-  it('throws when subscribing a store without broadcast storage', () => {
+  it('throws when subscribing a store without broadcast storage', function*({
+    expect,
+  }) {
     const store = createCounterStore(createMemoryStorage())
 
-    expect(() => subscribeToBroadcastStorage(store)).toThrow(
+    yield* expect(() => subscribeToBroadcastStorage(store)).toThrow(
       'subscribeToBroadcastStorage: store storage must be wrapped with createBroadcastStorage()',
     )
   })

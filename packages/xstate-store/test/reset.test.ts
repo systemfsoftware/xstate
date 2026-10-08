@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
 import { createStore } from '../src/index.js'
 import { reset } from '../src/reset.js'
 import { undoRedo } from '../src/undo.js'
 
-describe('reset extension', () => {
-  it('should reset to initial context', () => {
+describe('reset extension', (it) => {
+  it('should reset to initial context', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -14,13 +14,18 @@ describe('reset extension', () => {
 
     store.trigger.inc()
     store.trigger.inc()
-    expect(store.getSnapshot().context.count).toBe(2)
+    const afterIncs = store.getSnapshot().context.count
 
     store.trigger.reset()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterReset = store.getSnapshot().context.count
+
+    yield* expect({ afterIncs, afterReset }).toEqual({
+      afterIncs: 2,
+      afterReset: 0,
+    })
   })
 
-  it('should reset multiple fields to initial context', () => {
+  it('should reset multiple fields to initial context', function*({ expect }) {
     const store = createStore({
       context: { count: 0, name: 'Ada' },
       on: {
@@ -31,13 +36,18 @@ describe('reset extension', () => {
 
     store.trigger.inc()
     store.trigger.setName({ name: 'Bob' })
-    expect(store.getSnapshot().context).toEqual({ count: 1, name: 'Bob' })
+    const afterOps = store.getSnapshot().context
 
     store.trigger.reset()
-    expect(store.getSnapshot().context).toEqual({ count: 0, name: 'Ada' })
+    const afterReset = store.getSnapshot().context
+
+    yield* expect({ afterOps, afterReset }).toEqual({
+      afterOps: { count: 1, name: 'Bob' },
+      afterReset: { count: 0, name: 'Ada' },
+    })
   })
 
-  it('should support partial reset via `to` option', () => {
+  it('should support partial reset via `to` option', function*({ expect }) {
     const store = createStore({
       context: { count: 0, user: null as string | null },
       on: {
@@ -53,13 +63,20 @@ describe('reset extension', () => {
     store.trigger.inc()
     store.trigger.inc()
     store.trigger.login({ user: 'Alice' })
-    expect(store.getSnapshot().context).toEqual({ count: 2, user: 'Alice' })
+    const afterOps = store.getSnapshot().context
 
     store.trigger.reset()
-    expect(store.getSnapshot().context).toEqual({ count: 0, user: 'Alice' })
+    const afterReset = store.getSnapshot().context
+
+    yield* expect({ afterOps, afterReset }).toEqual({
+      afterOps: { count: 2, user: 'Alice' },
+      afterReset: { count: 0, user: 'Alice' },
+    })
   })
 
-  it('should be idempotent when no changes have been made', () => {
+  it('should be idempotent when no changes have been made', function*({
+    expect,
+  }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -67,12 +84,12 @@ describe('reset extension', () => {
       },
     }).with(reset())
 
-    const before = store.getSnapshot()
     store.trigger.reset()
-    expect(store.getSnapshot().context).toEqual(before.context)
+
+    yield* expect(store.getSnapshot().context).toEqual({ count: 0 })
   })
 
-  it('should preserve snapshot status', () => {
+  it('should preserve snapshot status', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -82,10 +99,11 @@ describe('reset extension', () => {
 
     store.trigger.inc()
     store.trigger.reset()
-    expect(store.getSnapshot().status).toBe('active')
+
+    yield* expect(store.getSnapshot().status).toBe('active')
   })
 
-  it('should notify subscribers on reset', () => {
+  it('should notify subscribers on reset', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -96,14 +114,14 @@ describe('reset extension', () => {
     const snapshots: number[] = []
     store.subscribe((snap) => snapshots.push(snap.context.count))
 
-    store.trigger.inc() // 1
-    store.trigger.inc() // 2
-    store.trigger.reset() // 0
+    store.trigger.inc()
+    store.trigger.inc()
+    store.trigger.reset()
 
-    expect(snapshots).toEqual([1, 2, 0])
+    yield* expect(snapshots).toEqual([1, 2, 0])
   })
 
-  it('should work with undoRedo (reset is undoable)', () => {
+  it('should work with undoRedo (reset is undoable)', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -115,16 +133,24 @@ describe('reset extension', () => {
 
     store.trigger.inc()
     store.trigger.inc()
-    expect(store.getSnapshot().context.count).toBe(2)
+    const afterIncs = store.getSnapshot().context.count
 
     store.trigger.reset()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterReset = store.getSnapshot().context.count
 
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(2)
+    const afterUndo = store.getSnapshot().context.count
+
+    yield* expect({ afterIncs, afterReset, afterUndo }).toEqual({
+      afterIncs: 2,
+      afterReset: 0,
+      afterUndo: 2,
+    })
   })
 
-  it('should allow resetting after multiple operations', () => {
+  it('should allow resetting after multiple operations', function*({
+    expect,
+  }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -137,18 +163,25 @@ describe('reset extension', () => {
     store.trigger.inc()
     store.trigger.dec()
     store.trigger.inc()
-    expect(store.getSnapshot().context.count).toBe(2)
+    const afterOps = store.getSnapshot().context.count
 
     store.trigger.reset()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterReset = store.getSnapshot().context.count
 
-    // Should still work after reset
     store.trigger.inc()
-    expect(store.getSnapshot().context.count).toBe(1)
+    const afterResetInc = store.getSnapshot().context.count
+
+    yield* expect({ afterOps, afterReset, afterResetInc }).toEqual({
+      afterOps: 2,
+      afterReset: 0,
+      afterResetInc: 1,
+    })
   })
 
-  it('should detect reset event collisions in development', () => {
-    expect(() =>
+  it('should detect reset event collisions in development', function*({
+    expect,
+  }) {
+    yield* expect(() =>
       createStore({
         context: { count: 0 },
         on: {
@@ -160,7 +193,9 @@ describe('reset extension', () => {
     )
   })
 
-  it('should return initial snapshot from getInitialSnapshot', () => {
+  it('should return initial snapshot from getInitialSnapshot', function*({
+    expect,
+  }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -171,6 +206,6 @@ describe('reset extension', () => {
     store.trigger.inc()
     store.trigger.inc()
 
-    expect(store.getInitialSnapshot().context.count).toBe(0)
+    yield* expect(store.getInitialSnapshot().context.count).toBe(0)
   })
 })

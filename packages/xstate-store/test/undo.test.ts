@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createStore } from '../src/index.js'
 import { flushStorage, isHydrated, persist } from '../src/persist.js'
@@ -6,11 +6,11 @@ import { undoRedo } from '../src/undo.js'
 
 it.each(['persist-first', 'undo-first'] as const)(
   'preserves persistence metadata through snapshot undo and redo (%s)',
-  (order) => {
+  function*(order, { expect }) {
     const storage = {
       getItem: () => null,
-      setItem: vi.fn(),
-      removeItem: vi.fn(),
+      setItem: () => {},
+      removeItem: () => {},
     }
     const base = createStore({
       context: { count: 0 },
@@ -26,17 +26,32 @@ it.each(['persist-first', 'undo-first'] as const)(
 
     store.trigger.inc()
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(0)
-    expect(isHydrated(store)).toBe(true)
-    expect(() => flushStorage(store)).not.toThrow()
+    const afterUndo = {
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }
+    let flushError: unknown
+    try {
+      flushStorage(store)
+    } catch (error) {
+      flushError = error
+    }
     store.trigger.redo()
-    expect(store.getSnapshot().context.count).toBe(1)
-    expect(isHydrated(store)).toBe(true)
+    const afterRedo = {
+      count: store.getSnapshot().context.count,
+      hydrated: isHydrated(store),
+    }
+
+    yield* expect({ afterUndo, flushError, afterRedo }).toEqual({
+      afterUndo: { count: 0, hydrated: true },
+      flushError: undefined,
+      afterRedo: { count: 1, hydrated: true },
+    })
   },
 )
 
-it('preserves live extension metadata through custom restore triggers', () => {
-  const writes = vi.fn()
+it('preserves live extension metadata through custom restore triggers', function*({ expect }) {
+  const writeArgs: unknown[][] = []
   const store = createStore({
     context: { count: 0 },
     on: { inc: (context) => ({ count: context.count + 1 }) },
@@ -44,7 +59,13 @@ it('preserves live extension metadata through custom restore triggers', () => {
     .with(
       persist({
         name: 'counter',
-        storage: { getItem: () => null, setItem: writes, removeItem: vi.fn() },
+        storage: {
+          getItem: () => null,
+          setItem: (...args: unknown[]) => {
+            writeArgs.push(args)
+          },
+          removeItem: () => {},
+        },
       }),
     )
     .with(
@@ -58,17 +79,21 @@ it('preserves live extension metadata through custom restore triggers', () => {
     )
 
   store.trigger.inc()
-  writes.mockClear()
+  writeArgs.length = 0
   store.trigger.undo()
-  expect(isHydrated(store)).toBe(true)
-  expect(store.getSnapshot().context.count).toBe(1)
-  expect(writes).toHaveBeenCalledExactlyOnceWith(
-    'counter',
-    JSON.stringify({ context: { count: 1 }, version: 0 }),
-  )
+
+  yield* expect({
+    hydrated: isHydrated(store),
+    count: store.getSnapshot().context.count,
+    writes: writeArgs,
+  }).toEqual({
+    hydrated: true,
+    count: 1,
+    writes: [['counter', JSON.stringify({ context: { count: 1 }, version: 0 })]],
+  })
 })
 
-it('keeps metadata updates produced by custom restore triggers', () => {
+it('keeps metadata updates produced by custom restore triggers', function*({ expect }) {
   const revision = Symbol('revision')
   const store = createStore({
     context: { count: 0 },
@@ -102,14 +127,20 @@ it('keeps metadata updates produced by custom restore triggers', () => {
     )
 
   store.trigger.inc()
-  expect(Reflect.get(store.getSnapshot(), revision)).toBe(1)
+  const afterInc = Reflect.get(store.getSnapshot(), revision)
   store.trigger.undo()
-  expect(Reflect.get(store.getSnapshot(), revision)).toBe(2)
+  const afterUndo = Reflect.get(store.getSnapshot(), revision)
   store.trigger.redo()
-  expect(Reflect.get(store.getSnapshot(), revision)).toBe(3)
+  const afterRedo = Reflect.get(store.getSnapshot(), revision)
+
+  yield* expect({ afterInc, afterUndo, afterRedo }).toEqual({
+    afterInc: 1,
+    afterUndo: 2,
+    afterRedo: 3,
+  })
 })
 
-it('should undo a single event', () => {
+it('should undo a single event', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -118,13 +149,15 @@ it('should undo a single event', () => {
   }).with(undoRedo())
 
   store.trigger.inc()
-  expect(store.getSnapshot().context.count).toBe(1)
+  const afterInc = store.getSnapshot().context.count
 
   store.trigger.undo()
-  expect(store.getSnapshot().context.count).toBe(0)
+  const afterUndo = store.getSnapshot().context.count
+
+  yield* expect({ afterInc, afterUndo }).toEqual({ afterInc: 1, afterUndo: 0 })
 })
 
-it('should redo a previously undone event', () => {
+it('should redo a previously undone event', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -135,10 +168,11 @@ it('should redo a previously undone event', () => {
   store.trigger.inc()
   store.trigger.undo()
   store.trigger.redo()
-  expect(store.getSnapshot().context.count).toBe(1)
+
+  yield* expect(store.getSnapshot().context.count).toBe(1)
 })
 
-it('should undo/redo multiple events, non-transactional', () => {
+it('should undo/redo multiple events, non-transactional', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -149,18 +183,26 @@ it('should undo/redo multiple events, non-transactional', () => {
   store.trigger.inc()
   store.trigger.inc()
   store.trigger.inc()
-  expect(store.getSnapshot().context.count).toBe(3)
+  const afterIncs = store.getSnapshot().context.count
   store.trigger.undo()
-  expect(store.getSnapshot().context.count).toBe(2)
+  const afterFirstUndo = store.getSnapshot().context.count
   store.trigger.undo()
-  expect(store.getSnapshot().context.count).toBe(1)
+  const afterSecondUndo = store.getSnapshot().context.count
   store.trigger.redo()
-  expect(store.getSnapshot().context.count).toBe(2)
+  const afterFirstRedo = store.getSnapshot().context.count
   store.trigger.redo()
-  expect(store.getSnapshot().context.count).toBe(3)
+  const afterSecondRedo = store.getSnapshot().context.count
+
+  yield* expect([
+    afterIncs,
+    afterFirstUndo,
+    afterSecondUndo,
+    afterFirstRedo,
+    afterSecondRedo,
+  ]).toEqual([3, 2, 1, 2, 3])
 })
 
-it('should group events by transaction ID', () => {
+it('should group events by transaction ID', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -169,26 +211,29 @@ it('should group events by transaction ID', () => {
     },
   }).with(undoRedo({ getTransactionId: (event) => event.type }))
 
-  // First transaction
   store.trigger.inc()
   store.trigger.inc()
-  expect(store.getSnapshot().context.count).toBe(2)
+  const afterFirstTransaction = store.getSnapshot().context.count
 
-  // Second transaction
   store.trigger.dec()
   store.trigger.dec()
-  expect(store.getSnapshot().context.count).toBe(0)
+  const afterSecondTransaction = store.getSnapshot().context.count
 
-  // Undo second transaction (both decrements)
   store.trigger.undo()
-  expect(store.getSnapshot().context.count).toBe(2)
+  const afterFirstUndo = store.getSnapshot().context.count
 
-  // Undo first transaction (both increments)
   store.trigger.undo()
-  expect(store.getSnapshot().context.count).toBe(0)
+  const afterSecondUndo = store.getSnapshot().context.count
+
+  yield* expect([
+    afterFirstTransaction,
+    afterSecondTransaction,
+    afterFirstUndo,
+    afterSecondUndo,
+  ]).toEqual([2, 0, 2, 0])
 })
 
-it('should maintain correct state when interleaving undo/redo with new events', () => {
+it('should maintain correct state when interleaving undo/redo with new events', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -197,23 +242,32 @@ it('should maintain correct state when interleaving undo/redo with new events', 
     },
   }).with(undoRedo())
 
-  store.trigger.inc() // 1
-  expect(store.getSnapshot().context.count).toBe(1)
-  store.trigger.inc() // 2
-  expect(store.getSnapshot().context.count).toBe(2)
-  store.trigger.undo() // 1
-  expect(store.getSnapshot().context.count).toBe(1)
-  store.trigger.dec() // 0
-  expect(store.getSnapshot().context.count).toBe(0)
-  store.trigger.undo() // 1
-  expect(store.getSnapshot().context.count).toBe(1)
-  store.trigger.redo() // 0
-  expect(store.getSnapshot().context.count).toBe(0)
+  store.trigger.inc()
+  const afterFirstInc = store.getSnapshot().context.count
+  store.trigger.inc()
+  const afterSecondInc = store.getSnapshot().context.count
+  store.trigger.undo()
+  const afterFirstUndo = store.getSnapshot().context.count
+  store.trigger.dec()
+  const afterDec = store.getSnapshot().context.count
+  store.trigger.undo()
+  const afterSecondUndo = store.getSnapshot().context.count
+  store.trigger.redo()
+  const afterRedo = store.getSnapshot().context.count
+  const atEnd = store.getSnapshot().context.count
 
-  expect(store.getSnapshot().context.count).toBe(0)
+  yield* expect([
+    afterFirstInc,
+    afterSecondInc,
+    afterFirstUndo,
+    afterDec,
+    afterSecondUndo,
+    afterRedo,
+    atEnd,
+  ]).toEqual([1, 2, 1, 0, 1, 0, 0])
 })
 
-it('should do nothing when undoing with empty history', () => {
+it('should do nothing when undoing with empty history', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -223,10 +277,11 @@ it('should do nothing when undoing with empty history', () => {
 
   const initialSnapshot = store.getSnapshot()
   store.trigger.undo()
-  expect(store.getSnapshot()).toEqual(initialSnapshot)
+
+  yield* expect(store.getSnapshot()).toEqual(initialSnapshot)
 })
 
-it('should do nothing when redoing with empty undo stack', () => {
+it('should do nothing when redoing with empty undo stack', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -236,10 +291,11 @@ it('should do nothing when redoing with empty undo stack', () => {
 
   const initialSnapshot = store.getSnapshot()
   store.trigger.redo()
-  expect(store.getSnapshot()).toEqual(initialSnapshot)
+
+  yield* expect(store.getSnapshot()).toEqual(initialSnapshot)
 })
 
-it('should clear redo stack when new events occur after undo', () => {
+it('should clear redo stack when new events occur after undo', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -248,20 +304,21 @@ it('should clear redo stack when new events occur after undo', () => {
     },
   }).with(undoRedo())
 
-  store.trigger.inc() // 1
-  expect(store.getSnapshot().context.count).toBe(1)
-  store.trigger.inc() // 2
-  expect(store.getSnapshot().context.count).toBe(2)
-  store.trigger.undo() // 1
-  expect(store.getSnapshot().context.count).toBe(1)
-  store.trigger.dec() // 0
+  store.trigger.inc()
+  const afterFirstInc = store.getSnapshot().context.count
+  store.trigger.inc()
+  const afterSecondInc = store.getSnapshot().context.count
+  store.trigger.undo()
+  const afterUndo = store.getSnapshot().context.count
+  store.trigger.dec()
 
-  // Redo should not work as we added a new event after undo
   store.trigger.redo()
-  expect(store.getSnapshot().context.count).toBe(0)
+  const afterRedo = store.getSnapshot().context.count
+
+  yield* expect([afterFirstInc, afterSecondInc, afterUndo, afterRedo]).toEqual([1, 2, 1, 0])
 })
 
-it('should preserve emitted events during undo/redo', () => {
+it('should preserve emitted events during undo/redo', function*({ expect }) {
   type Events = { type: 'inc' }
 
   const store = createStore({
@@ -288,13 +345,13 @@ it('should preserve emitted events during undo/redo', () => {
   store.trigger.undo()
   store.trigger.redo()
 
-  expect(emittedEvents).toEqual([
+  yield* expect(emittedEvents).toEqual([
     { type: 'changed', value: 1 },
     { type: 'changed', value: 1 },
   ])
 })
 
-it('should preserve context and event types', () => {
+it('should preserve context and event types', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -314,51 +371,57 @@ it('should preserve context and event types', () => {
     // @ts-expect-error
     store.trigger.dec()
   }
+
+  yield* expect(store.getSnapshot().context).toEqual({ count: 1 })
 })
 
-it('should skip non-undoable events during undo', () => {
+it('should skip non-undoable events during undo', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
       inc: (ctx) => ({ count: ctx.count + 1 }),
-      log: (ctx) => ctx, // No state change, just logging
+      log: (ctx) => ctx,
     },
   }).with(undoRedo({ skipEvent: (event) => event.type === 'log' }))
 
-  store.trigger.inc() // count = 1
-  store.trigger.log() // count = 1 (logged but not undoable)
-  store.trigger.inc() // count = 2
-  expect(store.getSnapshot().context.count).toBe(2)
+  store.trigger.inc()
+  store.trigger.log()
+  store.trigger.inc()
+  const afterEvents = store.getSnapshot().context.count
 
-  store.trigger.undo() // count = 1 (skips log event)
-  expect(store.getSnapshot().context.count).toBe(1)
+  store.trigger.undo()
+  const afterUndo = store.getSnapshot().context.count
+
+  yield* expect({ afterEvents, afterUndo }).toEqual({ afterEvents: 2, afterUndo: 1 })
 })
 
-it('should skip non-redoable events during redo', () => {
+it('should skip non-redoable events during redo', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
       inc: (ctx) => ({ count: ctx.count + 1 }),
-      log: (ctx) => ctx, // No state change, just logging
+      log: (ctx) => ctx,
     },
   }).with(undoRedo({ skipEvent: (event) => event.type === 'log' }))
 
-  store.trigger.inc() // count = 1
-  store.trigger.log() // count = 1 (logged but not redoable)
-  store.trigger.inc() // count = 2
-  store.trigger.undo() // count = 1
-  expect(store.getSnapshot().context.count).toBe(1)
+  store.trigger.inc()
+  store.trigger.log()
+  store.trigger.inc()
+  store.trigger.undo()
+  const afterUndo = store.getSnapshot().context.count
 
-  store.trigger.redo() // count = 2 (skips log event)
-  expect(store.getSnapshot().context.count).toBe(2)
+  store.trigger.redo()
+  const afterRedo = store.getSnapshot().context.count
+
+  yield* expect({ afterUndo, afterRedo }).toEqual({ afterUndo: 1, afterRedo: 2 })
 })
 
-it('should skip events with transaction grouping', () => {
+it('should skip events with transaction grouping', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
       inc: (ctx) => ({ count: ctx.count + 1 }),
-      log: (ctx) => ctx, // No state change, just logging
+      log: (ctx) => ctx,
     },
   }).with(
     undoRedo({
@@ -367,27 +430,30 @@ it('should skip events with transaction grouping', () => {
     }),
   )
 
-  // First transaction: inc events
-  store.trigger.inc() // count = 1
-  store.trigger.inc() // count = 2
-  expect(store.getSnapshot().context.count).toBe(2)
+  store.trigger.inc()
+  store.trigger.inc()
+  const afterFirstTransaction = store.getSnapshot().context.count
 
-  // Log events (not a transaction because they're skipped)
-  store.trigger.log() // count = 2 (logged but not undoable)
-  store.trigger.log() // count = 2 (logged but not undoable)
-  expect(store.getSnapshot().context.count).toBe(2)
+  store.trigger.log()
+  store.trigger.log()
+  const afterLogs = store.getSnapshot().context.count
 
-  // Second transaction: inc events
-  store.trigger.inc() // count = 3
-  store.trigger.inc() // count = 4
-  expect(store.getSnapshot().context.count).toBe(4)
+  store.trigger.inc()
+  store.trigger.inc()
+  const afterSecondTransaction = store.getSnapshot().context.count
 
-  // Undo second transaction (all inc events)
-  store.trigger.undo() // count = 0
-  expect(store.getSnapshot().context.count).toBe(0)
+  store.trigger.undo()
+  const afterUndo = store.getSnapshot().context.count
+
+  yield* expect([
+    afterFirstTransaction,
+    afterLogs,
+    afterSecondTransaction,
+    afterUndo,
+  ]).toEqual([2, 2, 4, 0])
 })
 
-it('should handle mixed undoable and non-undoable events', () => {
+it('should handle mixed undoable and non-undoable events', function*({ expect }) {
   const store = createStore({
     context: { count: 0, logs: [] as string[] },
     on: {
@@ -403,31 +469,42 @@ it('should handle mixed undoable and non-undoable events', () => {
     }),
   )
 
-  store.trigger.inc() // count = 1
-  store.trigger.log({ message: 'first log' }) // logs = ['first log'] (not stored in history)
-  store.trigger.inc() // count = 2
-  store.trigger.log({ message: 'second log' }) // logs = ['first log', 'second log'] (not stored in history)
-  store.trigger.inc() // count = 3
+  store.trigger.inc()
+  store.trigger.log({ message: 'first log' })
+  store.trigger.inc()
+  store.trigger.log({ message: 'second log' })
+  store.trigger.inc()
 
-  expect(store.getSnapshot().context.count).toBe(3)
-  expect(store.getSnapshot().context.logs).toEqual(['first log', 'second log'])
+  const afterEvents = {
+    count: store.getSnapshot().context.count,
+    logs: store.getSnapshot().context.logs,
+  }
 
-  // Undo should skip log events (they're not in history) but still undo inc events
-  // Since log events are skipped, they're not replayed during undo, so logs are lost
-  store.trigger.undo() // count = 2, logs = [] (logs lost because not replayed)
-  expect(store.getSnapshot().context.count).toBe(2)
-  expect(store.getSnapshot().context.logs).toEqual([])
+  store.trigger.undo()
+  const afterFirstUndo = {
+    count: store.getSnapshot().context.count,
+    logs: store.getSnapshot().context.logs,
+  }
+  store.trigger.undo()
+  const afterSecondUndo = {
+    count: store.getSnapshot().context.count,
+    logs: store.getSnapshot().context.logs,
+  }
+  store.trigger.undo()
+  const afterThirdUndo = {
+    count: store.getSnapshot().context.count,
+    logs: store.getSnapshot().context.logs,
+  }
 
-  store.trigger.undo() // count = 1, logs = [] (logs lost because not replayed)
-  expect(store.getSnapshot().context.count).toBe(1)
-  expect(store.getSnapshot().context.logs).toEqual([])
-
-  store.trigger.undo() // count = 0, logs = [] (logs lost because not replayed)
-  expect(store.getSnapshot().context.count).toBe(0)
-  expect(store.getSnapshot().context.logs).toEqual([])
+  yield* expect({ afterEvents, afterFirstUndo, afterSecondUndo, afterThirdUndo }).toEqual({
+    afterEvents: { count: 3, logs: ['first log', 'second log'] },
+    afterFirstUndo: { count: 2, logs: [] },
+    afterSecondUndo: { count: 1, logs: [] },
+    afterThirdUndo: { count: 0, logs: [] },
+  })
 })
 
-it('should not replay emitted events for skipped events during undo/redo', () => {
+it('should not replay emitted events for skipped events during undo/redo', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     schemas: {
@@ -443,7 +520,7 @@ it('should not replay emitted events for skipped events during undo/redo', () =>
       },
       log: (ctx, event: { message: string }, enq) => {
         enq.emit.logged({ message: (event as any).message })
-        return ctx // No state change
+        return ctx
       },
     },
   }).with(
@@ -460,30 +537,34 @@ it('should not replay emitted events for skipped events during undo/redo', () =>
     emittedEvents.push(event)
   })
 
-  store.trigger.inc() // count = 1, emits changed(1)
-  store.trigger.log({ message: 'test log' }) // emits logged('test log') but not stored in history
-  store.trigger.inc() // count = 2, emits changed(2)
+  store.trigger.inc()
+  store.trigger.log({ message: 'test log' })
+  store.trigger.inc()
 
-  expect(emittedEvents).toEqual([
-    { type: 'changed', value: 1 },
-    { type: 'logged', message: 'test log' },
-    { type: 'changed', value: 2 },
-  ])
+  const beforeUndo = [...emittedEvents]
 
   emittedEvents.length = 0
-  store.trigger.undo() // count = 1
-  store.trigger.undo() // count = 0
-  store.trigger.redo() // count = 1, emits changed(1)
-  store.trigger.redo() // count = 2, emits changed(2)
+  store.trigger.undo()
+  store.trigger.undo()
+  store.trigger.redo()
+  store.trigger.redo()
 
-  // Only inc events should be emitted during undo/redo, log events are skipped from history
-  expect(emittedEvents).toEqual([
-    { type: 'changed', value: 1 },
-    { type: 'changed', value: 2 },
-  ])
+  const afterRedo = [...emittedEvents]
+
+  yield* expect({ beforeUndo, afterRedo }).toEqual({
+    beforeUndo: [
+      { type: 'changed', value: 1 },
+      { type: 'logged', message: 'test log' },
+      { type: 'changed', value: 2 },
+    ],
+    afterRedo: [
+      { type: 'changed', value: 1 },
+      { type: 'changed', value: 2 },
+    ],
+  })
 })
 
-it('should skip events with transaction grouping', () => {
+it('should skip events with transaction grouping', function*({ expect }) {
   const store = createStore({
     context: { count: 0, transactionId: null as string | null },
     on: {
@@ -499,27 +580,30 @@ it('should skip events with transaction grouping', () => {
     }),
   )
 
-  store.trigger.inc() // count = 1
+  store.trigger.inc()
   store.trigger.transactionIdUpdated({ id: '1' })
   store.trigger.inc()
   store.trigger.inc()
-  store.trigger.inc() // count = 4
+  store.trigger.inc()
   store.trigger.transactionIdUpdated({ id: '2' })
   store.trigger.inc()
   store.trigger.inc()
-  store.trigger.inc() // count = 7
+  store.trigger.inc()
 
   store.trigger.undo()
-  expect(store.getSnapshot().context.count).toBe(4)
+  const afterFirstUndo = store.getSnapshot().context.count
   store.trigger.undo()
-  expect(store.getSnapshot().context.count).toBe(1)
+  const afterSecondUndo = store.getSnapshot().context.count
   store.trigger.redo()
-  expect(store.getSnapshot().context.count).toBe(4)
+  const afterFirstRedo = store.getSnapshot().context.count
   store.trigger.redo()
-  expect(store.getSnapshot().context.count).toBe(7)
+  const afterSecondRedo = store.getSnapshot().context.count
+
+  yield* expect([afterFirstUndo, afterSecondUndo, afterFirstRedo, afterSecondRedo])
+    .toEqual([4, 1, 4, 7])
 })
 
-it('should use the snapshot in the skipEvent function', () => {
+it('should use the snapshot in the skipEvent function', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     on: {
@@ -533,16 +617,19 @@ it('should use the snapshot in the skipEvent function', () => {
     }),
   )
 
-  store.trigger.inc() // count = 1
-  store.trigger.inc() // count = 2
-  store.trigger.inc() // count = 3
-  store.trigger.inc() // count = 4 (skipped)
-  expect(store.getSnapshot().context.count).toBe(4)
-  store.trigger.undo() // count = 2
-  expect(store.getSnapshot().context.count).toBe(2)
+  store.trigger.inc()
+  store.trigger.inc()
+  store.trigger.inc()
+  store.trigger.inc()
+  const afterIncs = store.getSnapshot().context.count
+
+  store.trigger.undo()
+  const afterUndo = store.getSnapshot().context.count
+
+  yield* expect({ afterIncs, afterUndo }).toEqual({ afterIncs: 4, afterUndo: 2 })
 })
 
-it('emit event types should be correct', () => {
+it('emit event types should be correct', function*({ expect }) {
   const store = createStore({
     context: { count: 0 },
     schemas: {
@@ -551,7 +638,6 @@ it('emit event types should be correct', () => {
       },
     },
     on: {
-      // TODO: figure out why we need _: {} and not just _
       inc: (ctx, _: {}, enq) => {
         enq.emit.changed({ value: ctx.count + 1 })
         // @ts-expect-error
@@ -574,10 +660,12 @@ it('emit event types should be correct', () => {
     'whatever',
     () => {},
   )
+
+  yield* expect(store.getSnapshot().context).toEqual({ count: 0 })
 })
 
-it('should detect undo/redo event collisions in development', () => {
-  expect(() =>
+it('should detect undo/redo event collisions in development', function*({ expect }) {
+  yield* expect(() =>
     createStore({
       context: { count: 0 },
       on: {
@@ -590,7 +678,7 @@ it('should detect undo/redo event collisions in development', () => {
 })
 
 describe('undoRedo with snapshot strategy', () => {
-  it('should undo a single event', () => {
+  it('should undo a single event', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -599,13 +687,15 @@ describe('undoRedo with snapshot strategy', () => {
     }).with(undoRedo({ strategy: 'snapshot' }))
 
     store.trigger.inc()
-    expect(store.getSnapshot().context.count).toBe(1)
+    const afterInc = store.getSnapshot().context.count
 
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterUndo = store.getSnapshot().context.count
+
+    yield* expect({ afterInc, afterUndo }).toEqual({ afterInc: 1, afterUndo: 0 })
   })
 
-  it('should redo a previously undone event', () => {
+  it('should redo a previously undone event', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -616,32 +706,11 @@ describe('undoRedo with snapshot strategy', () => {
     store.trigger.inc()
     store.trigger.undo()
     store.trigger.redo()
-    expect(store.getSnapshot().context.count).toBe(1)
+
+    yield* expect(store.getSnapshot().context.count).toBe(1)
   })
 
-  it('should undo/redo multiple events, non-transactional', () => {
-    const store = createStore({
-      context: { count: 0 },
-      on: {
-        inc: (ctx) => ({ count: ctx.count + 1 }),
-      },
-    }).with(undoRedo({ strategy: 'snapshot' }))
-
-    store.trigger.inc()
-    store.trigger.inc()
-    store.trigger.inc()
-    expect(store.getSnapshot().context.count).toBe(3)
-    store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(2)
-    store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.redo()
-    expect(store.getSnapshot().context.count).toBe(2)
-    store.trigger.redo()
-    expect(store.getSnapshot().context.count).toBe(3)
-  })
-
-  it('should undo back into history after a redo', () => {
+  it('should undo/redo multiple events, non-transactional', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -652,22 +721,54 @@ describe('undoRedo with snapshot strategy', () => {
     store.trigger.inc()
     store.trigger.inc()
     store.trigger.inc()
+    const afterIncs = store.getSnapshot().context.count
     store.trigger.undo()
+    const afterFirstUndo = store.getSnapshot().context.count
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(1)
+    const afterSecondUndo = store.getSnapshot().context.count
     store.trigger.redo()
-    expect(store.getSnapshot().context.count).toBe(2)
+    const afterFirstRedo = store.getSnapshot().context.count
+    store.trigger.redo()
+    const afterSecondRedo = store.getSnapshot().context.count
 
-    // Undoing the redo returns to the snapshot the redo moved away from
-    store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(0)
-    store.trigger.redo()
-    expect(store.getSnapshot().context.count).toBe(1)
+    yield* expect([
+      afterIncs,
+      afterFirstUndo,
+      afterSecondUndo,
+      afterFirstRedo,
+      afterSecondRedo,
+    ]).toEqual([3, 2, 1, 2, 3])
   })
 
-  it('should group events by transaction ID', () => {
+  it('should undo back into history after a redo', function*({ expect }) {
+    const store = createStore({
+      context: { count: 0 },
+      on: {
+        inc: (ctx) => ({ count: ctx.count + 1 }),
+      },
+    }).with(undoRedo({ strategy: 'snapshot' }))
+
+    store.trigger.inc()
+    store.trigger.inc()
+    store.trigger.inc()
+    store.trigger.undo()
+    store.trigger.undo()
+    const afterUndos = store.getSnapshot().context.count
+    store.trigger.redo()
+    const afterRedo = store.getSnapshot().context.count
+
+    store.trigger.undo()
+    const afterSecondRedoUndo = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterThirdUndo = store.getSnapshot().context.count
+    store.trigger.redo()
+    const afterSecondRedo = store.getSnapshot().context.count
+
+    yield* expect([afterUndos, afterRedo, afterSecondRedoUndo, afterThirdUndo, afterSecondRedo])
+      .toEqual([1, 2, 1, 0, 1])
+  })
+
+  it('should group events by transaction ID', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -683,26 +784,29 @@ describe('undoRedo with snapshot strategy', () => {
       }),
     )
 
-    // First transaction
     store.trigger.inc()
     store.trigger.inc()
-    expect(store.getSnapshot().context.count).toBe(2)
+    const afterFirstTransaction = store.getSnapshot().context.count
 
-    // Second transaction
     store.trigger.dec()
     store.trigger.dec()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterSecondTransaction = store.getSnapshot().context.count
 
-    // Undo second transaction (both decrements)
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(2)
+    const afterFirstUndo = store.getSnapshot().context.count
 
-    // Undo first transaction (both increments)
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterSecondUndo = store.getSnapshot().context.count
+
+    yield* expect([
+      afterFirstTransaction,
+      afterSecondTransaction,
+      afterFirstUndo,
+      afterSecondUndo,
+    ]).toEqual([2, 0, 2, 0])
   })
 
-  it('should undo back into history after redoing a transaction', () => {
+  it('should undo back into history after redoing a transaction', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -718,26 +822,29 @@ describe('undoRedo with snapshot strategy', () => {
       }),
     )
 
-    // First transaction
     store.trigger.inc()
     store.trigger.inc()
 
-    // Second transaction
     store.trigger.dec()
     store.trigger.dec()
 
     store.trigger.undo()
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterUndos = store.getSnapshot().context.count
 
-    // Redo the first transaction, then undo it again
     store.trigger.redo()
-    expect(store.getSnapshot().context.count).toBe(2)
+    const afterRedo = store.getSnapshot().context.count
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterSecondUndo = store.getSnapshot().context.count
+
+    yield* expect({ afterUndos, afterRedo, afterSecondUndo }).toEqual({
+      afterUndos: 0,
+      afterRedo: 2,
+      afterSecondUndo: 0,
+    })
   })
 
-  it('should maintain correct state when interleaving undo/redo with new events', () => {
+  it('should maintain correct state when interleaving undo/redo with new events', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -746,23 +853,32 @@ describe('undoRedo with snapshot strategy', () => {
       },
     }).with(undoRedo({ strategy: 'snapshot' }))
 
-    store.trigger.inc() // 1
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.inc() // 2
-    expect(store.getSnapshot().context.count).toBe(2)
-    store.trigger.undo() // 1
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.dec() // 0
-    expect(store.getSnapshot().context.count).toBe(0)
-    store.trigger.undo() // 1
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.redo() // 0
-    expect(store.getSnapshot().context.count).toBe(0)
+    store.trigger.inc()
+    const afterFirstInc = store.getSnapshot().context.count
+    store.trigger.inc()
+    const afterSecondInc = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterFirstUndo = store.getSnapshot().context.count
+    store.trigger.dec()
+    const afterDec = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterSecondUndo = store.getSnapshot().context.count
+    store.trigger.redo()
+    const afterRedo = store.getSnapshot().context.count
+    const atEnd = store.getSnapshot().context.count
 
-    expect(store.getSnapshot().context.count).toBe(0)
+    yield* expect([
+      afterFirstInc,
+      afterSecondInc,
+      afterFirstUndo,
+      afterDec,
+      afterSecondUndo,
+      afterRedo,
+      atEnd,
+    ]).toEqual([1, 2, 1, 0, 1, 0, 0])
   })
 
-  it('should do nothing when undoing with empty history', () => {
+  it('should do nothing when undoing with empty history', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -772,10 +888,11 @@ describe('undoRedo with snapshot strategy', () => {
 
     const initialSnapshot = store.getSnapshot()
     store.trigger.undo()
-    expect(store.getSnapshot().context).toEqual(initialSnapshot.context)
+
+    yield* expect(store.getSnapshot().context).toEqual(initialSnapshot.context)
   })
 
-  it('should do nothing when redoing with empty future stack', () => {
+  it('should do nothing when redoing with empty future stack', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -785,10 +902,11 @@ describe('undoRedo with snapshot strategy', () => {
 
     const initialSnapshot = store.getSnapshot()
     store.trigger.redo()
-    expect(store.getSnapshot().context).toEqual(initialSnapshot.context)
+
+    yield* expect(store.getSnapshot().context).toEqual(initialSnapshot.context)
   })
 
-  it('should clear redo stack when new events occur after undo', () => {
+  it('should clear redo stack when new events occur after undo', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -797,25 +915,26 @@ describe('undoRedo with snapshot strategy', () => {
       },
     }).with(undoRedo({ strategy: 'snapshot' }))
 
-    store.trigger.inc() // 1
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.inc() // 2
-    expect(store.getSnapshot().context.count).toBe(2)
-    store.trigger.undo() // 1
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.dec() // 0
+    store.trigger.inc()
+    const afterFirstInc = store.getSnapshot().context.count
+    store.trigger.inc()
+    const afterSecondInc = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterUndo = store.getSnapshot().context.count
+    store.trigger.dec()
 
-    // Redo should not work as we added a new event after undo
     store.trigger.redo()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterRedo = store.getSnapshot().context.count
+
+    yield* expect([afterFirstInc, afterSecondInc, afterUndo, afterRedo]).toEqual([1, 2, 1, 0])
   })
 
-  it('should skip non-undoable events', () => {
+  it('should skip non-undoable events', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
         inc: (ctx) => ({ count: ctx.count + 1 }),
-        log: (ctx) => ctx, // No state change, just logging
+        log: (ctx) => ctx,
       },
     }).with(
       undoRedo({
@@ -824,16 +943,18 @@ describe('undoRedo with snapshot strategy', () => {
       }),
     )
 
-    store.trigger.inc() // count = 1
-    store.trigger.log() // count = 1 (logged but not tracked)
-    store.trigger.inc() // count = 2
-    expect(store.getSnapshot().context.count).toBe(2)
+    store.trigger.inc()
+    store.trigger.log()
+    store.trigger.inc()
+    const afterEvents = store.getSnapshot().context.count
 
-    store.trigger.undo() // count = 1 (skips log event)
-    expect(store.getSnapshot().context.count).toBe(1)
+    store.trigger.undo()
+    const afterUndo = store.getSnapshot().context.count
+
+    yield* expect({ afterEvents, afterUndo }).toEqual({ afterEvents: 2, afterUndo: 1 })
   })
 
-  it('should respect historyLimit', () => {
+  it('should respect historyLimit', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -841,21 +962,22 @@ describe('undoRedo with snapshot strategy', () => {
       },
     }).with(undoRedo({ strategy: 'snapshot', historyLimit: 2 }))
 
-    store.trigger.inc() // 1
-    store.trigger.inc() // 2
-    store.trigger.inc() // 3
-    store.trigger.inc() // 4
+    store.trigger.inc()
+    store.trigger.inc()
+    store.trigger.inc()
+    store.trigger.inc()
 
-    // Can only undo 2 times because of history limit
-    store.trigger.undo() // 3
-    expect(store.getSnapshot().context.count).toBe(3)
-    store.trigger.undo() // 2
-    expect(store.getSnapshot().context.count).toBe(2)
-    store.trigger.undo() // Should stay at 2 (limit reached)
-    expect(store.getSnapshot().context.count).toBe(2)
+    store.trigger.undo()
+    const afterFirstUndo = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterSecondUndo = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterThirdUndo = store.getSnapshot().context.count
+
+    yield* expect([afterFirstUndo, afterSecondUndo, afterThirdUndo]).toEqual([3, 2, 2])
   })
 
-  it('should apply historyLimit during redo', () => {
+  it('should apply historyLimit during redo', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -863,23 +985,23 @@ describe('undoRedo with snapshot strategy', () => {
       },
     }).with(undoRedo({ strategy: 'snapshot', historyLimit: 2 }))
 
-    store.trigger.inc() // 1
-    store.trigger.inc() // 2
-    store.trigger.undo() // 1
-    store.trigger.undo() // 0
-    store.trigger.redo() // 1
-    store.trigger.redo() // 2
-    store.trigger.inc() // 3
-    store.trigger.inc() // 4
+    store.trigger.inc()
+    store.trigger.inc()
+    store.trigger.undo()
+    store.trigger.undo()
+    store.trigger.redo()
+    store.trigger.redo()
+    store.trigger.inc()
+    store.trigger.inc()
 
-    // History should be trimmed to last 2 snapshots
-    store.trigger.undo() // 3
-    store.trigger.undo() // 2
-    store.trigger.undo() // Should stay at 2
-    expect(store.getSnapshot().context.count).toBe(2)
+    store.trigger.undo()
+    store.trigger.undo()
+    store.trigger.undo()
+
+    yield* expect(store.getSnapshot().context.count).toBe(2)
   })
 
-  it('should preserve context with skipped events', () => {
+  it('should preserve context with skipped events', function*({ expect }) {
     const store = createStore({
       context: { count: 0, logs: [] as string[] },
       on: {
@@ -896,20 +1018,28 @@ describe('undoRedo with snapshot strategy', () => {
       }),
     )
 
-    store.trigger.inc() // count = 1
-    store.trigger.log({ message: 'first log' }) // logs = ['first log'] (not tracked)
-    store.trigger.inc() // count = 2
+    store.trigger.inc()
+    store.trigger.log({ message: 'first log' })
+    store.trigger.inc()
 
-    expect(store.getSnapshot().context.count).toBe(2)
-    expect(store.getSnapshot().context.logs).toEqual(['first log'])
+    const afterEvents = {
+      count: store.getSnapshot().context.count,
+      logs: store.getSnapshot().context.logs,
+    }
 
-    // Undo should restore snapshot before second inc, which includes the log
-    store.trigger.undo() // count = 1, logs = ['first log']
-    expect(store.getSnapshot().context.count).toBe(1)
-    expect(store.getSnapshot().context.logs).toEqual(['first log'])
+    store.trigger.undo()
+    const afterUndo = {
+      count: store.getSnapshot().context.count,
+      logs: store.getSnapshot().context.logs,
+    }
+
+    yield* expect({ afterEvents, afterUndo }).toEqual({
+      afterEvents: { count: 2, logs: ['first log'] },
+      afterUndo: { count: 1, logs: ['first log'] },
+    })
   })
 
-  it('should handle transaction grouping with historyLimit', () => {
+  it('should handle transaction grouping with historyLimit', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -924,33 +1054,28 @@ describe('undoRedo with snapshot strategy', () => {
       }),
     )
 
-    // First transaction
-    store.trigger.inc() // 1
-    store.trigger.inc() // 2
+    store.trigger.inc()
+    store.trigger.inc()
 
-    // Second transaction
-    store.trigger.dec() // 1
-    store.trigger.dec() // 0
+    store.trigger.dec()
+    store.trigger.dec()
 
-    // Third transaction
-    store.trigger.inc() // 1
-    store.trigger.inc() // 2
+    store.trigger.inc()
+    store.trigger.inc()
 
-    // Undo third transaction
-    store.trigger.undo() // 0
-    expect(store.getSnapshot().context.count).toBe(0)
+    store.trigger.undo()
+    const afterFirstUndo = store.getSnapshot().context.count
 
-    // Undo second transaction - only partial history available due to limit
-    // The {2,dec} snapshot was trimmed, so we can only restore to {1,dec}
-    store.trigger.undo() // 1
-    expect(store.getSnapshot().context.count).toBe(1)
+    store.trigger.undo()
+    const afterSecondUndo = store.getSnapshot().context.count
 
-    // Can't undo further due to limit (first transaction's snapshots were trimmed)
-    store.trigger.undo() // Should stay at 1
-    expect(store.getSnapshot().context.count).toBe(1)
+    store.trigger.undo()
+    const afterThirdUndo = store.getSnapshot().context.count
+
+    yield* expect([afterFirstUndo, afterSecondUndo, afterThirdUndo]).toEqual([0, 1, 1])
   })
 
-  it('should use compare function to skip duplicate snapshots', () => {
+  it('should use compare function to skip duplicate snapshots', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -964,21 +1089,22 @@ describe('undoRedo with snapshot strategy', () => {
       }),
     )
 
-    store.trigger.inc() // count = 1
-    store.trigger.noop() // count = 1 (duplicate, not saved)
-    store.trigger.noop() // count = 1 (duplicate, not saved)
-    store.trigger.inc() // count = 2
+    store.trigger.inc()
+    store.trigger.noop()
+    store.trigger.noop()
+    store.trigger.inc()
 
-    // Should only have 2 snapshots in history (0 and 1), not 4
-    store.trigger.undo() // count = 1
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.undo() // count = 0
-    expect(store.getSnapshot().context.count).toBe(0)
-    store.trigger.undo() // Should stay at 0
-    expect(store.getSnapshot().context.count).toBe(0)
+    store.trigger.undo()
+    const afterFirstUndo = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterSecondUndo = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterThirdUndo = store.getSnapshot().context.count
+
+    yield* expect([afterFirstUndo, afterSecondUndo, afterThirdUndo]).toEqual([1, 0, 0])
   })
 
-  it('should save all snapshots when no compare function is provided', () => {
+  it('should save all snapshots when no compare function is provided', function*({ expect }) {
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -987,23 +1113,25 @@ describe('undoRedo with snapshot strategy', () => {
       },
     }).with(undoRedo({ strategy: 'snapshot' }))
 
-    store.trigger.inc() // count = 1
-    store.trigger.noop() // count = 1 (saved even though duplicate)
-    store.trigger.noop() // count = 1 (saved even though duplicate)
-    store.trigger.inc() // count = 2
+    store.trigger.inc()
+    store.trigger.noop()
+    store.trigger.noop()
+    store.trigger.inc()
 
-    // Should have 4 snapshots in history (0, 1, 1, 1)
-    store.trigger.undo() // count = 1
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.undo() // count = 1
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.undo() // count = 1
-    expect(store.getSnapshot().context.count).toBe(1)
-    store.trigger.undo() // count = 0
-    expect(store.getSnapshot().context.count).toBe(0)
+    store.trigger.undo()
+    const afterFirstUndo = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterSecondUndo = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterThirdUndo = store.getSnapshot().context.count
+    store.trigger.undo()
+    const afterFourthUndo = store.getSnapshot().context.count
+
+    yield* expect([afterFirstUndo, afterSecondUndo, afterThirdUndo, afterFourthUndo])
+      .toEqual([1, 1, 1, 0])
   })
 
-  it('should preserve orthogonal context during undo and redo', () => {
+  it('should preserve orthogonal context during undo and redo', function*({ expect }) {
     const store = createStore({
       context: { document: 'a', viewport: 0 },
       on: {
@@ -1030,27 +1158,36 @@ describe('undoRedo with snapshot strategy', () => {
     store.trigger.updateDocument({ document: 'b' })
     store.trigger.updateViewport({ viewport: 10 })
     store.trigger.undo()
-    expect(store.getSnapshot().context).toEqual({
-      document: 'a',
-      viewport: 10,
-    })
+    const afterFirstUndo = store.getSnapshot().context
 
     store.trigger.redo()
-    expect(store.getSnapshot().context).toEqual({
-      document: 'b',
-      viewport: 10,
-    })
+    const afterRedo = store.getSnapshot().context
 
     store.trigger.updateViewport({ viewport: 20 })
     store.trigger.undo()
-    expect(store.getSnapshot().context).toEqual({
-      document: 'a',
-      viewport: 20,
+    const afterSecondUndo = store.getSnapshot().context
+
+    yield* expect({ afterFirstUndo, afterRedo, afterSecondUndo }).toEqual({
+      afterFirstUndo: { document: 'a', viewport: 10 },
+      afterRedo: { document: 'b', viewport: 10 },
+      afterSecondUndo: { document: 'a', viewport: 20 },
     })
   })
 
-  it('should pass current, next, and direction to restore', () => {
-    const restore = vi.fn(({ next }) => next)
+  it('should pass current, next, and direction to restore', function*({ expect }) {
+    const restoreArgs: Array<{
+      current: { count: number }
+      next: { count: number }
+      direction: 'undo' | 'redo'
+    }> = []
+    const restore = (options: {
+      current: { count: number }
+      next: { count: number }
+      direction: 'undo' | 'redo'
+    }) => {
+      restoreArgs.push(options)
+      return options.next
+    }
     const store = createStore({
       context: { count: 0 },
       on: { inc: (context) => ({ count: context.count + 1 }) },
@@ -1060,14 +1197,26 @@ describe('undoRedo with snapshot strategy', () => {
     store.trigger.undo()
     store.trigger.redo()
 
-    expect(restore.mock.calls.map(([args]) => args)).toEqual([
+    yield* expect(restoreArgs).toEqual([
       { current: { count: 1 }, next: { count: 0 }, direction: 'undo' },
       { current: { count: 0 }, next: { count: 1 }, direction: 'redo' },
     ])
   })
 
-  it('should restore once for a transaction group', () => {
-    const restore = vi.fn(({ next }) => next)
+  it('should restore once for a transaction group', function*({ expect }) {
+    const restoreArgs: Array<{
+      current: { count: number }
+      next: { count: number }
+      direction: 'undo' | 'redo'
+    }> = []
+    const restore = (options: {
+      current: { count: number }
+      next: { count: number }
+      direction: 'undo' | 'redo'
+    }) => {
+      restoreArgs.push(options)
+      return options.next
+    }
     const store = createStore({
       context: { count: 0 },
       on: { inc: (context) => ({ count: context.count + 1 }) },
@@ -1082,15 +1231,30 @@ describe('undoRedo with snapshot strategy', () => {
     store.trigger.inc()
     store.trigger.inc()
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(0)
+    const afterFirstUndo = store.getSnapshot().context.count
     store.trigger.redo()
-    expect(store.getSnapshot().context.count).toBe(2)
+    const afterRedo = store.getSnapshot().context.count
     store.trigger.undo()
-    expect(store.getSnapshot().context.count).toBe(0)
-    expect(restore).toHaveBeenCalledTimes(3)
+    const afterSecondUndo = store.getSnapshot().context.count
+
+    yield* expect({
+      afterFirstUndo,
+      afterRedo,
+      afterSecondUndo,
+      restoreCalls: restoreArgs,
+    }).toEqual({
+      afterFirstUndo: 0,
+      afterRedo: 2,
+      afterSecondUndo: 0,
+      restoreCalls: [
+        { current: { count: 2 }, next: { count: 0 }, direction: 'undo' },
+        { current: { count: 0 }, next: { count: 2 }, direction: 'redo' },
+        { current: { count: 2 }, next: { count: 0 }, direction: 'undo' },
+      ],
+    })
   })
 
-  it('should run emitted events after restored context commits', () => {
+  it('should run emitted events after restored context commits', function*({ expect }) {
     const observed: number[] = []
     const store = createStore({
       schemas: {
@@ -1112,10 +1276,10 @@ describe('undoRedo with snapshot strategy', () => {
     store.trigger.inc()
     store.trigger.undo()
 
-    expect(observed).toEqual([0])
+    yield* expect(observed).toEqual([0])
   })
 
-  it('should run effects after restored context commits', () => {
+  it('should run effects after restored context commits', function*({ expect }) {
     const observed: number[] = []
     const store = createStore({
       context: { count: 0 },
@@ -1125,7 +1289,7 @@ describe('undoRedo with snapshot strategy', () => {
         strategy: 'snapshot',
         restore: ({ next }, enqueue) => {
           enqueue.effect((enq) => {
-            observed.push(enq!.getSnapshot().context.count)
+            observed.push(enq.getSnapshot().context.count)
           })
           return next
         },
@@ -1135,11 +1299,16 @@ describe('undoRedo with snapshot strategy', () => {
     store.trigger.inc()
     store.trigger.undo()
 
-    expect(observed).toEqual([0])
+    yield* expect(observed).toEqual([0])
   })
 
-  it('should apply triggered transitions and effects once without history', () => {
-    const effect = vi.fn()
+  it('should apply triggered transitions and effects once without history', function*({ expect }) {
+    const effectArgs: number[] = []
+    const effect = (enqueue: {
+      getSnapshot: () => { context: { count: number } }
+    }) => {
+      effectArgs.push(enqueue.getSnapshot().context.count)
+    }
     const store = createStore({
       context: { count: 0 },
       on: {
@@ -1160,18 +1329,28 @@ describe('undoRedo with snapshot strategy', () => {
     )
 
     store.trigger.inc()
-    expect(store.can.undo()).toBe(true)
-    expect(effect).not.toHaveBeenCalled()
+    const canUndoBefore = store.can.undo()
+    const effectCallsBefore = [...effectArgs]
     store.trigger.undo()
+    const count = store.getSnapshot().context.count
+    const effectCalls = [...effectArgs]
+    const canUndoAfter = store.can.undo()
 
-    expect(store.getSnapshot().context.count).toBe(10)
-    expect(effect).toHaveBeenCalledTimes(1)
-    expect(store.can.undo()).toBe(false)
+    yield* expect({ canUndoBefore, effectCallsBefore, count, effectCalls, canUndoAfter })
+      .toEqual({ canUndoBefore: true, effectCallsBefore: [], count: 10, effectCalls: [10], canUndoAfter: false })
   })
 
-  it('should not execute enqueued effects when checking can', () => {
-    const effect = vi.fn()
-    const emitted = vi.fn()
+  it('should not execute enqueued effects when checking can', function*({ expect }) {
+    const effectArgs: number[] = []
+    const effect = (enqueue: {
+      getSnapshot: () => { context: { count: number } }
+    }) => {
+      effectArgs.push(enqueue.getSnapshot().context.count)
+    }
+    const emittedArgs: unknown[][] = []
+    const emitted = (...args: unknown[]) => {
+      emittedArgs.push(args)
+    }
     const store = createStore({
       schemas: { emitted: { restored: z.object({}) } },
       context: { count: 0 },
@@ -1189,16 +1368,34 @@ describe('undoRedo with snapshot strategy', () => {
     store.on('restored', emitted)
 
     store.trigger.inc()
-    expect(store.can.undo()).toBe(true)
-    expect(effect).not.toHaveBeenCalled()
-    expect(emitted).not.toHaveBeenCalled()
+    const canUndo = store.can.undo()
+    const effectCallsBefore = [...effectArgs]
+    const emittedCallsBefore = [...emittedArgs]
     store.trigger.undo()
-    expect(store.can.redo()).toBe(true)
-    expect(effect).toHaveBeenCalledTimes(1)
-    expect(emitted).toHaveBeenCalledTimes(1)
+    const canRedo = store.can.redo()
+    const effectCalls = [...effectArgs]
+    const emittedCalls = [...emittedArgs]
+
+    yield* expect({
+      canUndo,
+      effectCallsBefore,
+      emittedCallsBefore,
+      canRedo,
+      effectCalls,
+      emittedCalls,
+    }).toEqual({
+      canUndo: true,
+      effectCallsBefore: [],
+      emittedCallsBefore: [],
+      canRedo: true,
+      effectCalls: [0],
+      emittedCalls: [[{ type: 'restored' }]],
+    })
   })
 
-  it('should infer restore context, emitted events, and triggers', () => {
+  it('should infer restore context, emitted events, and triggers', function*({ expect }) {
+    yield* expect(createStore({ context: {}, on: {} }).getSnapshot().context).toEqual({})
+
     createStore({
       schemas: {
         emitted: { restored: z.object({ count: z.number() }) },
