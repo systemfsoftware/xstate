@@ -4,6 +4,7 @@ import { Effect, Layer } from 'effect'
 import { failReportOf, passReportOf } from './__fixtures__/checkReports.js'
 import {
   makeEscapeBlindSubject,
+  makeLeafPathSubject,
   makeStateMatchingSubject,
   type MatchingSubject,
   runMatchCommand,
@@ -52,28 +53,30 @@ Feature('Judging the published state matching against a model of active state pa
             'observed',
             (s) => Effect.succeed(s.subject.observed),
           ),
-          And('each call form answered both ways, and escaped state ids were matched')((s, expect) => {
-            const { answers, idArguments, escapedIdArguments } = s.observed
-            return expect(
-              { answers: Object.values(answers), idArguments, escapedIdArguments },
-              JSON.stringify(s.observed),
-            ).toSatisfy(
-              (value) =>
-                value.answers.every((tally) => tally.matched > 0 && tally.unmatched > 0) &&
-                value.idArguments > 0 &&
-                value.escapedIdArguments > 0,
-              'data-first, data-last and snapshot matching each returned true and false, and state ids with an escaped dot were passed',
-            )
-          }),
+          And('each call form answered both ways, escaped state ids were matched, and leaf names held a dot')(
+            (s, expect) => {
+              const { answers, idArguments, escapedIdArguments, nestedDottedLeafArguments } = s.observed
+              return expect(
+                { answers: Object.values(answers), idArguments, escapedIdArguments, nestedDottedLeafArguments },
+                JSON.stringify(s.observed),
+              ).toSatisfy(
+                (value) =>
+                  value.answers.every((tally) => tally.matched > 0 && tally.unmatched > 0) &&
+                  value.idArguments > 0 &&
+                  value.escapedIdArguments > 0 &&
+                  value.nestedDottedLeafArguments > 0,
+                'data-first, data-last and snapshot matching each returned true and false, state ids with an escaped dot were passed, and state values nested a leaf name containing a dot',
+              )
+            },
+          ),
         ),
     )
 
-    scenario(
-      'A matcher that splits state ids on escaped dots is caught as a model divergence',
+    const divergesFromTheModel = (makeSubject: () => MatchingSubject) =>
       Gherkin.Do.pipe(
-        Given('a subject that splits every state id on each dot, escaped or not, before matching')(
+        Given('a planted subject that reads state values differently from the published matching')(
           'subject',
-          () => Effect.succeed(makeEscapeBlindSubject()),
+          () => Effect.succeed(makeSubject()),
         ),
         When('the same check runs the matches drawn from seed 1 through it')(
           'report',
@@ -91,6 +94,14 @@ Feature('Judging the published state matching against a model of active state pa
               'the run diverged from the model at a numbered step, reported as the model-diverged judgement',
             )
         }),
-      ),
+      )
+
+    scenario(
+      'A matcher that splits state ids on escaped dots is caught as a model divergence',
+      divergesFromTheModel(makeEscapeBlindSubject),
+    )
+    scenario(
+      'A matcher that reads a leaf name inside a state value as a dotted path is caught as a model divergence',
+      divergesFromTheModel(makeLeafPathSubject),
     )
   })

@@ -1,12 +1,11 @@
 import { Match, Schema } from 'effect'
 
-const LeafName = Schema.Literals(['a', 'b', 'c'])
-const RegionName = Schema.Literals(['a', 'b', 'c', 'd.e'])
+const StateName = Schema.Literals(['a', 'b', 'c', 'd.e'])
 
 const regionsOf = <S extends Schema.Top>(region: S) =>
-  Schema.Array(Schema.Tuple([RegionName, region])).check(Schema.isMinLength(1), Schema.isMaxLength(3))
+  Schema.Array(Schema.Tuple([StateName, region])).check(Schema.isMinLength(1), Schema.isMaxLength(3))
 
-const LeafTree = LeafName
+const LeafTree = StateName
 const Depth1Tree = Schema.Union([LeafTree, regionsOf(LeafTree)])
 const Depth2Tree = Schema.Union([LeafTree, regionsOf(Depth1Tree)])
 const ParentTree = Schema.Union([LeafTree, regionsOf(Depth2Tree)])
@@ -46,8 +45,17 @@ const leafPathsOf = (value: ModelStateValue, prefix: StatePath): ReadonlyArray<S
 const isPrefixOf = (path: StatePath, longer: StatePath): boolean =>
   path.length <= longer.length && path.every((key, index) => longer[index] === key)
 
-const activeStatesInclude = (parent: ModelStateValue, child: ModelStateValue): boolean =>
-  leafPathsOf(parent, []).every((wanted) => leafPathsOf(child, []).some((active) => isPrefixOf(wanted, active)))
+type Form = MatchCommand['parentForm']
+
+const readsAsDottedPath = (tree: StateTree, form: Form): tree is string => typeof tree === 'string' && form === 'value'
+
+const argumentPathsOf = (tree: StateTree, form: Form): ReadonlyArray<StatePath> =>
+  readsAsDottedPath(tree, form) ? [tree.split('.')] : leafPathsOf(stateValueOf(tree), [])
+
+const childFormOf = (command: MatchCommand): Form => command.call === 'snapshot' ? 'value' : command.childForm
+
+const activeStatesInclude = (parent: ReadonlyArray<StatePath>, child: ReadonlyArray<StatePath>): boolean =>
+  parent.every((wanted) => child.some((active) => isPrefixOf(wanted, active)))
 
 export const MatchingState = Schema.Struct({ matched: Schema.Finite, unmatched: Schema.Finite })
 export type MatchingState = Schema.Schema.Type<typeof MatchingState>
@@ -56,7 +64,10 @@ const initialMatchingState: MatchingState = { matched: 0, unmatched: 0 }
 
 const stepMatching = (state: MatchingState, command: MatchCommand): readonly [MatchingState, boolean] => {
   const [parent, child] = treesOf(command)
-  const included = activeStatesInclude(stateValueOf(parent), stateValueOf(child))
+  const included = activeStatesInclude(
+    argumentPathsOf(parent, command.parentForm),
+    argumentPathsOf(child, childFormOf(command)),
+  )
   return [
     included
       ? { matched: state.matched + 1, unmatched: state.unmatched }
