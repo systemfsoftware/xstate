@@ -36,6 +36,17 @@ describe('crypto option', () => {
     yield* expect({ prefix, session }).toEqual({ prefix: '0123456789abcdef0123456789abcdef', session: '0' })
   })
 
+  it("ignores the option on an actor that joins a parent's system", function*({ expect }) {
+    const parent = createActor(createMachine({}), { crypto: { randomUUID: () => 'parent' } })
+    const child = createActor(createMachine({}), { parent, crypto: { randomUUID: () => 'child' } })
+    const parentParts = sessionParts(parent.sessionId)
+    const childParts = sessionParts(child.sessionId)
+    yield* expect({ prefix: childParts.prefix, sameSystem: childParts.system === parentParts.system }).toEqual({
+      prefix: 'parent',
+      sameSystem: true,
+    })
+  })
+
   it('falls back without failing when the injected Web Crypto is unusable', function*({ expect }) {
     const unusable = {
       getRandomValues: (): never => {
