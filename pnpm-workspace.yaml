@@ -11,6 +11,7 @@ catalog:
   "@effect/tsgo": ^0.50.0
   "@microsoft/api-extractor": 7.59.1
   "@systemfsoftware/arethetypeswrong-cli": file:.sfs-deps/arethetypeswrong-cli-4.2.0.tgz
+  "@systemfsoftware/conformance-spec": file:.sfs-deps/conformance-spec-1.0.0.tgz
   "@systemfsoftware/effect-cell-types": file:.sfs-deps/effect-cell-types-12.0.0.tgz
   "@systemfsoftware/effect-gherkin-spec": file:.sfs-deps/effect-gherkin-spec-7.0.1.tgz
   "@systemfsoftware/effect-schema-discovery": file:.sfs-deps/effect-schema-discovery-2.0.0.tgz
@@ -76,6 +77,7 @@ minimumReleaseAgeExclude:
   - "@effect-agent/*"
 verifyDepsBeforeRun: warn
 overrides:
+  "@systemfsoftware/conformance-spec": "catalog:"
   "@systemfsoftware/effect-cell-types": "catalog:"
   "@systemfsoftware/effect-gherkin-spec": "catalog:"
   "@systemfsoftware/effect-schema-discovery": "catalog:"
