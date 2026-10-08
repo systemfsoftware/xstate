@@ -20,6 +20,14 @@ describe('crypto option', () => {
     yield* expect({ prefix, session }).toEqual({ prefix: '0000001000000200000030000004', session: '0' })
   })
 
+  it('draws the prefix from the array an injected getRandomValues returns', function*({ expect }) {
+    const actor = createActor(createMachine({}), {
+      crypto: { getRandomValues: () => new Uint32Array([5, 6, 7, 8]) },
+    })
+    const { prefix, session } = sessionParts(actor.sessionId)
+    yield* expect({ prefix, session }).toEqual({ prefix: '0000005000000600000070000008', session: '0' })
+  })
+
   it('uses the injected randomUUID when getRandomValues is unavailable', function*({ expect }) {
     const actor = createActor(createMachine({}), {
       crypto: { randomUUID: () => '01234567-89ab-cdef-0123-456789abcdef' },
