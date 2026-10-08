@@ -60,7 +60,7 @@ describe('@xstate/test/vitest', () => {
       maxCommands: 6,
       events,
       sut: counterSut(true),
-      failures: { dir },
+      failures: { dir: join(dir, 'fails') },
     },
     { message: /Property observation diverged/ },
   )
@@ -71,9 +71,25 @@ describe('@xstate/test/vitest', () => {
     stopWhen: (snapshot) => snapshot.context.count >= 3,
   })
 
-  it('saved the expected failure under the test file and name', () => {
-    expect(readdirSync(dir)).toEqual([
-      'test-vitest.test.ts-xstate-test-vitest-it.model.fails-expects-a-counterexample',
+  it('saved the expected failure under the test file and name', async (context) => {
+    const registered: Array<(context: unknown) => Promise<void>> = []
+    withModelTests((_name, fn) => {
+      registered.push(fn)
+    }).model.fails('saved', counterMachine, {
+      seed: 1,
+      numRuns: 50,
+      maxCommands: 6,
+      events,
+      sut: counterSut(true),
+      failures: { dir: join(dir, 'saved') },
+    })
+    const run = registered[0]
+    if (run === undefined) {
+      throw new Error('expected a registered test')
+    }
+    await run(context)
+    expect(readdirSync(join(dir, 'saved'))).toEqual([
+      'test-vitest.test.ts-xstate-test-vitest-saved-the-expected-failure-under-the-test-file-and-name',
     ])
   })
 })
