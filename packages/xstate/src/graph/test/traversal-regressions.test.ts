@@ -1,4 +1,4 @@
-import { expect, it, vi } from 'vitest'
+import { it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createLogic, createMachine } from '../../index.js'
 import { getAdjacencyMap } from '../adjacency.js'
@@ -11,7 +11,7 @@ const counter = createLogic({
   run: ({ context, event }) => event.type === 'INC' ? { context: context + 1 } : undefined,
 })
 
-it('replays a finite sequence on unbounded logic', () => {
+it('replays a finite sequence on unbounded logic', function*({ expect }) {
   const [path] = getPathsFromEvents(counter, [{ type: 'INC' }], {
     input: 10,
     limit: 1,
@@ -19,11 +19,13 @@ it('replays a finite sequence on unbounded logic', () => {
   if (path === undefined) {
     throw new Error('expected a first path')
   }
-  expect(path.state.context).toBe(11)
-  expect(path.weight).toBe(1)
+  yield* expect({ context: path.state.context, weight: path.weight }).toEqual({
+    context: 11,
+    weight: 1,
+  })
 })
 
-it('uses input when replaying machine events', () => {
+it('uses input when replaying machine events', function*({ expect }) {
   const machine = createMachine({
     schemas: { input: z.object({ count: z.number() }) },
     context: ({ input }) => input,
@@ -32,12 +34,12 @@ it('uses input when replaying machine events', () => {
   if (firstPath === undefined) {
     throw new Error('expected a first path')
   }
-  expect(firstPath.state.context).toEqual({ count: 7 })
+  yield* expect(firstPath.state.context).toEqual({ count: 7 })
 })
 
 it.each([getShortestPaths, getSimplePaths])(
   'initializes custom logic once in a path generator',
-  (generate) => {
+  function*(generate, { expect }) {
     let initializations = 0
     const logic = {
       ...counter,
@@ -48,14 +50,17 @@ it.each([getShortestPaths, getSimplePaths])(
         context: initializations++,
       }),
     }
-    expect(generate(logic, { input: 0, events: [] })).toHaveLength(1)
-    expect(initializations).toBe(1)
+    const paths = generate(logic, { input: 0, events: [] })
+    yield* expect({ pathCount: paths.length, initializations }).toEqual({
+      pathCount: 1,
+      initializations: 1,
+    })
   },
 )
 
 it.each(['constructor', 'toString', '__proto__', ''])(
   'accepts arbitrary serialized state/event keys: %s',
-  (key) => {
+  function*(key, { expect }) {
     const options = {
       input: 0,
       events: [{ type: 'INC' }],
@@ -64,45 +69,66 @@ it.each(['constructor', 'toString', '__proto__', ''])(
       serializeEvent: () => key,
     }
     const adjacency = getAdjacencyMap(counter, options)
-    expect(Object.keys(adjacency)).toEqual([key, 'end'])
     const adjacencyNode = adjacency[key as keyof typeof adjacency]
     if (adjacencyNode === undefined) {
       throw new Error('expected an adjacency node')
     }
-    expect(Object.keys(adjacencyNode.transitions)).toEqual([key])
-    for (const generate of [getShortestPaths, getSimplePaths]) {
+    const results = [getShortestPaths, getSimplePaths].map((generate) => {
       const path = generate(counter, options).find(
         (p) => p.state.context === 1,
       )!
-      expect(path.weight).toBe(1)
-      expect(path.steps).toHaveLength(2)
-    }
+      return { weight: path.weight, stepCount: path.steps.length }
+    })
+    yield* expect({
+      adjacencyKeys: Object.keys(adjacency),
+      nodeTransitionKeys: Object.keys(adjacencyNode.transitions),
+      results,
+    }).toEqual({
+      adjacencyKeys: [key, 'end'],
+      nodeTransitionKeys: [key],
+      results: [
+        { weight: 1, stepCount: 2 },
+        { weight: 1, stepCount: 2 },
+      ],
+    })
   },
 )
 
-it('honors replay filters, stopping and target predicates', () => {
+it('honors replay filters, stopping and target predicates', function*({ expect }) {
   const events = [{ type: 'INC' }, { type: 'INC' }]
-  expect(() =>
-    getPathsFromEvents(counter, events, {
-      input: 0,
-      filterEvents: (state) => state.context === 0,
-    })
-  ).toThrow('Invalid transition')
-  expect(() =>
-    getPathsFromEvents(counter, events, {
-      input: 0,
-      stopWhen: (state) => state.context === 1,
-    })
-  ).toThrow('Invalid transition')
-  expect(
-    getPathsFromEvents(counter, events, {
+  const outcomeOf = (run: () => unknown): unknown => {
+    try {
+      run()
+      return 'no error thrown'
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  }
+  yield* expect({
+    filterFailure: outcomeOf(() =>
+      getPathsFromEvents(counter, events, {
+        input: 0,
+        filterEvents: (state) => state.context === 0,
+      })
+    ),
+    stopFailure: outcomeOf(() =>
+      getPathsFromEvents(counter, events, {
+        input: 0,
+        stopWhen: (state) => state.context === 1,
+      })
+    ),
+    targetPaths: getPathsFromEvents(counter, events, {
       input: 0,
       toState: (state) => state.context === 3,
     }),
-  ).toEqual([])
+  }).toEqual({
+    filterFailure: expect.stringContaining('Invalid transition'),
+    stopFailure: expect.stringContaining('Invalid transition'),
+    targetPaths: [],
+  })
 })
 
-it('replays the last permitted override candidate matching a serialized event', () => {
+it('replays the last permitted override candidate matching a serialized event', function*({ expect }) {
   const logic = createLogic({
     context: 0,
     run: ({
@@ -125,27 +151,46 @@ it('replays the last permitted override candidate matching a serialized event', 
   if (path === undefined) {
     throw new Error('expected a first path')
   }
-  expect(path.state.context).toBe(2)
   const secondStep = path.steps[1]
   if (secondStep === undefined) {
     throw new Error('expected a second step')
   }
-  expect(secondStep.event).toEqual({ type: 'ADD', amount: 100 })
+  yield* expect({
+    context: path.state.context,
+    secondEvent: secondStep.event,
+  }).toEqual({
+    context: 2,
+    secondEvent: { type: 'ADD', amount: 100 },
+  })
 })
 
 it.each(['shortest', 'simple', 'replay'] as const)(
   'initializes a machine once with explicit undefined fromState: %s',
-  (mode) => {
+  function*(mode, { expect }) {
     const machine = createMachine({ initial: 'idle', states: { idle: {} } })
-    const initialize = vi.spyOn(machine, 'getInitialSnapshot')
+    const calls: Array<Parameters<typeof machine.getInitialSnapshot>> = []
+    const recording = Object.create(machine) as typeof machine
+    recording.getInitialSnapshot = (
+      ...args: Parameters<typeof machine.getInitialSnapshot>
+    ) => {
+      calls.push(args)
+      return machine.getInitialSnapshot(...args)
+    }
     const options = { fromState: undefined, events: [] }
     const paths = mode === 'replay'
-      ? getPathsFromEvents(machine, [], options)
+      ? getPathsFromEvents(recording, [], options)
       : (mode === 'shortest' ? getShortestPaths : getSimplePaths)(
-        machine,
+        recording,
         options,
       )
-    expect(paths).toHaveLength(1)
-    expect(initialize).toHaveBeenCalledTimes(1)
+    yield* expect({
+      pathCount: paths.length,
+      initializeCalls: calls.length,
+      initializeInputs: calls.map(([, input]) => input),
+    }).toEqual({
+      pathCount: 1,
+      initializeCalls: 1,
+      initializeInputs: [undefined],
+    })
   },
 )

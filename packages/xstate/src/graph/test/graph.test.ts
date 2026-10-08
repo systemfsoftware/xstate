@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
-import { createStateConfig } from '../../createMachine.js'
 import {
   createLogic,
   createMachine,
@@ -20,6 +19,13 @@ import {
   toDirectedGraph,
 } from '../index.js'
 
+const snapshotState = (state: Snapshot<unknown>): unknown =>
+  isMachineSnapshot(state)
+    ? state.value
+    : 'context' in state
+    ? state.context
+    : state
+
 function getPathsSnapshot<
   TSnapshot extends Snapshot<unknown>,
   TEvent extends EventObject,
@@ -37,49 +43,32 @@ function getPathSnapshot<
   steps: Array<{ state: unknown; eventType: string }>
 } {
   return {
-    state: isMachineSnapshot(path.state)
-      ? path.state.value
-      : 'context' in path.state
-      ? path.state.context
-      : path.state,
+    state: snapshotState(path.state),
     steps: path.steps.map((step) => ({
-      state: isMachineSnapshot(step.state)
-        ? step.state.value
-        : 'context' in step.state
-        ? step.state.context
-        : step.state,
+      state: snapshotState(step.state),
       eventType: step.event.type,
     })),
   }
 }
 
+const thrownBy = (run: () => unknown): unknown => {
+  try {
+    run()
+    return undefined
+  } catch (error) {
+    return error
+  }
+}
+
+const pathSteps = <TSnapshot extends Snapshot<unknown>, TEvent extends EventObject>(
+  path: StatePath<TSnapshot, TEvent>,
+) =>
+  path.steps.map((step) => ({
+    eventType: step.event.type,
+    state: snapshotState(step.state),
+  }))
+
 describe('@xstate/graph', () => {
-  const pedestrianStates = createStateConfig({
-    initial: 'walk',
-    states: {
-      walk: {
-        on: {
-          // PED_COUNTDOWN: {
-          //   target: 'wait',
-          //   actions: ['startCountdown']
-          // }
-          PED_COUNTDOWN: (_, enq) => {
-            enq(function startCountdown() {})
-
-            return { target: 'wait' }
-          },
-        },
-      },
-      wait: {
-        on: {
-          PED_COUNTDOWN: { target: 'stop' },
-        },
-      },
-      stop: {},
-      flashing: {},
-    },
-  })
-
   const lightMachine = createMachine({
     id: 'light',
     initial: 'green',
@@ -96,11 +85,6 @@ describe('@xstate/graph', () => {
         on: {
           TIMER: { target: 'yellow' },
           POWER_OUTAGE: { target: 'red.flashing' },
-          // PUSH_BUTTON: [
-          //   {
-          //     actions: ['doNothing'] // pushing the walk button never does anything
-          //   }
-          // ]
           PUSH_BUTTON: (_, enq) => {
             enq(function doNothing() {})
           },
@@ -117,13 +101,30 @@ describe('@xstate/graph', () => {
           TIMER: { target: 'green' },
           POWER_OUTAGE: { target: 'red.flashing' },
         },
-        ...pedestrianStates,
-      } as any,
+        initial: 'walk',
+        states: {
+          walk: {
+            on: {
+              PED_COUNTDOWN: (_, enq) => {
+                enq(function startCountdown() {})
+
+                return { target: 'wait' }
+              },
+            },
+          },
+          wait: {
+            on: {
+              PED_COUNTDOWN: { target: 'stop' },
+            },
+          },
+          stop: {},
+          flashing: {},
+        },
+      },
     },
   })
 
   const condMachine = createMachine({
-    // types: {} as { context: CondMachineCtx; events: CondMachineEvents },
     schemas: {
       context: z.object({
         id: z.string().optional(),
@@ -193,69 +194,267 @@ describe('@xstate/graph', () => {
   })
 
   describe('getDescendantStateNodes()', () => {
-    it('should return an array of all nodes', () => {
+    it('should return an array of all nodes', function*({ expect }) {
       const nodes = getDescendantStateNodes(lightMachine)
-      expect(nodes.every((node) => node instanceof StateNode)).toBe(true)
-      expect(nodes.map((node) => node.id).sort()).toEqual([
-        'light.green',
-        'light.red',
-        'light.red.flashing',
-        'light.red.stop',
-        'light.red.wait',
-        'light.red.walk',
-        'light.yellow',
-      ])
+
+      yield* expect({
+        areStateNodes: nodes.map((node) => node instanceof StateNode),
+        ids: nodes.map((node) => node.id).sort(),
+      }).toEqual({
+        areStateNodes: [true, true, true, true, true, true, true],
+        ids: [
+          'light.green',
+          'light.red',
+          'light.red.flashing',
+          'light.red.stop',
+          'light.red.wait',
+          'light.red.walk',
+          'light.yellow',
+        ],
+      })
     })
 
-    it('should return an array of all nodes (parallel)', () => {
+    it('should return an array of all nodes (parallel)', function*({ expect }) {
       const nodes = getDescendantStateNodes(parallelMachine)
-      expect(nodes.every((node) => node instanceof StateNode)).toBe(true)
-      expect(nodes.map((node) => node.id).sort()).toEqual([
-        'p.a',
-        'p.a.a1',
-        'p.a.a2',
-        'p.a.a3',
-        'p.b',
-        'p.b.b1',
-        'p.b.b2',
-        'p.b.b3',
-      ])
+
+      yield* expect({
+        areStateNodes: nodes.map((node) => node instanceof StateNode),
+        ids: nodes.map((node) => node.id).sort(),
+      }).toEqual({
+        areStateNodes: [true, true, true, true, true, true, true, true],
+        ids: [
+          'p.a',
+          'p.a.a1',
+          'p.a.a2',
+          'p.a.a3',
+          'p.b',
+          'p.b.b1',
+          'p.b.b2',
+          'p.b.b3',
+        ],
+      })
     })
   })
 
   describe('getShortestPaths()', () => {
-    it('should return a mapping of shortest paths to all states', () => {
+    it('should return a mapping of shortest paths to all states', function*({ expect }) {
       const paths = getShortestPaths(lightMachine)
 
-      expect(getPathsSnapshot(paths)).toMatchSnapshot('shortest paths')
+      yield* expect(getPathsSnapshot(paths)).toEqual([
+        {
+          state: 'green',
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'green',
+            },
+          ],
+        },
+        {
+          state: 'yellow',
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'green',
+            },
+            {
+              eventType: 'TIMER',
+              state: 'yellow',
+            },
+          ],
+        },
+        {
+          state: {
+            red: 'flashing',
+          },
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'green',
+            },
+            {
+              eventType: 'POWER_OUTAGE',
+              state: {
+                red: 'flashing',
+              },
+            },
+          ],
+        },
+        {
+          state: {
+            red: 'walk',
+          },
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'green',
+            },
+            {
+              eventType: 'TIMER',
+              state: 'yellow',
+            },
+            {
+              eventType: 'TIMER',
+              state: {
+                red: 'walk',
+              },
+            },
+          ],
+        },
+        {
+          state: {
+            red: 'wait',
+          },
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'green',
+            },
+            {
+              eventType: 'TIMER',
+              state: 'yellow',
+            },
+            {
+              eventType: 'TIMER',
+              state: {
+                red: 'walk',
+              },
+            },
+            {
+              eventType: 'PED_COUNTDOWN',
+              state: {
+                red: 'wait',
+              },
+            },
+          ],
+        },
+        {
+          state: {
+            red: 'stop',
+          },
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'green',
+            },
+            {
+              eventType: 'TIMER',
+              state: 'yellow',
+            },
+            {
+              eventType: 'TIMER',
+              state: {
+                red: 'walk',
+              },
+            },
+            {
+              eventType: 'PED_COUNTDOWN',
+              state: {
+                red: 'wait',
+              },
+            },
+            {
+              eventType: 'PED_COUNTDOWN',
+              state: {
+                red: 'stop',
+              },
+            },
+          ],
+        },
+      ])
     })
 
-    it('should return a mapping of shortest paths to all states (parallel)', () => {
+    it('should return a mapping of shortest paths to all states (parallel)', function*({ expect }) {
       const paths = getShortestPaths(parallelMachine)
-      expect(getPathsSnapshot(paths)).toMatchSnapshot(
-        'shortest paths parallel',
-      )
+
+      yield* expect(getPathsSnapshot(paths)).toEqual([
+        {
+          state: {
+            a: 'a1',
+            b: 'b1',
+          },
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: {
+                a: 'a1',
+                b: 'b1',
+              },
+            },
+          ],
+        },
+        {
+          state: {
+            a: 'a2',
+            b: 'b2',
+          },
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: {
+                a: 'a1',
+                b: 'b1',
+              },
+            },
+            {
+              eventType: '2',
+              state: {
+                a: 'a2',
+                b: 'b2',
+              },
+            },
+          ],
+        },
+        {
+          state: {
+            a: 'a3',
+            b: 'b3',
+          },
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: {
+                a: 'a1',
+                b: 'b1',
+              },
+            },
+            {
+              eventType: '3',
+              state: {
+                a: 'a3',
+                b: 'b3',
+              },
+            },
+          ],
+        },
+      ])
     })
 
-    it('the initial state should have a single-length path', () => {
+    it('the initial state should have a single-length path', function*({ expect }) {
       const shortestPaths = getShortestPaths(lightMachine)
 
-      expect(
-        shortestPaths.find((path) =>
-          path.state.matches(
-            lightMachine.getInitialSnapshot(createMockActorScope()).value,
-          )
-        )!.steps,
-      ).toHaveLength(1)
+      yield* expect(
+        pathSteps(
+          shortestPaths.find((path) =>
+            path.state.matches(
+              lightMachine.getInitialSnapshot(createMockActorScope()).value,
+            )
+          )!,
+        ),
+      ).toEqual([
+        {
+          eventType: '@xstate.init',
+          state: 'green',
+        },
+      ])
     })
 
-    it.skip('should not throw when a condition is present', () => {
-      expect(() => getShortestPaths(condMachine)).not.toThrow()
+    it.skip('should not throw when a condition is present', function*({ expect }) {
+      yield* expect(() => getShortestPaths(condMachine)).not.toThrow()
     })
 
-    it.skip('should represent conditional paths based on context', () => {
+    it.skip('should represent conditional paths based on context', function*({ expect }) {
       const machine = createMachine({
-        // types: {} as { context: CondMachineCtx; events: CondMachineEvents },
         schemas: {
           context: z.object({
             id: z.string().optional(),
@@ -274,26 +473,12 @@ describe('@xstate/graph', () => {
         states: {
           pending: {
             on: {
-              // EVENT: [
-              //   {
-              //     target: 'foo',
-              //     guard: ({ event }) => event.id === 'foo'
-              //   },
-              //   { target: 'bar' }
-              // ],
               EVENT: ({ event }) => {
                 if (event.id === 'foo') {
                   return { target: 'foo' }
                 }
                 return { target: 'bar' }
               },
-              // STATE: [
-              //   {
-              //     target: 'foo',
-              //     guard: ({ context }) => context.id === 'foo'
-              //   },
-              //   { target: 'bar' }
-              // ]
               STATE: ({ context }) => {
                 if (context.id === 'foo') {
                   return { target: 'foo' }
@@ -319,49 +504,325 @@ describe('@xstate/graph', () => {
         ],
       })
 
-      expect(getPathsSnapshot(paths)).toMatchSnapshot(
-        'shortest paths conditional',
-      )
+      yield* expect(getPathsSnapshot(paths)).toEqual([
+        {
+          state: 'pending',
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'pending',
+            },
+          ],
+        },
+        {
+          state: 'bar',
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'pending',
+            },
+            {
+              eventType: 'EVENT',
+              state: 'bar',
+            },
+          ],
+        },
+        {
+          state: 'foo',
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'pending',
+            },
+            {
+              eventType: 'STATE',
+              state: 'foo',
+            },
+          ],
+        },
+      ])
     })
   })
 
   describe('getSimplePaths()', () => {
-    it('should return a mapping of arrays of simple paths to all states', () => {
+    it('should return a mapping of arrays of simple paths to all states', function*({ expect }) {
       const paths = getSimplePaths(lightMachine)
 
-      // Multiple different ways to get to flashing (from any other state)
-      expect(paths.map((path) => path.state.value)).toMatchInlineSnapshot(`
-        [
-          "green",
-          "yellow",
+      yield* expect({
+        values: paths.map((path) => path.state.value),
+        paths: getPathsSnapshot(paths),
+      }).toEqual({
+        values: [
+          'green',
+          'yellow',
           {
-            "red": "flashing",
+            red: 'flashing',
           },
           {
-            "red": "flashing",
+            red: 'flashing',
           },
           {
-            "red": "flashing",
+            red: 'flashing',
           },
           {
-            "red": "flashing",
+            red: 'flashing',
           },
           {
-            "red": "flashing",
+            red: 'flashing',
           },
           {
-            "red": "walk",
+            red: 'walk',
           },
           {
-            "red": "wait",
+            red: 'wait',
           },
           {
-            "red": "stop",
+            red: 'stop',
           },
-        ]
-      `)
-
-      expect(getPathsSnapshot(paths)).toMatchSnapshot()
+        ],
+        paths: [
+          {
+            state: 'green',
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+            ],
+          },
+          {
+            state: 'yellow',
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+              {
+                eventType: 'TIMER',
+                state: 'yellow',
+              },
+            ],
+          },
+          {
+            state: {
+              red: 'flashing',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+              {
+                eventType: 'TIMER',
+                state: 'yellow',
+              },
+              {
+                eventType: 'TIMER',
+                state: {
+                  red: 'walk',
+                },
+              },
+              {
+                eventType: 'POWER_OUTAGE',
+                state: {
+                  red: 'flashing',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              red: 'flashing',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+              {
+                eventType: 'TIMER',
+                state: 'yellow',
+              },
+              {
+                eventType: 'TIMER',
+                state: {
+                  red: 'walk',
+                },
+              },
+              {
+                eventType: 'PED_COUNTDOWN',
+                state: {
+                  red: 'wait',
+                },
+              },
+              {
+                eventType: 'POWER_OUTAGE',
+                state: {
+                  red: 'flashing',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              red: 'flashing',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+              {
+                eventType: 'TIMER',
+                state: 'yellow',
+              },
+              {
+                eventType: 'TIMER',
+                state: {
+                  red: 'walk',
+                },
+              },
+              {
+                eventType: 'PED_COUNTDOWN',
+                state: {
+                  red: 'wait',
+                },
+              },
+              {
+                eventType: 'PED_COUNTDOWN',
+                state: {
+                  red: 'stop',
+                },
+              },
+              {
+                eventType: 'POWER_OUTAGE',
+                state: {
+                  red: 'flashing',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              red: 'flashing',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+              {
+                eventType: 'TIMER',
+                state: 'yellow',
+              },
+              {
+                eventType: 'POWER_OUTAGE',
+                state: {
+                  red: 'flashing',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              red: 'flashing',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+              {
+                eventType: 'POWER_OUTAGE',
+                state: {
+                  red: 'flashing',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              red: 'walk',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+              {
+                eventType: 'TIMER',
+                state: 'yellow',
+              },
+              {
+                eventType: 'TIMER',
+                state: {
+                  red: 'walk',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              red: 'wait',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+              {
+                eventType: 'TIMER',
+                state: 'yellow',
+              },
+              {
+                eventType: 'TIMER',
+                state: {
+                  red: 'walk',
+                },
+              },
+              {
+                eventType: 'PED_COUNTDOWN',
+                state: {
+                  red: 'wait',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              red: 'stop',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'green',
+              },
+              {
+                eventType: 'TIMER',
+                state: 'yellow',
+              },
+              {
+                eventType: 'TIMER',
+                state: {
+                  red: 'walk',
+                },
+              },
+              {
+                eventType: 'PED_COUNTDOWN',
+                state: {
+                  red: 'wait',
+                },
+              },
+              {
+                eventType: 'PED_COUNTDOWN',
+                state: {
+                  red: 'stop',
+                },
+              },
+            ],
+          },
+        ],
+      })
     })
 
     const equivMachine = createMachine({
@@ -372,33 +833,125 @@ describe('@xstate/graph', () => {
       },
     })
 
-    it('should return a mapping of simple paths to all states (parallel)', () => {
+    it('should return a mapping of simple paths to all states (parallel)', function*({ expect }) {
       const paths = getSimplePaths(parallelMachine)
 
-      expect(paths.map((p) => p.state.value)).toMatchInlineSnapshot(`
-        [
+      yield* expect({
+        values: paths.map((p) => p.state.value),
+        paths: getPathsSnapshot(paths),
+      }).toEqual({
+        values: [
           {
-            "a": "a1",
-            "b": "b1",
+            a: 'a1',
+            b: 'b1',
           },
           {
-            "a": "a2",
-            "b": "b2",
+            a: 'a2',
+            b: 'b2',
           },
           {
-            "a": "a3",
-            "b": "b3",
+            a: 'a3',
+            b: 'b3',
           },
           {
-            "a": "a3",
-            "b": "b3",
+            a: 'a3',
+            b: 'b3',
           },
-        ]
-      `)
-      expect(getPathsSnapshot(paths)).toMatchSnapshot('simple paths parallel')
+        ],
+        paths: [
+          {
+            state: {
+              a: 'a1',
+              b: 'b1',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: {
+                  a: 'a1',
+                  b: 'b1',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              a: 'a2',
+              b: 'b2',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: {
+                  a: 'a1',
+                  b: 'b1',
+                },
+              },
+              {
+                eventType: '2',
+                state: {
+                  a: 'a2',
+                  b: 'b2',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              a: 'a3',
+              b: 'b3',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: {
+                  a: 'a1',
+                  b: 'b1',
+                },
+              },
+              {
+                eventType: '2',
+                state: {
+                  a: 'a2',
+                  b: 'b2',
+                },
+              },
+              {
+                eventType: '3',
+                state: {
+                  a: 'a3',
+                  b: 'b3',
+                },
+              },
+            ],
+          },
+          {
+            state: {
+              a: 'a3',
+              b: 'b3',
+            },
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: {
+                  a: 'a1',
+                  b: 'b1',
+                },
+              },
+              {
+                eventType: '3',
+                state: {
+                  a: 'a3',
+                  b: 'b3',
+                },
+              },
+            ],
+          },
+        ],
+      })
     })
 
-    it('should return multiple paths for equivalent transitions', () => {
+    it('should return multiple paths for equivalent transitions', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -409,52 +962,85 @@ describe('@xstate/graph', () => {
 
       const paths = getSimplePaths(machine)
 
-      expect(paths.map((p) => p.state.value)).toMatchInlineSnapshot(`
-        [
-          "a",
-          "b",
-          "b",
-        ]
-      `)
-      expect(getPathsSnapshot(paths)).toMatchSnapshot(
-        'simple paths equal transitions',
-      )
+      yield* expect({
+        values: paths.map((p) => p.state.value),
+        paths: getPathsSnapshot(paths),
+      }).toEqual({
+        values: ['a', 'b', 'b'],
+        paths: [
+          {
+            state: 'a',
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'a',
+              },
+            ],
+          },
+          {
+            state: 'b',
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'a',
+              },
+              {
+                eventType: 'FOO',
+                state: 'b',
+              },
+            ],
+          },
+          {
+            state: 'b',
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'a',
+              },
+              {
+                eventType: 'BAR',
+                state: 'b',
+              },
+            ],
+          },
+        ],
+      })
     })
 
-    it('should return a single-length path for the initial state', () => {
-      expect(
-        getSimplePaths(lightMachine).find((p) =>
-          p.state.matches(
-            lightMachine.getInitialSnapshot(createMockActorScope()).value,
-          )
+    it('should return a single-length path for the initial state', function*({ expect }) {
+      yield* expect({
+        lightInitial: pathSteps(
+          getSimplePaths(lightMachine).find((p) =>
+            p.state.matches(
+              lightMachine.getInitialSnapshot(createMockActorScope()).value,
+            )
+          )!,
         ),
-      ).toBeDefined()
-      expect(
-        getSimplePaths(lightMachine).find((p) =>
-          p.state.matches(
-            lightMachine.getInitialSnapshot(createMockActorScope()).value,
-          )
-        )!.steps,
-      ).toHaveLength(1)
-      expect(
-        getSimplePaths(equivMachine).find((p) =>
-          p.state.matches(
-            equivMachine.getInitialSnapshot(createMockActorScope()).value,
-          )
-        )!,
-      ).toBeDefined()
-      expect(
-        getSimplePaths(equivMachine).find((p) =>
-          p.state.matches(
-            equivMachine.getInitialSnapshot(createMockActorScope()).value,
-          )
-        )!.steps,
-      ).toHaveLength(1)
+        equivInitial: pathSteps(
+          getSimplePaths(equivMachine).find((p) =>
+            p.state.matches(
+              equivMachine.getInitialSnapshot(createMockActorScope()).value,
+            )
+          )!,
+        ),
+      }).toEqual({
+        lightInitial: [
+          {
+            eventType: '@xstate.init',
+            state: 'green',
+          },
+        ],
+        equivInitial: [
+          {
+            eventType: '@xstate.init',
+            state: 'a',
+          },
+        ],
+      })
     })
 
-    it('should return value-based paths', () => {
+    it('should return value-based paths', function*({ expect }) {
       const countMachine = createMachine({
-        // types: {} as { context: Ctx; events: Events },
         schemas: {
           context: z.object({
             count: z.number(),
@@ -471,10 +1057,6 @@ describe('@xstate/graph', () => {
         },
         states: {
           start: {
-            // always: {
-            //   target: 'finish',
-            //   guard: ({ context }) => context.count === 3
-            // },
             always: ({ context }) => {
               if (context.count === 3) {
                 return {
@@ -499,18 +1081,77 @@ describe('@xstate/graph', () => {
         events: [{ type: 'INC', value: 1 } as const],
       })
 
-      expect(paths.map((p) => p.state.value)).toMatchInlineSnapshot(`
-        [
-          "start",
-          "start",
-          "start",
-          "finish",
-        ]
-      `)
-      expect(getPathsSnapshot(paths)).toMatchSnapshot('simple paths context')
+      yield* expect({
+        values: paths.map((p) => p.state.value),
+        paths: getPathsSnapshot(paths),
+      }).toEqual({
+        values: ['start', 'start', 'start', 'finish'],
+        paths: [
+          {
+            state: 'start',
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'start',
+              },
+            ],
+          },
+          {
+            state: 'start',
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'start',
+              },
+              {
+                eventType: 'INC',
+                state: 'start',
+              },
+            ],
+          },
+          {
+            state: 'start',
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'start',
+              },
+              {
+                eventType: 'INC',
+                state: 'start',
+              },
+              {
+                eventType: 'INC',
+                state: 'start',
+              },
+            ],
+          },
+          {
+            state: 'finish',
+            steps: [
+              {
+                eventType: '@xstate.init',
+                state: 'start',
+              },
+              {
+                eventType: 'INC',
+                state: 'start',
+              },
+              {
+                eventType: 'INC',
+                state: 'start',
+              },
+              {
+                eventType: 'INC',
+                state: 'finish',
+              },
+            ],
+          },
+        ],
+      })
     })
 
-    it('should support filtering disabled events', () => {
+    it('should support filtering disabled events', function*({ expect }) {
       const machine = createMachine({
         id: 'guarded-default-events',
         initial: 'start',
@@ -545,22 +1186,21 @@ describe('@xstate/graph', () => {
         toState: (state) => state.status === 'done',
       })
 
-      expect(paths.map((path) => path.steps.map((step) => step.event.type)))
-        .toMatchInlineSnapshot(`
+      yield* expect(
+        paths.map((path) => path.steps.map((step) => step.event.type)),
+      ).toEqual([
         [
-          [
-            "@xstate.init",
-            "NEXT",
-            "ALLOW",
-            "PROCEED",
-          ],
-        ]
-      `)
+          '@xstate.init',
+          'NEXT',
+          'ALLOW',
+          'PROCEED',
+        ],
+      ])
     })
   })
 
   describe('getPathFromEvents()', () => {
-    it('should return a path to the last entered state by the event sequence', () => {
+    it('should return a path to the last entered state by the event sequence', function*({ expect }) {
       const paths = getPathsFromEvents(lightMachine, [
         { type: 'TIMER' },
         { type: 'TIMER' },
@@ -568,17 +1208,52 @@ describe('@xstate/graph', () => {
         { type: 'POWER_OUTAGE' },
       ])
 
-      expect(paths.length).toEqual(1)
-
       const path = paths[0]
       if (path === undefined) {
         throw new Error('expected a path from events')
       }
-      expect(getPathSnapshot(path)).toMatchSnapshot('path from events')
+
+      yield* expect({
+        count: paths.length,
+        path: getPathSnapshot(path),
+      }).toEqual({
+        count: 1,
+        path: {
+          state: {
+            red: 'flashing',
+          },
+          steps: [
+            {
+              eventType: '@xstate.init',
+              state: 'green',
+            },
+            {
+              eventType: 'TIMER',
+              state: 'yellow',
+            },
+            {
+              eventType: 'TIMER',
+              state: {
+                red: 'walk',
+              },
+            },
+            {
+              eventType: 'TIMER',
+              state: 'green',
+            },
+            {
+              eventType: 'POWER_OUTAGE',
+              state: {
+                red: 'flashing',
+              },
+            },
+          ],
+        },
+      })
     })
 
-    it.skip('should throw when an invalid event sequence is provided', () => {
-      expect(() =>
+    it.skip('should throw when an invalid event sequence is provided', function*({ expect }) {
+      yield* expect(() =>
         getPathsFromEvents(lightMachine, [
           { type: 'TIMER' },
           {
@@ -586,24 +1261,30 @@ describe('@xstate/graph', () => {
             type: 'INVALID_EVENT',
           },
         ])
-      ).toThrow()
+      ).toThrow('Invalid transition from')
     })
 
-    it('should return a path from a specified from-state', () => {
+    it('should return a path from a specified from-state', function*({ expect }) {
       const path = getPathsFromEvents(lightMachine, [{ type: 'TIMER' }], {
         fromState: lightMachine.resolveState({ value: 'yellow' }),
       })[0]
-
-      expect(path).toBeDefined()
 
       if (path === undefined) {
         throw new Error('expected a path')
       }
 
-      expect(path.state.matches('red')).toBeTruthy()
+      yield* expect({
+        value: path.state.value,
+        matchesRed: path.state.matches('red'),
+      }).toEqual({
+        value: {
+          red: 'walk',
+        },
+        matchesRed: true,
+      })
     })
 
-    it('does not treat custom logic with a getStateNodeById property as a machine', () => {
+    it('does not treat custom logic with a getStateNodeById property as a machine', function*({ expect }) {
       const logic = Object.assign(
         createLogic({
           context: 0,
@@ -625,12 +1306,12 @@ describe('@xstate/graph', () => {
         throw new Error('expected a path')
       }
 
-      expect(path.state.context).toBe(1)
+      yield* expect(path.state.context).toBe(1)
     })
   })
 
   describe('toDirectedGraph', () => {
-    it('should represent a statechart as a directed graph', () => {
+    it('should represent a statechart as a directed graph', function*({ expect }) {
       const machine = createMachine({
         id: 'light',
         initial: 'green',
@@ -652,10 +1333,101 @@ describe('@xstate/graph', () => {
 
       const digraph = toDirectedGraph(machine)
 
-      expect(digraph).toMatchSnapshot()
+      const digraphJson: unknown = JSON.parse(JSON.stringify(digraph))
+
+      yield* expect(digraphJson).toEqual({
+        children: [
+          {
+            children: [],
+            edges: [
+              {
+                label: {
+                  text: 'TIMER',
+                },
+                source: 'light.green',
+                target: 'light.yellow',
+              },
+            ],
+            id: 'light.green',
+          },
+          {
+            children: [],
+            edges: [
+              {
+                label: {
+                  text: 'TIMER',
+                },
+                source: 'light.yellow',
+                target: 'light.red',
+              },
+            ],
+            id: 'light.yellow',
+          },
+          {
+            children: [
+              {
+                children: [],
+                edges: [
+                  {
+                    label: {
+                      text: 'COUNTDOWN',
+                    },
+                    source: 'light.red.walk',
+                    target: 'light.red.wait',
+                  },
+                ],
+                id: 'light.red.walk',
+              },
+              {
+                children: [],
+                edges: [
+                  {
+                    label: {
+                      text: 'COUNTDOWN',
+                    },
+                    source: 'light.red.wait',
+                    target: 'light.red.stop',
+                  },
+                ],
+                id: 'light.red.wait',
+              },
+              {
+                children: [],
+                edges: [
+                  {
+                    label: {
+                      text: 'COUNTDOWN',
+                    },
+                    source: 'light.red.stop',
+                    target: 'light.red.finished',
+                  },
+                ],
+                id: 'light.red.stop',
+              },
+              {
+                children: [],
+                edges: [],
+                id: 'light.red.finished',
+              },
+            ],
+            edges: [
+              {
+                label: {
+                  text: 'xstate.done.state',
+                },
+                source: 'light.red',
+                target: 'light.green',
+              },
+            ],
+            id: 'light.red',
+          },
+        ],
+        edges: [],
+        id: 'light',
+      })
     })
 
-    it('does not rely on StateMachine constructor identity', () => {
+    it('does not rely on StateMachine constructor identity', function*({ expect }) {
       const machine = createMachine({
         id: 'light',
         initial: 'green',
@@ -668,17 +1440,18 @@ describe('@xstate/graph', () => {
         getPrototypeOf: () => null,
       })
 
-      expect(machineFromAnotherPackageInstance).not.toBeInstanceOf(
-        machine.constructor,
-      )
-      expect(toDirectedGraph(machineFromAnotherPackageInstance).id).toBe(
-        'light',
-      )
+      yield* expect({
+        prototype: Object.getPrototypeOf(machineFromAnotherPackageInstance),
+        id: toDirectedGraph(machineFromAnotherPackageInstance).id,
+      }).toEqual({
+        prototype: null,
+        id: 'light',
+      })
     })
   })
 })
 
-it('simple paths for transition functions', () => {
+it('simple paths for transition functions', function*({ expect }) {
   const transition = createLogic({
     context: 0,
     run: ({ context, event }) => {
@@ -699,10 +1472,76 @@ it('simple paths for transition functions', () => {
     serializeState: (v, e) => JSON.stringify(v) + ' | ' + JSON.stringify(e),
   })
 
-  expect(getPathsSnapshot(a)).toMatchSnapshot()
+  yield* expect(getPathsSnapshot(a)).toEqual([
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 1,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 2,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'b',
+          state: 2,
+        },
+      ],
+    },
+  ])
 })
 
-it('shortest paths for transition functions', () => {
+it('shortest paths for transition functions', function*({ expect }) {
   const transition = createLogic({
     context: 0,
     run: ({ context, event }) => {
@@ -723,11 +1562,409 @@ it('shortest paths for transition functions', () => {
     serializeState: (v, e) => JSON.stringify(v) + ' | ' + JSON.stringify(e),
   })
 
-  expect(getPathsSnapshot(a)).toMatchSnapshot()
+  yield* expect(getPathsSnapshot(a)).toEqual([
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 1,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+      ],
+    },
+    {
+      state: 1,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+      ],
+    },
+    {
+      state: 1,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+      ],
+    },
+    {
+      state: 1,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+      ],
+    },
+    {
+      state: 1,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'b',
+          state: 2,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'b',
+          state: 2,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'b',
+          state: 2,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 0,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+      ],
+    },
+    {
+      state: 2,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'b',
+          state: 2,
+        },
+      ],
+    },
+    {
+      state: 2,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'b',
+          state: 2,
+        },
+      ],
+    },
+    {
+      state: 2,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'b',
+          state: 2,
+        },
+      ],
+    },
+    {
+      state: 2,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'b',
+          state: 2,
+        },
+      ],
+    },
+    {
+      state: 2,
+      steps: [
+        {
+          eventType: '@xstate.init',
+          state: 0,
+        },
+        {
+          eventType: 'reset',
+          state: 0,
+        },
+        {
+          eventType: 'b',
+          state: 0,
+        },
+        {
+          eventType: 'a',
+          state: 1,
+        },
+        {
+          eventType: 'b',
+          state: 2,
+        },
+      ],
+    },
+  ])
 })
 
 describe('filtering', () => {
-  it('should not traverse past filtered states', () => {
+  it('should not traverse past filtered states', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -754,32 +1991,30 @@ describe('filtering', () => {
       stopWhen: (state) => state.context.count === 5,
     })
 
-    expect(shortestPaths.map((p) => p.state.context)).toMatchInlineSnapshot(`
-[
-  {
-    "count": 0,
-  },
-  {
-    "count": 1,
-  },
-  {
-    "count": 2,
-  },
-  {
-    "count": 3,
-  },
-  {
-    "count": 4,
-  },
-  {
-    "count": 5,
-  },
-]
-`)
+    yield* expect(shortestPaths.map((p) => p.state.context)).toEqual([
+      {
+        count: 0,
+      },
+      {
+        count: 1,
+      },
+      {
+        count: 2,
+      },
+      {
+        count: 3,
+      },
+      {
+        count: 4,
+      },
+      {
+        count: 5,
+      },
+    ])
   })
 })
 
-it('should provide previous state for serializeState()', () => {
+it('should provide previous state for serializeState()', function*({ expect }) {
   const machine = createMachine({
     initial: 'a',
     states: {
@@ -803,10 +2038,7 @@ it('should provide previous state for serializeState()', () => {
     },
   })
 
-  // Should be [1, 4]:
-  // 1 (a)
-  // 4 (a -> b -> c -> a)
-  expect(
+  yield* expect(
     shortestPaths
       .filter((path) => path.state.matches('a'))
       .map((path) => path.steps.length),
@@ -815,7 +2047,7 @@ it('should provide previous state for serializeState()', () => {
 
 it.each([getShortestPaths, getSimplePaths])(
   'from-state can be specified',
-  (pathGetter) => {
+  function*(pathGetter, { expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -835,21 +2067,21 @@ it.each([getShortestPaths, getSimplePaths])(
       fromState: machine.resolveState({ value: 'b' }),
     })
 
-    // Instead of taking 2 steps to reach state 'b' (A, B),
-    // there should exist a path that takes 1 step
-    expect(
-      paths.find((path) => path.state.matches('b') && path.steps.length === 1),
-    ).toBeTruthy()
+    const toB = paths.find((path) => path.state.matches('b') && path.steps.length === 1)
+    const toA = paths.find((path) => path.state.matches('a') && path.steps.length > 0)
 
-    // Instead of starting at state 'a', it should take > 0 steps to reach 'a'
-    expect(
-      paths.find((path) => path.state.matches('a') && path.steps.length > 0),
-    ).toBeTruthy()
+    yield* expect({
+      stepsToOneStepB: toB?.steps.length ?? 0,
+      toAHasSteps: (toA?.steps.length ?? 0) > 0,
+    }).toEqual({
+      stepsToOneStepB: 1,
+      toAHasSteps: true,
+    })
   },
 )
 
 describe('joinPaths()', () => {
-  it('should join two paths', () => {
+  it('should join two paths', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -876,24 +2108,22 @@ describe('joinPaths()', () => {
       throw new Error('expected a path to c')
     }
 
-    expect(pathToB).toBeDefined()
-    expect(pathToC).toBeDefined()
-
     const pathToBAndC = joinPaths(pathToB, pathToC)
 
-    expect(pathToBAndC.steps.map((step) => step.event.type))
-      .toMatchInlineSnapshot(`
-        [
-          "@xstate.init",
-          "NEXT",
-          "TO_C",
-        ]
-      `)
-
-    expect(pathToBAndC.state.matches('c')).toBeTruthy()
+    yield* expect({
+      eventTypes: pathToBAndC.steps.map((step) => step.event.type),
+      matchesC: pathToBAndC.state.matches('c'),
+    }).toEqual({
+      eventTypes: [
+        '@xstate.init',
+        'NEXT',
+        'TO_C',
+      ],
+      matchesC: true,
+    })
   })
 
-  it('should not join two paths with mismatched source/target states', () => {
+  it('should not join two paths with mismatched source/target states', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -918,11 +2148,29 @@ describe('joinPaths()', () => {
       throw new Error('expected a path to c from a')
     }
 
-    expect(pathToB).toBeDefined()
-    expect(pathToCFromA).toBeDefined()
-
-    expect(() => {
+    const error = thrownBy(() => {
       joinPaths(pathToB, pathToCFromA)
-    }).toThrowError(/Paths cannot be joined/)
+    })
+
+    yield* expect({
+      pathToB: pathToB.steps.map((step) => step.event.type),
+      pathToCFromA: pathToCFromA.steps.map((step) => step.event.type),
+      joinError: error instanceof Error
+        ? { name: error.name, message: error.message }
+        : { name: typeof error, message: 'no error was thrown' },
+    }).toEqual({
+      pathToB: [
+        '@xstate.init',
+        'NEXT',
+      ],
+      pathToCFromA: [
+        '@xstate.init',
+        'TO_C',
+      ],
+      joinError: {
+        name: 'Error',
+        message: 'Paths cannot be joined',
+      },
+    })
   })
 })
