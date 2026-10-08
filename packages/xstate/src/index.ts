@@ -165,6 +165,7 @@ export type {
   ActorSystem,
   ActorSystemRuntime,
   AnyActorSystem,
+  CryptoSource,
   DeadLetterDetail,
   EventRejection,
   EventRejectionReason,

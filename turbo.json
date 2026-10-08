@@ -69,8 +69,7 @@
         "commitlint.config.ts",
         ".lintstagedrc.js",
         "oxlint.shared.ts",
-        "stryker.shared.ts",
-        "vitest.shared.ts"
+        "stryker.shared.ts"
       ],
       "outputs": [],
       "cache": true
@@ -95,6 +94,8 @@
         "nix/from-source/assert-local-sfs.awk",
         "subtrees.toml",
         "dprint.json",
+        "packages/*/vitest.config.ts",
+        "packages/*/package.json",
         "packages/unguarded-tests.json",
         "packages/**/*.test.ts",
         "packages/**/*.test.tsx"
@@ -110,8 +111,6 @@
         "$TURBO_DEFAULT$",
         "vitest.config.ts",
         "vitest.config.*",
-        "$TURBO_ROOT$/vitest.shared.ts",
-        "$TURBO_ROOT$/packages/unguarded-tests.json",
         "src/**/*.test.ts",
         "src/**/*.spec.ts",
         "!**/README.md",
@@ -142,7 +141,6 @@
         "stryker.config.ts",
         "vitest.config.ts",
         "$TURBO_ROOT$/stryker.shared.ts",
-        "$TURBO_ROOT$/vitest.shared.ts",
         "vitest.setup.ts",
         "reports/stryker-incremental.json",
         "!**/*.md"

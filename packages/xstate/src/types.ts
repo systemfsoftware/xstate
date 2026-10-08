@@ -9,6 +9,7 @@ import type {
   ActorSystemRuntime,
   AnyActorSystem,
   Clock,
+  CryptoSource,
   DeadLetterDetail,
   EventRejection,
   EventRejectionReason,
@@ -1930,6 +1931,7 @@ export interface ActorOptions<TLogic extends AnyActorLogic> {
    */
   clock?: Clock
   wallClock?: WallClock
+  crypto?: CryptoSource
   /**
    * Specifies the logger to be used for `log(...)` actions. Defaults to the
    * native `console.log(...)` method.
