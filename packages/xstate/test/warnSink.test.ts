@@ -1,6 +1,6 @@
 import { describe, it } from '@systemfsoftware/vitest'
 import { createMockActorScope } from '../src/graph/actorScope.js'
-import { createActor, createMachine } from '../src/index.js'
+import { createActor, createMachine, initialSystemTransition, systemTransition } from '../src/index.js'
 import { allocateChildId } from '../src/transitionActions.js'
 
 describe('development warning sink', () => {
@@ -188,6 +188,34 @@ describe('development warning sink', () => {
     yield* expect(written).toEqual([
       'Dynamically mapping values to individual properties is deprecated. Use a single function that returns the mapped object instead.\nFound object containing properties whose values are possibly mapping functions: \n - foo: () => 1',
     ])
+  })
+
+  it('completes a pure system transition whose root output is a dynamic mapping', function*({ expect }) {
+    const outputMapper = () => ({ type: 'mapped' })
+    const machine = createMachine({
+      id: 'root',
+      initial: 'a',
+      states: {
+        a: { on: { GO: { target: 'b' } } },
+        b: { type: 'final' },
+      },
+      output: { foo: outputMapper },
+    })
+    const logic = { root: machine, mappers: { foo: outputMapper } }
+
+    const [snapshot] = initialSystemTransition(logic)
+    const [next] = systemTransition(logic, snapshot, snapshot.root, {
+      type: 'GO',
+    })
+
+    const root = next.actors[next.root]
+    yield* expect({
+      status: root?.snapshot['status'],
+      output: root?.snapshot['output'],
+    }).toEqual({
+      status: 'done',
+      output: { foo: { $systemMapper: 'foo' } },
+    })
   })
 
   it('routes the spawn-allocation warning through the actor scope sink', function*({ expect }) {

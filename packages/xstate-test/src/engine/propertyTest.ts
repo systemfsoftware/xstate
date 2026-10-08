@@ -3193,10 +3193,13 @@ export interface TestOptions<
    */
   readonly failures?: TestFailureStore
   /**
-   * Prints `formatTestStatistics(coverage)` after a passing campaign: the
+   * Reports `formatTestStatistics(coverage)` after a passing campaign: the
    * distribution of executed event cases and the share of runs per label.
+   * `true` prints it through the package's console logger; a function
+   * receives the same string once, instead of the print; `false`, or leaving
+   * it out, reports nothing.
    */
-  readonly statistics?: boolean
+  readonly statistics?: boolean | ((report: string) => void)
   /**
    * Projects a snapshot onto the value printed for each step of a failure
    * trace. Defaults to `{ value, context }` for machine snapshots.
@@ -4483,7 +4486,9 @@ const propertyTestProgram = <
       }
     }
 
-    if (options.statistics !== undefined) {
+    if (typeof options.statistics === 'function') {
+      options.statistics(formatTestStatistics(finalCoverage))
+    } else if (options.statistics === true) {
       logTestStatistics(finalCoverage)
     }
     yield* complete({ passed: true })

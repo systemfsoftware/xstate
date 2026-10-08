@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine } from '../../index.js'
 import { getShortestPaths, getSimplePaths, joinPaths } from '../index.js'
 import type { StatePath } from '../index.js'
@@ -32,13 +32,13 @@ function eventTypes(path: StatePath<any, any>): string {
 }
 
 describe('getSimplePaths', () => {
-  it('returns one path per reachable state', () => {
+  it('returns one path per reachable state', function*({ expect }) {
     const paths = getSimplePaths(multiPathMachine)
 
-    expect(paths).toHaveLength(5)
+    yield* expect(paths.map((path) => path.state.value).sort()).toEqual(['a', 'b', 'c', 'd', 'e'])
   })
 
-  it('should support filtering disabled events', () => {
+  it('should support filtering disabled events', function*({ expect }) {
     const machine = createMachine({
       id: 'guarded-test-model',
       initial: 'start',
@@ -73,29 +73,28 @@ describe('getSimplePaths', () => {
       toState: (state) => state.status === 'done',
     })
 
-    expect(paths.map(eventTypes)).toEqual([
+    yield* expect(paths.map(eventTypes)).toEqual([
       '@xstate.init → NEXT → ALLOW → PROCEED',
     ])
   })
 })
 
 describe('transition coverage', () => {
-  it('shortest paths reach every state', () => {
+  it('shortest paths reach every state', function*({ expect }) {
     const paths = getShortestPaths(multiPathMachine)
 
-    expect(paths.map((path) => path.state.value)).toEqual([
-      'a',
-      'b',
-      'c',
-      'd',
-      'e',
-    ])
-    expect(paths.map(eventTypes)).toContain(
-      '@xstate.init → EVENT → EVENT → EVENT_2',
-    )
+    yield* expect({
+      states: paths.map((path) => path.state.value),
+      eventPaths: paths.map(eventTypes),
+    }).toEqual({
+      states: ['a', 'b', 'c', 'd', 'e'],
+      eventPaths: expect.arrayContaining([
+        '@xstate.init → EVENT → EVENT → EVENT_2',
+      ]),
+    })
   })
 
-  it('transition coverage should consider multiple transitions with the same target', () => {
+  it('transition coverage should consider multiple transitions with the same target', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -120,7 +119,7 @@ describe('transition coverage', () => {
 
     const paths = getSimplePaths(machine)
 
-    expect(paths.map(eventTypes)).toEqual(
+    yield* expect(paths.map(eventTypes)).toEqual(
       expect.arrayContaining([
         '@xstate.init → GO_TO_B',
         '@xstate.init → GO_TO_C',
@@ -146,20 +145,20 @@ describe('toState', () => {
     },
   })
 
-  it('Should find a path to a non-initial target state', () => {
+  it('Should find a path to a non-initial target state', function*({ expect }) {
     const closedPaths = getShortestPaths(machine, {
       toState: (state) => state.matches('closed'),
     })
 
-    expect(closedPaths).toHaveLength(1)
+    yield* expect(closedPaths.map(eventTypes)).toEqual(['@xstate.init → CLOSE'])
   })
 
-  it('Should find a path to an initial target state', () => {
+  it('Should find a path to an initial target state', function*({ expect }) {
     const openPaths = getShortestPaths(machine, {
       toState: (state) => state.matches('open'),
     })
 
-    expect(openPaths).toHaveLength(1)
+    yield* expect(openPaths.map(eventTypes)).toEqual(['@xstate.init'])
   })
 })
 
@@ -188,14 +187,10 @@ describe('paths from paths', () => {
     },
   })
 
-  it('should join shortest paths from the end of other paths', () => {
+  it('should join shortest paths from the end of other paths', function*({ expect }) {
     const pathsToB = getSimplePaths(machine, {
       toState: (state) => state.matches('b'),
     })
-
-    // a (NEXT) -> b
-    // a (OTHER) -> b
-    expect(pathsToB).toHaveLength(2)
 
     const joined = pathsToB.flatMap((path) =>
       getShortestPaths(machine, {
@@ -204,11 +199,22 @@ describe('paths from paths', () => {
       }).map((next) => joinPaths(path, next))
     )
 
-    // a (NEXT) -> b (TO_C) -> c
-    // a (OTHER) -> b (TO_C) -> c
-    // a (NEXT) -> b (TO_D) -> d
-    // a (OTHER) -> b (TO_D) -> d
-    expect(joined).toHaveLength(4)
-    expect(joined.every((path) => path.steps.length === 3)).toBeTruthy()
+    yield* expect({
+      pathsToB: pathsToB.map(eventTypes).sort(),
+      joined: joined.map(eventTypes).sort(),
+      joinedStepCounts: joined.map((path) => path.steps.length),
+    }).toEqual({
+      pathsToB: [
+        '@xstate.init → NEXT',
+        '@xstate.init → OTHER',
+      ],
+      joined: [
+        '@xstate.init → NEXT → TO_C',
+        '@xstate.init → NEXT → TO_D',
+        '@xstate.init → OTHER → TO_C',
+        '@xstate.init → OTHER → TO_D',
+      ],
+      joinedStepCounts: [3, 3, 3, 3],
+    })
   })
 })
