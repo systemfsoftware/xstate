@@ -182,21 +182,13 @@ export const runAssertionCommand = (
     return subject.assert(command)
   })
 
-const described = (report: Conformance.Report<AssertionCommand, AssertionResponse>): string => {
-  try {
-    return Conformance.render(report)
-  } catch {
-    return JSON.stringify(report)
-  }
-}
-
 export const passReportOf = (
   report: Conformance.Report<AssertionCommand, AssertionResponse>,
 ): Conformance.Pass =>
   Match.value(report).pipe(
     Match.tag('Pass', (passed) => passed),
     Match.orElse((): never => {
-      throw new CheckRejected({ rendered: described(report) })
+      throw new CheckRejected({ rendered: Conformance.render(report) })
     }),
   )
 
@@ -206,6 +198,6 @@ export const failReportOf = (
   Match.value(report).pipe(
     Match.tag('Fail', (failed) => failed),
     Match.orElse((): never => {
-      throw new CheckRejected({ rendered: described(report) })
+      throw new CheckRejected({ rendered: Conformance.render(report) })
     }),
   )
