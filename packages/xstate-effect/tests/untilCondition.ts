@@ -1,4 +1,5 @@
-import { Clock, Effect, Function } from 'effect'
+import { Clock, Effect } from 'effect'
+import { dual } from 'effect/Function'
 
 export interface UntilOptions {
   readonly timeoutMs?: number
@@ -27,4 +28,4 @@ const poll = (predicate: () => boolean, options?: UntilOptions): Effect.Effect<v
 export const until: {
   (options?: UntilOptions): (predicate: () => boolean) => Effect.Effect<void>
   (predicate: () => boolean, options?: UntilOptions): Effect.Effect<void>
-} = Function.dual((args) => typeof args[0] === 'function', poll)
+} = dual((args) => typeof args[0] === 'function', poll)
