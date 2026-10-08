@@ -10,7 +10,6 @@
     "packages/xstate-react/test/useSelector.test.tsx",
     "packages/xstate-store-react/src/index.test.tsx",
     "packages/xstate-store-react/src/types.test.tsx",
-    "packages/xstate/test/inspect.test.ts",
     "packages/xstate/test/systemTransition.test.ts",
     "packages/xstate/test/v5ConfigDiagnostics.test.ts"
   ]
