@@ -47,13 +47,7 @@ import {
   normalizeEventDescriptors,
 } from './eventDescriptors.js'
 import { ensuringFinalizerWins } from './finalizerError.js'
-import {
-  createOutcomeStub,
-  PropertyOutcomeRegistry,
-  provideActors,
-  releaseActiveOutcomeRegistry,
-  setActiveOutcomeRegistry,
-} from './outcomes.js'
+import { createOutcomeStub, PropertyOutcomeRegistry, provideActors } from './outcomes.js'
 import { consoleLineLogger, formatTestStatistics } from './report.js'
 import { type EventFromSource, type InputFromSource, type SnapshotFromSource } from './sourceTypes.js'
 import { createSeededRng, fnv1a } from './utils.js'
@@ -1808,7 +1802,6 @@ export class PropertyScenarioRunner<
             executionConfig.registry.seed(
               executionConfig.seededOutcomes ?? [],
             )
-            setActiveOutcomeRegistry(executionConfig.registry)
             const execution = new PropertyExecutionEngine(
               this.logic,
               this.input,
@@ -2322,10 +2315,6 @@ export class PropertyScenarioRunner<
               errors.push(Cause.squash(stopExit.cause))
             }
             this.execution = undefined
-            const executionConfig = this.executionConfig
-            if (executionConfig !== undefined) {
-              releaseActiveOutcomeRegistry(executionConfig.registry)
-            }
           }
           const disposeContext: TestSutDisposeContext = {
             passed: this.finished,
@@ -3793,7 +3782,7 @@ const propertyTestProgram = <
       ...options.actors,
     }
     for (const src of Object.keys(options.outcomes ?? {})) {
-      providedActors[src] = createOutcomeStub(src)
+      providedActors[src] = createOutcomeStub(src, outcomeRegistry)
     }
     // Coverage ids are keyed by transition-definition identity, so the machine
     // that gets provided must be the same one coverage is declared from.
@@ -4740,7 +4729,7 @@ const replayTestProgram = <TSource extends ActorLogic<any, any, any>>(
     ]
     if (mode === 'executed') {
       for (const src of stubbedSources) {
-        providedActors[src] ??= createOutcomeStub(src)
+        providedActors[src] ??= createOutcomeStub(src, outcomeRegistry)
       }
     }
     const logic = Object.keys(providedActors).length !== 0
