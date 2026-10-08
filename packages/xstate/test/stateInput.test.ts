@@ -1,10 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
 import { createActor, createAsyncLogic, setup, types } from '../src/index.js'
 import type { IsAny, StateContextFromStateValue, StateFrom, StateSchemaFrom } from '../src/types.js'
 
+const thrownMessage = (call: () => unknown): string => {
+  try {
+    call()
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  throw new Error('expected the call to throw')
+}
+
 describe('setup', () => {
-  it('requires authored history states to declare a default target', () => {
+  it('requires authored history states to declare a default target', function*({ expect }) {
     const s = setup({
       states: {
         off: {
@@ -32,11 +41,11 @@ describe('setup', () => {
       })
     }
 
-    expect(true).toBe(true)
+    yield* expect(Object.keys(s.states)).toEqual(['off'])
   })
 
-  it('setup without schemas should infer context from machine config', () => {
-    setup({}).createMachine({
+  it('setup without schemas should infer context from machine config', function*({ expect }) {
+    const machine = setup({}).createMachine({
       context: {
         count: 0,
       },
@@ -52,10 +61,10 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().context).toEqual({ count: 0 })
   })
 
-  it('should create a setup object with states', () => {
+  it('should create a setup object with states', function*({ expect }) {
     const s = setup({
       states: {
         loading: {
@@ -68,7 +77,7 @@ describe('setup', () => {
       },
     })
 
-    expect(s.states).toEqual({
+    yield* expect(s.states).toEqual({
       loading: {
         schemas: {
           input: expect.any(Object),
@@ -77,7 +86,11 @@ describe('setup', () => {
     })
   })
 
-  it('should create a setup object with nested state schemas', () => {
+  it('should create a setup object with nested state schemas', function*({ expect }) {
+    const childInput = z.object({
+      childId: z.string(),
+    })
+
     const s = setup({
       states: {
         parent: {
@@ -89,9 +102,7 @@ describe('setup', () => {
           states: {
             child: {
               schemas: {
-                input: z.object({
-                  childId: z.string(),
-                }),
+                input: childInput,
               },
             },
           },
@@ -99,10 +110,10 @@ describe('setup', () => {
       },
     })
 
-    expect(s.states.parent.states?.child.schemas?.input).toBeDefined()
+    yield* expect(s.states.parent.states?.child.schemas?.input).toBe(childInput)
   })
 
-  it('should create typed state configs from setup', () => {
+  it('should create typed state configs from setup', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{ count: number }>(),
@@ -156,14 +167,14 @@ describe('setup', () => {
       },
     })
 
-    expect(idle).toEqual({
+    yield* expect(idle).toEqual({
       tags: ['active'],
       meta: { label: 'Idle' },
       on: expect.any(Object),
     })
   })
 
-  it('createStateConfig should type a top-level state input by path', () => {
+  it('createStateConfig should type a top-level state input by path', function*({ expect }) {
     const s = setup({
       states: {
         idle: {},
@@ -191,10 +202,10 @@ describe('setup', () => {
       },
     })
 
-    expect(loading.entry).toEqual(expect.any(Function))
+    yield* expect(loading.entry).toEqual(expect.any(Function))
   })
 
-  it('createStateConfig should type a nested state input by dotted path', () => {
+  it('createStateConfig should type a nested state input by dotted path', function*({ expect }) {
     const s = setup({
       states: {
         parent: {
@@ -244,10 +255,10 @@ describe('setup', () => {
       },
     })
 
-    expect(parent.states.child).toBe(child)
+    yield* expect(parent.states.child).toBe(child)
   })
 
-  it('createStateConfig should reject invalid paths and mistyped input', () => {
+  it('createStateConfig should reject invalid paths and mistyped input', function*({ expect }) {
     const s = setup({
       states: {
         idle: {},
@@ -282,7 +293,7 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(Object.keys(s.states)).toEqual(['idle', 'parent'])
   })
 
   // The (path, config) overload validates bare on/always transition targets
@@ -290,52 +301,55 @@ describe('setup', () => {
   // or the root states for a top-level path — because a bare target resolves
   // relative to the PARENT. These tests guard that: a real sibling is accepted;
   // a child or unknown target is rejected.
-  it('createStateConfig should validate (path, config) branch-state transition targets against siblings, not children', () => {
-    const s = setup({
-      schemas: {
-        events: {
-          GO: types<{}>(),
-        },
-      },
-      states: {
-        parent: {
-          states: {
-            child: {
-              states: {
-                gc1: {},
-              },
-            },
-            sibling: {},
+  it(
+    'createStateConfig should validate (path, config) branch-state transition targets against siblings, not children',
+    function*({ expect }) {
+      const s = setup({
+        schemas: {
+          events: {
+            GO: types<{}>(),
           },
         },
-      },
-    })
-
-    // 'sibling' is a real sibling of 'child' (both children of 'parent'), so a
-    // bare target to it is valid.
-    s.createStateConfig('parent.child', {
-      on: {
-        GO: {
-          target: 'sibling',
+        states: {
+          parent: {
+            states: {
+              child: {
+                states: {
+                  gc1: {},
+                },
+              },
+              sibling: {},
+            },
+          },
         },
-      },
-    })
+      })
 
-    // 'gc1' is a CHILD of 'child', not a sibling. A bare target should be
-    // rejected (it would require descendant syntax '.gc1').
-    s.createStateConfig('parent.child', {
-      on: {
-        // @ts-expect-error - 'gc1' is a child, not a sibling; needs '.gc1'
-        GO: {
-          target: 'gc1',
+      // 'sibling' is a real sibling of 'child' (both children of 'parent'), so a
+      // bare target to it is valid.
+      const siblingTarget = s.createStateConfig('parent.child', {
+        on: {
+          GO: {
+            target: 'sibling',
+          },
         },
-      },
-    })
+      })
 
-    expect(true).toBe(true)
-  })
+      // 'gc1' is a CHILD of 'child', not a sibling. A bare target should be
+      // rejected (it would require descendant syntax '.gc1').
+      s.createStateConfig('parent.child', {
+        on: {
+          // @ts-expect-error - 'gc1' is a child, not a sibling; needs '.gc1'
+          GO: {
+            target: 'gc1',
+          },
+        },
+      })
 
-  it('createStateConfig (path, config) rejects sibling-region targets in parallel states', () => {
+      yield* expect(siblingTarget).toEqual({ on: { GO: { target: 'sibling' } } })
+    },
+  )
+
+  it('createStateConfig (path, config) rejects sibling-region targets in parallel states', function*({ expect }) {
     const s = setup({
       schemas: {
         events: {
@@ -362,10 +376,10 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(s.states.p).toEqual({ type: 'parallel', states: { r1: {}, r2: {} } })
   })
 
-  it('should create typed machines from setup schemas', () => {
+  it('should create typed machines from setup schemas', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{ count: number }>(),
@@ -375,7 +389,7 @@ describe('setup', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       context: { count: 0 },
       on: {
         INC: ({ context, event }) => {
@@ -399,11 +413,11 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().context).toEqual({ count: 0 })
   })
 
-  it('should type enq in state transition functions', () => {
-    setup({
+  it('should type enq in state transition functions', function*({ expect }) {
+    const machine = setup({
       schemas: {
         context: types<{ count: number }>(),
         events: {
@@ -434,11 +448,11 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().value).toEqual('idle')
   })
 
-  it('should allow target-only state transition function returns for compatible context', () => {
-    setup({
+  it('should allow target-only state transition function returns for compatible context', function*({ expect }) {
+    const machine = setup({
       schemas: {
         context: types<{ count: number }>(),
         events: {
@@ -464,10 +478,10 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().value).toEqual('idle')
   })
 
-  it('should allow partial context patches in transition function returns', () => {
+  it('should allow partial context patches in transition function returns', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: types<{ a: number; b: number; c: number }>(),
@@ -496,10 +510,10 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'GO' })
 
-    expect(actor.getSnapshot().context).toEqual({ a: 1, b: 3, c: 3 })
+    yield* expect(actor.getSnapshot().context).toEqual({ a: 1, b: 3, c: 3 })
   })
 
-  it('should allow partial context patches in root transition function returns', () => {
+  it('should allow partial context patches in root transition function returns', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: types<{ a: number; b: number; c: number }>(),
@@ -531,10 +545,10 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'GO' })
 
-    expect(actor.getSnapshot().context).toEqual({ a: 1, b: 3, c: 3 })
+    yield* expect(actor.getSnapshot().context).toEqual({ a: 1, b: 3, c: 3 })
   })
 
-  it('should allow partial context patches in static transition configs', () => {
+  it('should allow partial context patches in static transition configs', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: types<{ a: number; b: number; c: number }>(),
@@ -563,10 +577,10 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'GO' })
 
-    expect(actor.getSnapshot().context).toEqual({ a: 1, b: 4, c: 3 })
+    yield* expect(actor.getSnapshot().context).toEqual({ a: 1, b: 4, c: 3 })
   })
 
-  it('should reject invalid setup-created state configs', () => {
+  it('should reject invalid setup-created state configs', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{ count: number }>(),
@@ -616,9 +630,11 @@ describe('setup', () => {
         }),
       },
     })
+
+    yield* expect(Object.keys(s.states)).toEqual(['idle', 'loading'])
   })
 
-  it('should type setup-defined state keys in machines', () => {
+  it('should type setup-defined state keys in machines', function*({ expect }) {
     const s = setup({
       schemas: {
         events: {
@@ -707,7 +723,7 @@ describe('setup', () => {
       },
     })
 
-    expect(() => {
+    const thrown = thrownMessage(() => {
       s.createMachine({
         initial: 'idle',
         states: {
@@ -722,26 +738,21 @@ describe('setup', () => {
           loading: {},
         },
       })
-    }).toThrow()
-
-    expect(true).toBe(true)
-    expect(idle).toEqual({
-      on: {
-        LOAD: {
-          target: 'loading',
-        },
-      },
     })
-    expect(external).toEqual({
-      on: {
-        LOAD: {
-          target: '#external',
-        },
-      },
+
+    yield* expect({
+      idle,
+      external,
+      thrown,
+    }).toEqual({
+      idle: { on: { LOAD: { target: 'loading' } } },
+      external: { on: { LOAD: { target: '#external' } } },
+      thrown:
+        "Invalid transition definition for state node '(machine).idle':\nChild state 'missing' does not exist on '(machine)'",
     })
   })
 
-  it('should allow top-level machine states outside the setup state tree', () => {
+  it('should allow top-level machine states outside the setup state tree', function*({ expect }) {
     const s = setup({
       schemas: {
         events: {
@@ -844,7 +855,7 @@ describe('setup', () => {
       },
     })
 
-    expect(() => {
+    const thrown = thrownMessage(() => {
       s.createMachine({
         initial: 'foo',
         states: {
@@ -865,10 +876,14 @@ describe('setup', () => {
           rootSibling: {},
         },
       })
-    }).toThrow()
+    })
+
+    yield* expect(thrown).toEqual(
+      "Invalid transition definition for state node '(machine).foo.baz':\nChild state 'rootSibling' does not exist on '(machine).foo'",
+    )
   })
 
-  it('should create a machine from setup', () => {
+  it('should create a machine from setup', function*({ expect }) {
     const s = setup({
       states: {
         idle: {},
@@ -890,11 +905,15 @@ describe('setup', () => {
       },
     })
 
-    expect(machine).toBeDefined()
-    expect(machine.root.initial).toBeDefined()
+    const initial = machine.root.initial
+
+    yield* expect({
+      target: initial.target?.map((stateNode) => stateNode.id),
+      value: machine.getInitialSnapshot().value,
+    }).toEqual({ target: ['(machine).idle'], value: 'idle' })
   })
 
-  it('should allow setup with no config', () => {
+  it('should allow setup with no config', function*({ expect }) {
     const s = setup()
 
     const machine = s.createMachine({
@@ -904,10 +923,10 @@ describe('setup', () => {
       },
     })
 
-    expect(machine).toBeDefined()
+    yield* expect(machine.getInitialSnapshot().value).toEqual('idle')
   })
 
-  it('should allow setup with empty states', () => {
+  it('should allow setup with empty states', function*({ expect }) {
     const s = setup({
       states: {},
     })
@@ -919,10 +938,10 @@ describe('setup', () => {
       },
     })
 
-    expect(machine).toBeDefined()
+    yield* expect(machine.getInitialSnapshot().value).toEqual('idle')
   })
 
-  it('should preserve schemas.input for multiple states', () => {
+  it('should preserve schemas.input for multiple states', function*({ expect }) {
     const userIdSchema = z.object({ userId: z.string() })
     const nameSchema = z.object({ name: z.string() })
 
@@ -933,11 +952,13 @@ describe('setup', () => {
       },
     })
 
-    expect(s.states.loading.schemas?.input).toBe(userIdSchema)
-    expect(s.states.creating.schemas?.input).toBe(nameSchema)
+    yield* expect({
+      loading: s.states.loading.schemas?.input === userIdSchema,
+      creating: s.states.creating.schemas?.input === nameSchema,
+    }).toEqual({ loading: true, creating: true })
   })
 
-  it('entry action should receive input', () => {
+  it('entry action should receive input', function*({ expect }) {
     const entryInputs: unknown[] = []
 
     const s = setup({
@@ -975,10 +996,10 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'LOAD' })
 
-    expect(entryInputs).toEqual([{ userId: 'user-123' }])
+    yield* expect(entryInputs).toEqual([{ userId: 'user-123' }])
   })
 
-  it('exit action should receive input', () => {
+  it('exit action should receive input', function*({ expect }) {
     const exitInputs: unknown[] = []
 
     const s = setup({
@@ -1020,10 +1041,10 @@ describe('setup', () => {
     actor.send({ type: 'LOAD' })
     actor.send({ type: 'DONE' })
 
-    expect(exitInputs).toEqual([{ userId: 'user-456' }])
+    yield* expect(exitInputs).toEqual([{ userId: 'user-456' }])
   })
 
-  it('final output should receive input', () => {
+  it('final output should receive input', function*({ expect }) {
     const receivedInputs: unknown[] = []
 
     const s = setup({
@@ -1064,11 +1085,16 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'LOAD' })
 
-    expect(receivedInputs).toEqual([{ userId: 'user-123' }])
-    expect(actor.getSnapshot().output).toEqual({ userId: 'user-123' })
+    yield* expect({
+      receivedInputs,
+      output: actor.getSnapshot().output,
+    }).toEqual({
+      receivedInputs: [{ userId: 'user-123' }],
+      output: { userId: 'user-123' },
+    })
   })
 
-  it('parallel final outputs should receive their nested state inputs', () => {
+  it('parallel final outputs should receive their nested state inputs', function*({ expect }) {
     const s = setup({
       states: {
         a: {
@@ -1131,11 +1157,13 @@ describe('setup', () => {
 
     const snapshot = createActor(machine).start().getSnapshot()
 
-    expect(snapshot.status).toBe('done')
-    expect(snapshot.output).toEqual({ a: 'a', b: 'b' })
+    yield* expect({
+      done: snapshot.status === 'done',
+      output: snapshot.output,
+    }).toEqual({ done: true, output: { a: 'a', b: 'b' } })
   })
 
-  it('transition should pass input to target state', () => {
+  it('transition should pass input to target state', function*({ expect }) {
     const receivedInputs: unknown[] = []
 
     const s = setup({
@@ -1174,10 +1202,10 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'FETCH' })
 
-    expect(receivedInputs).toEqual([{ url: '/api/users', method: 'GET' }])
+    yield* expect(receivedInputs).toEqual([{ url: '/api/users', method: 'GET' }])
   })
 
-  it('function-syntax transition should compute input from event and context', () => {
+  it('function-syntax transition should compute input from event and context', function*({ expect }) {
     const receivedInputs: unknown[] = []
     const s = setup({
       schemas: {
@@ -1217,10 +1245,10 @@ describe('setup', () => {
 
     const actor = createActor(machine).start()
     actor.send({ type: 'FETCH', url: '/api/users' })
-    expect(receivedInputs).toEqual([{ url: '/api/users', token: 'abc-123' }])
+    yield* expect(receivedInputs).toEqual([{ url: '/api/users', token: 'abc-123' }])
   })
 
-  it('initial transition should accept input', () => {
+  it('initial transition should accept input', function*({ expect }) {
     const entryInputs: unknown[] = []
 
     const s = setup({
@@ -1251,10 +1279,10 @@ describe('setup', () => {
 
     createActor(machine).start()
 
-    expect(entryInputs).toEqual([{ userId: 'initial-user' }])
+    yield* expect(entryInputs).toEqual([{ userId: 'initial-user' }])
   })
 
-  it('input can be a function resolving dynamically', () => {
+  it('input can be a function resolving dynamically', function*({ expect }) {
     const entryInputs: unknown[] = []
 
     const s = setup({
@@ -1302,12 +1330,12 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'LOAD' })
 
-    expect(entryInputs).toEqual([
+    yield* expect(entryInputs).toEqual([
       { userId: 'dynamic-user', timestamp: 1234567890 },
     ])
   })
 
-  it('nested state should receive input from parent initial', () => {
+  it('nested state should receive input from parent initial', function*({ expect }) {
     const entryInputs: unknown[] = []
 
     const s = setup({
@@ -1347,10 +1375,10 @@ describe('setup', () => {
 
     createActor(machine).start()
 
-    expect(entryInputs).toEqual([{ childValue: 'nested-param' }])
+    yield* expect(entryInputs).toEqual([{ childValue: 'nested-param' }])
   })
 
-  it('should correctly type input in nested states', () => {
+  it('should correctly type input in nested states', function*({ expect }) {
     const s = setup({
       states: {
         idle: {},
@@ -1370,8 +1398,7 @@ describe('setup', () => {
       },
     })
 
-    // Type test: input should be typed correctly for each state
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'idle',
       states: {
         idle: {
@@ -1408,10 +1435,10 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().value).toEqual('idle')
   })
 
-  it('input should be accessible in snapshot via getInputs()', () => {
+  it('input should be accessible in snapshot via getInputs()', function*({ expect }) {
     const s = setup({
       states: {
         idle: {},
@@ -1447,10 +1474,10 @@ describe('setup', () => {
     const inputs = snapshot.getInputs()
 
     // Inputs are keyed by state node ID
-    expect(inputs['(machine).loading']).toEqual({ userId: 'snapshot-user' })
+    yield* expect(inputs['(machine).loading']).toEqual({ userId: 'snapshot-user' })
   })
 
-  it('nested state input should be accessible in snapshot', () => {
+  it('nested state input should be accessible in snapshot', function*({ expect }) {
     const s = setup({
       states: {
         parent: {
@@ -1490,11 +1517,13 @@ describe('setup', () => {
     const snapshot = actor.getSnapshot()
     const inputs = snapshot.getInputs()
 
-    expect(inputs['(machine).parent']).toEqual({ parentId: 'p1' })
-    expect(inputs['(machine).parent.child']).toEqual({ childId: 42 })
+    yield* expect({
+      parent: inputs['(machine).parent'],
+      child: inputs['(machine).parent.child'],
+    }).toEqual({ parent: { parentId: 'p1' }, child: { childId: 42 } })
   })
 
-  it('getInputs() should be strongly typed', () => {
+  it('getInputs() should be strongly typed', function*({ expect }) {
     const s = setup({
       states: {
         idle: {},
@@ -1535,7 +1564,6 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     const inputs = actor.getSnapshot().getInputs()
 
-    // Type tests for getInputs() return type
     inputs['(machine).idle'] satisfies undefined
     inputs['(machine).loading'] satisfies { userId: string } | undefined
     inputs['(machine).active'] satisfies { sessionId: number } | undefined
@@ -1546,10 +1574,10 @@ describe('setup', () => {
     // @ts-expect-error - active input should have sessionId number, not string
     inputs['(machine).active'] satisfies { sessionId: string }
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().value).toEqual('idle')
   })
 
-  it('input should persist across self-transitions', () => {
+  it('input should persist across self-transitions', function*({ expect }) {
     const s = setup({
       states: {
         active: {
@@ -1577,21 +1605,19 @@ describe('setup', () => {
 
     const actor = createActor(machine).start()
 
-    // Input should be set initially
-    expect(actor.getSnapshot().getInputs()['(machine).active']).toEqual({
-      count: 1,
-    })
+    const beforePing = actor.getSnapshot().getInputs()['(machine).active']
 
-    // Send event that triggers self-transition
     actor.send({ type: 'PING' })
 
-    // Input should still be there
-    expect(actor.getSnapshot().getInputs()['(machine).active']).toEqual({
-      count: 1,
+    const afterPing = actor.getSnapshot().getInputs()['(machine).active']
+
+    yield* expect({ beforePing, afterPing }).toEqual({
+      beforePing: { count: 1 },
+      afterPing: { count: 1 },
     })
   })
 
-  it("a self-transition's input only takes effect when the state is re-entered", () => {
+  it("a self-transition's input only takes effect when the state is re-entered", function*({ expect }) {
     const s = setup({
       schemas: {
         context: z.object({ count: z.number() }),
@@ -1640,27 +1666,50 @@ describe('setup', () => {
     })
 
     const actor = createActor(machine).start()
+
     actor.send({ type: 'MULTIPLY' })
-    expect(actor.getSnapshot().context.count).toBe(3)
+    const afterFirstMultiply = actor.getSnapshot().context.count
 
     actor.send({ type: 'SET_MULTIPLIER_NO_REENTER' })
-    expect(entryInputs).toEqual([{ multiplier: 3 }])
-    expect(actor.getSnapshot().getInputs()['(machine).active']).toEqual({
-      multiplier: 3,
-    })
+    const afterNoReenter = {
+      entryInputs: [...entryInputs],
+      input: actor.getSnapshot().getInputs()['(machine).active'],
+    }
+
     actor.send({ type: 'MULTIPLY' })
-    expect(actor.getSnapshot().context.count).toBe(9)
+    const afterSecondMultiply = actor.getSnapshot().context.count
 
     actor.send({ type: 'SET_MULTIPLIER_REENTER' })
-    expect(entryInputs).toEqual([{ multiplier: 3 }, { multiplier: 10 }])
-    expect(actor.getSnapshot().getInputs()['(machine).active']).toEqual({
-      multiplier: 10,
-    })
+    const afterReenter = {
+      entryInputs: [...entryInputs],
+      input: actor.getSnapshot().getInputs()['(machine).active'],
+    }
+
     actor.send({ type: 'MULTIPLY' })
-    expect(actor.getSnapshot().context.count).toBe(90)
+    const afterThirdMultiply = actor.getSnapshot().context.count
+
+    yield* expect({
+      afterFirstMultiply,
+      afterNoReenter,
+      afterSecondMultiply,
+      afterReenter,
+      afterThirdMultiply,
+    }).toEqual({
+      afterFirstMultiply: 3,
+      afterNoReenter: {
+        entryInputs: [{ multiplier: 3 }],
+        input: { multiplier: 3 },
+      },
+      afterSecondMultiply: 9,
+      afterReenter: {
+        entryInputs: [{ multiplier: 3 }, { multiplier: 10 }],
+        input: { multiplier: 10 },
+      },
+      afterThirdMultiply: 90,
+    })
   })
 
-  it("a non-reentering self-transition cannot overwrite a concurrent transition's input", () => {
+  it("a non-reentering self-transition cannot overwrite a concurrent transition's input", function*({ expect }) {
     const s = setup({
       schemas: {
         events: {
@@ -1727,13 +1776,13 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'GO' })
 
-    expect(entryInputs).toEqual([{ value: 1 }, { value: 2 }])
-    expect(
-      (actor.getSnapshot().getInputs() as Record<string, unknown>)['active'],
-    ).toEqual({ value: 2 })
+    yield* expect({
+      entryInputs,
+      active: (actor.getSnapshot().getInputs() as Record<string, unknown>)['active'],
+    }).toEqual({ entryInputs: [{ value: 1 }, { value: 2 }], active: { value: 2 } })
   })
 
-  it("a compound state's input is replaced only when the state is re-entered", () => {
+  it("a compound state's input is replaced only when the state is re-entered", function*({ expect }) {
     const s = setup({
       schemas: {
         events: {
@@ -1788,25 +1837,48 @@ describe('setup', () => {
     })
 
     const actor = createActor(machine).start()
-    expect(parentInputs).toEqual([{ value: 1 }])
-    expect(childEntries).toEqual(['child'])
+
+    const observed: Array<{
+      parentInputs: Array<{ value: number }>
+      input: unknown
+      childEntries: string[]
+    }> = []
+    const record = () => {
+      observed.push({
+        parentInputs: [...parentInputs],
+        input: actor.getSnapshot().getInputs()['(machine).parent'],
+        childEntries: [...childEntries],
+      })
+    }
+
+    record()
 
     actor.send({ type: 'PING' })
-    expect(parentInputs).toEqual([{ value: 1 }])
-    expect(actor.getSnapshot().getInputs()['(machine).parent']).toEqual({
-      value: 1,
-    })
-    expect(childEntries).toEqual(['child', 'child'])
+    record()
 
     actor.send({ type: 'PING_REENTER' })
-    expect(parentInputs).toEqual([{ value: 1 }, { value: 3 }])
-    expect(actor.getSnapshot().getInputs()['(machine).parent']).toEqual({
-      value: 3,
-    })
-    expect(childEntries).toEqual(['child', 'child', 'child'])
+    record()
+
+    yield* expect(observed).toEqual([
+      {
+        parentInputs: [{ value: 1 }],
+        input: { value: 1 },
+        childEntries: ['child'],
+      },
+      {
+        parentInputs: [{ value: 1 }],
+        input: { value: 1 },
+        childEntries: ['child', 'child'],
+      },
+      {
+        parentInputs: [{ value: 1 }, { value: 3 }],
+        input: { value: 3 },
+        childEntries: ['child', 'child', 'child'],
+      },
+    ])
   })
 
-  it('invoke transitions should require context for incompatible targets', () => {
+  it('invoke transitions should require context for incompatible targets', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{}>(),
@@ -1825,7 +1897,7 @@ describe('setup', () => {
       },
       actors: {
         load: createAsyncLogic({
-          run: async () => 'Done' as const,
+          run: () => Promise.resolve('Done' as const),
         }),
       },
     })
@@ -1911,7 +1983,7 @@ describe('setup', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       context: {},
       initial: 'idle',
       states: {
@@ -1951,10 +2023,10 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().value).toEqual('idle')
   })
 
-  it('state context schemas should narrow context in state actions', () => {
+  it('state context schemas should narrow context in state actions', function*({ expect }) {
     const s = setup({
       states: {
         idle: {
@@ -2044,10 +2116,11 @@ describe('setup', () => {
       // @ts-expect-error - matched success context should not be nullable
       snapshot.context.user satisfies null
     }
-    expect(true).toBe(true)
+
+    yield* expect(actor.getSnapshot().context).toEqual({ user: 'Ada' })
   })
 
-  it('state context schemas should refine part of the root context', () => {
+  it('state context schemas should refine part of the root context', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: z.object({
@@ -2133,15 +2206,15 @@ describe('setup', () => {
       snapshot.context.requestId satisfies number
     }
 
-    expect(snapshot.context).toEqual({
+    yield* expect(snapshot.context).toEqual({
       requestId: 'req-1',
       draft: 'Ready',
       approved: true,
     })
   })
 
-  it('state schemas should allow undeclared sibling states', () => {
-    setup({
+  it('state schemas should allow undeclared sibling states', function*({ expect }) {
+    const machine = setup({
       states: {
         done: {
           schemas: {
@@ -2183,10 +2256,10 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().value).toEqual('planning')
   })
 
-  it('transition context should satisfy the target state context', () => {
+  it('transition context should satisfy the target state context', function*({ expect }) {
     const s = setup({
       states: {
         deciding: {},
@@ -2198,7 +2271,7 @@ describe('setup', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       schemas: {
         context: z.object({ guess: z.string().nullable() }),
       },
@@ -2224,10 +2297,10 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().value).toEqual('deciding')
   })
 
-  it('snapshot matches should allow chained checks for states sharing the same context', () => {
+  it('snapshot matches should allow chained checks for states sharing the same context', function*({ expect }) {
     const sameContextMachine = setup({
       states: {
         Loading: {},
@@ -2267,16 +2340,17 @@ describe('setup', () => {
       return snapshot.context.data
     }
 
-    chainedSameContext(
+    const data = chainedSameContext(
       sameContextMachine.resolveState({
         value: 'Ready',
         context: { data: 'value' },
       }) as SameContextSnapshot,
     )
-    expect(true).toBe(true)
+
+    yield* expect(data).toEqual('value')
   })
 
-  it('snapshot matches should narrow context for nested state values', () => {
+  it('snapshot matches should narrow context for nested state values', function*({ expect }) {
     const nestedMachine = setup({
       states: {
         Flow: {
@@ -2324,16 +2398,17 @@ describe('setup', () => {
       return true
     }
 
-    nestedReady(
+    const data = nestedReady(
       nestedMachine.resolveState({
         value: { Flow: 'Ready' },
         context: { data: 'nested-value' },
       }) as NestedSnapshot,
     )
-    expect(true).toBe(true)
+
+    yield* expect(data).toEqual('nested-value')
   })
 
-  it('state context schemas should require context for incompatible targets', () => {
+  it('state context schemas should require context for incompatible targets', function*({ expect }) {
     const s = setup({
       states: {
         idle: {
@@ -2479,10 +2554,10 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'LOAD' })
 
-    expect(actor.getSnapshot().context).toEqual({ count: 0, user: 'Ada' })
+    yield* expect(actor.getSnapshot().context).toEqual({ count: 0, user: 'Ada' })
   })
 
-  it('state context schemas should reject target context mismatch', () => {
+  it('state context schemas should reject target context mismatch', function*({ expect }) {
     const s = setup({
       states: {
         idle: {
@@ -2498,7 +2573,7 @@ describe('setup', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       schemas: {
         context: z.object({ user: z.string().nullable() }),
         events: {
@@ -2521,6 +2596,6 @@ describe('setup', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.getInitialSnapshot().context).toEqual({ user: null })
   })
 })

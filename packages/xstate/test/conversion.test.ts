@@ -1,14 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachineFromConfig } from '../src/createMachineFromConfig.js'
-import { createMachine } from '../src/index.js'
 import { initialTransition, transition } from '../src/transition.js'
 
-function toPortableJSON<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value))
-}
-
 describe('createMachineFromConfig', () => {
-  it('should create a machine from a JSON config', () => {
+  it('should create a machine from a JSON config', function*({ expect }) {
     const machine = createMachineFromConfig(
       {
         context: { count: 42 },
@@ -48,29 +43,31 @@ describe('createMachineFromConfig', () => {
       },
     )
 
-    expect(machine.root.states['a']).toBeDefined()
-    expect(machine.root.states['b']).toBeDefined()
-
     const stateA = machine.root.states['a']
-    if (stateA === undefined) {
-      throw new Error('expected state a to be defined')
-    }
-
-    expect(stateA.on!['INC']).toBeDefined()
-    expect(stateA.on!['DEC']).toBeDefined()
-    expect(stateA.on!['NEXT']).toBeDefined()
 
     const [initialState] = initialTransition(machine)
-    expect(initialState.value).toEqual('a')
-    expect(initialState.context).toEqual({ count: 42 })
+    const initial = [initialState.value, { ...initialState.context }]
     const [nextState] = transition(machine, initialState, { type: 'NEXT' })
-    expect(nextState.value).toEqual('b')
-    expect(nextState.context).toEqual({ count: 0 })
+    const next = [nextState.value, { ...nextState.context }]
     const [nextState2] = transition(machine, nextState, { type: 'BACK' })
-    expect(nextState2.value).toEqual('a')
-    expect(nextState2.context).toEqual({ count: 42 })
+    const back = [nextState2.value, { ...nextState2.context }]
     const [nextState3] = transition(machine, nextState2, { type: 'COND_NEXT' })
-    expect(nextState3.value).toEqual('c')
-    expect(nextState3.context).toEqual({ count: 42 })
+    const cond = [nextState3.value, { ...nextState3.context }]
+
+    yield* expect({
+      stateKeys: Object.keys(machine.root.states),
+      stateAEvents: Object.keys(stateA?.on ?? {}),
+      initial,
+      next,
+      back,
+      cond,
+    }).toEqual({
+      stateKeys: ['a', 'b', 'c'],
+      stateAEvents: ['INC', 'DEC', 'NEXT', 'COND_NEXT'],
+      initial: ['a', { count: 42 }],
+      next: ['b', { count: 0 }],
+      back: ['a', { count: 42 }],
+      cond: ['c', { count: 42 }],
+    })
   })
 })

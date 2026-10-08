@@ -1,8 +1,8 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine, types } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import * as fc from 'fast-check'
-import { describe, expect, it } from 'vitest'
-import { fastCheckAdapter, ModelTestFailure, propertyTest, replayTest } from '../src/index.js'
-import type { TestTrace } from '../src/index.js'
+import { ModelTestFailure, propertyTest, replayTest } from '../src/index.js'
 
 const counterMachine = createMachine({
   id: 'searchCounter',
@@ -30,79 +30,119 @@ const events = {
 
 const noop = () => {}
 
+const rejectionOf = (promise: Promise<unknown>): Promise<unknown> =>
+  promise.then(
+    () => {
+      throw new Error('expected the operation to fail')
+    },
+    (error: unknown) => error,
+  )
+
 describe('swarm testing with fast-check', () => {
-  it('is deterministic and leaves cases out of individual runs', async () => {
-    const run = async () => {
-      const swarms: string[][] = []
-      const { coverage } = await propertyTest(counterMachine, {
-        seed: 42,
-        numRuns: 20,
-        maxCommands: 5,
-        events,
-        swarm: { seed: 9 },
-        invariant: noop,
-        collect: (trace: TestTrace<any, any>) => {
-          swarms.push([...(trace.swarm ?? [])])
-        },
+  it('is deterministic and leaves cases out of individual runs', function*({ expect }) {
+    const run = () =>
+      Effect.gen(function*() {
+        const swarms: string[][] = []
+        const { coverage } = yield* Effect.promise(() =>
+          propertyTest(counterMachine, {
+            seed: 42,
+            numRuns: 20,
+            maxCommands: 5,
+            events,
+            swarm: { seed: 9 },
+            invariant: noop,
+            collect: (trace) => {
+              swarms.push([...(trace.swarm ?? [])])
+            },
+          })
+        )
+        return { swarms, coverage }
       })
-      return { swarms, coverage }
-    }
 
-    const first = await run()
-    const second = await run()
+    const first = yield* run()
+    const second = yield* run()
 
-    expect(first.swarms).toEqual(second.swarms)
-    expect(first.swarms.every((swarm) => swarm.length >= 2)).toBe(true)
-    expect(first.swarms.some((swarm) => swarm.length < 3)).toBe(true)
-    expect(first.coverage.exploration.swarm!.runs).toBe(20)
-    expect(first.coverage.exploration.swarm!.averageEnabled).toBeLessThan(3)
+    yield* expect({
+      swarms: first.swarms,
+      everyRunEnablesAtLeastTwoCases: first.swarms.every((swarm) => swarm.length >= 2),
+      someRunEnablesFewerThanThreeCases: first.swarms.some((swarm) => swarm.length < 3),
+      runs: first.coverage.exploration.swarm!.runs,
+      averageEnabledBelowThree: first.coverage.exploration.swarm!.averageEnabled < 3,
+    }).toEqual({
+      swarms: second.swarms,
+      everyRunEnablesAtLeastTwoCases: true,
+      someRunEnablesFewerThanThreeCases: true,
+      runs: 20,
+      averageEnabledBelowThree: true,
+    })
   })
 
-  it('keeps shrinking to a minimal counterexample', async () => {
-    const failure = await propertyTest(counterMachine, {
-      seed: 3,
-      numRuns: 200,
-      maxCommands: 12,
-      events,
-      swarm: true,
-      invariant: ({ snapshot }) => {
-        expect((snapshot as any).context.count).toBeLessThan(3)
-      },
-    }).then(
-      () => undefined,
-      (error) => error as ModelTestFailure<any, any>,
-    )
+  it('keeps shrinking to a minimal counterexample', function*({ expect }) {
+    const failure = (yield* Effect.promise(() =>
+      rejectionOf(
+        propertyTest(counterMachine, {
+          seed: 3,
+          numRuns: 200,
+          maxCommands: 12,
+          events,
+          swarm: true,
+          invariant: ({ snapshot }) => {
+            const count = snapshot.context.count
+            if (!(count < 3)) {
+              throw new Error(
+                `the model counter reached ${count}, expected fewer than 3`,
+              )
+            }
+          },
+        }),
+      )
+    )) as ModelTestFailure
 
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    const fixture = failure!.fixture!
-    // The shrunk counterexample is three increments and nothing else.
-    expect(fixture.timeline).toHaveLength(3)
-    expect(
-      fixture.timeline.every(
+    const fixture = failure.fixture!
+    yield* expect({
+      failure,
+      failureMessage: failure.message,
+      timelineLength: fixture.timeline.length,
+      everyCommandIsAnIncEvent: fixture.timeline.every(
         (entry) => entry.command.type === 'event' && entry.command.event.type === 'INC',
       ),
-    ).toBe(true)
-    // The run's swarm subset is recorded, and it kept `INC` enabled.
-    expect(fixture.swarm!.some((caseId) => caseId.includes('INC'))).toBe(true)
+      swarmKeepsInc: fixture.swarm!.some((caseId) => caseId.includes('INC')),
+    }).toEqual({
+      failure: expect.any(ModelTestFailure),
+      failureMessage: expect.stringContaining('expected fewer than 3'),
+      timelineLength: 3,
+      everyCommandIsAnIncEvent: true,
+      swarmKeepsInc: true,
+    })
 
-    await expect(
-      replayTest(counterMachine, fixture, {
-        invariant: ({ snapshot }) => {
-          expect((snapshot as any).context.count).toBeLessThan(3)
-        },
-      }),
-    ).rejects.toThrow(/count/)
+    const replayFailure = yield* Effect.promise(() =>
+      rejectionOf(
+        replayTest(counterMachine, fixture, {
+          invariant: ({ snapshot }) => {
+            const count = snapshot.context.count
+            if (!(count < 3)) {
+              throw new Error(
+                `the model counter reached ${count}, expected fewer than 3`,
+              )
+            }
+          },
+        }),
+      )
+    )
+    yield* expect(replayFailure).toMatchObject({
+      message: expect.stringMatching(/count/),
+    })
   })
 })
 
 describe('targeted search with fast-check', () => {
-  it('reaches a deeper counter value than random exploration', async () => {
+  it('reaches a deeper counter value than random exploration', function*({ expect }) {
     const campaign = (frontiers?: { strategy: 'target' }) =>
       propertyTest(counterMachine, {
         seed: 4,
         maxCommands: 6,
         events: { INC: fc.constant({}), DEC: fc.constant({}) },
-        target: ({ snapshot }) => (snapshot as any).context.count,
+        target: ({ snapshot }) => snapshot.context.count,
         ...(frontiers === undefined ? {} : { frontiers }),
         invariant: noop,
         until: (coverage) => coverage.exploration.target.best >= 8,
@@ -110,11 +150,13 @@ describe('targeted search with fast-check', () => {
         maxRuns: 60,
       })
 
-    const random = await campaign()
-    expect(random.coverage.exploration.target.best).toBeLessThan(8)
+    const random = yield* Effect.promise(() => campaign())
+    yield* expect(random.coverage.exploration.target.best).toBeLessThan(8)
 
-    const targeted = await campaign({ strategy: 'target' })
-    expect(targeted.coverage.exploration.target.best).toBeGreaterThanOrEqual(8)
-    expect(targeted.coverage.exploration.stoppedBecause).toBe('until')
+    const targeted = yield* Effect.promise(() => campaign({ strategy: 'target' }))
+    yield* expect({
+      bestAtLeastEight: targeted.coverage.exploration.target.best >= 8,
+      stoppedBecause: targeted.coverage.exploration.stoppedBecause,
+    }).toEqual({ bestAtLeastEight: true, stoppedBecause: 'until' })
   })
 })

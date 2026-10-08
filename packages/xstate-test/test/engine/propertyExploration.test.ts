@@ -1,5 +1,6 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine, types } from '@systemfsoftware/xstate'
-import { describe, expect, it } from 'vitest'
+import { Effect } from 'effect'
 import { formatTestCoverage, propertyTest, type TestCoverage, testCoverageToJSON } from '../../src/engine/index.js'
 import { constant, randomAdapter } from './propertyTestAdapter.js'
 
@@ -47,86 +48,110 @@ function transitionRatio(coverage: TestCoverage): number {
 }
 
 describe('property stop conditions', () => {
-  it('runs a single campaign when `until` is absent', async () => {
-    const { coverage } = await propertyTest(ringMachine, {
-      adapter: randomAdapter({ seed: 1, numRuns: 8, maxCommands: 4 }),
-      events: { NEXT: constant({}) },
-      invariant: noop,
-    })
-
-    expect(coverage.exploration.configuredRuns).toBe(8)
-    expect(coverage.exploration.completedRuns).toBe(8)
-    expect(coverage.exploration.stoppedBecause).toBe('budget')
-  })
-
-  it('stops early once the transition ratio is reached', async () => {
-    const { coverage } = await propertyTest(ringMachine, {
-      adapter: randomAdapter({ seed: 1, maxCommands: 6 }),
-      events: { NEXT: constant({}) },
-      invariant: noop,
-      until: { transitions: 1 },
-      batchRuns: 5,
-      maxRuns: 200,
-    })
-
-    expect(transitionRatio(coverage)).toBe(1)
-    expect(coverage.exploration.stoppedBecause).toBe('until')
-    expect(coverage.exploration.completedRuns).toBeLessThan(
-      coverage.exploration.configuredRuns!,
+  it('runs a single campaign when `until` is absent', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(ringMachine, {
+        adapter: randomAdapter({ seed: 1, numRuns: 8, maxCommands: 4 }),
+        events: { NEXT: constant({}) },
+        invariant: noop,
+      })
     )
-    expect(coverage.exploration.completedRuns).toBe(5)
+
+    yield* expect({
+      configuredRuns: coverage.exploration.configuredRuns,
+      completedRuns: coverage.exploration.completedRuns,
+      stoppedBecause: coverage.exploration.stoppedBecause,
+    }).toEqual({ configuredRuns: 8, completedRuns: 8, stoppedBecause: 'budget' })
   })
 
-  it('accepts a predicate stop condition', async () => {
+  it('stops early once the transition ratio is reached', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(ringMachine, {
+        adapter: randomAdapter({ seed: 1, maxCommands: 6 }),
+        events: { NEXT: constant({}) },
+        invariant: noop,
+        until: { transitions: 1 },
+        batchRuns: 5,
+        maxRuns: 200,
+      })
+    )
+
+    yield* expect({
+      transitionRatio: transitionRatio(coverage),
+      stoppedBecause: coverage.exploration.stoppedBecause,
+      completedRuns: coverage.exploration.completedRuns,
+      stoppedBeforeConfigured: coverage.exploration.completedRuns <
+        coverage.exploration.configuredRuns!,
+    }).toEqual({
+      transitionRatio: 1,
+      stoppedBecause: 'until',
+      completedRuns: 5,
+      stoppedBeforeConfigured: true,
+    })
+  })
+
+  it('accepts a predicate stop condition', function*({ expect }) {
     const seen: number[] = []
-    const { coverage } = await propertyTest(ringMachine, {
-      adapter: randomAdapter({ seed: 3, maxCommands: 2 }),
-      events: { NEXT: constant({}) },
-      invariant: noop,
-      until: (current) => {
-        seen.push(current.exploration.completedRuns)
-        return current.exploration.completedRuns >= 10
-      },
-      batchRuns: 5,
-      maxRuns: 100,
-    })
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(ringMachine, {
+        adapter: randomAdapter({ seed: 3, maxCommands: 2 }),
+        events: { NEXT: constant({}) },
+        invariant: noop,
+        until: (current) => {
+          seen.push(current.exploration.completedRuns)
+          return current.exploration.completedRuns >= 10
+        },
+        batchRuns: 5,
+        maxRuns: 100,
+      })
+    )
 
-    expect(seen).toEqual([5, 10])
-    expect(coverage.exploration.completedRuns).toBe(10)
-    expect(coverage.exploration.stoppedBecause).toBe('until')
+    yield* expect({
+      seen,
+      completedRuns: coverage.exploration.completedRuns,
+      stoppedBecause: coverage.exploration.stoppedBecause,
+    }).toEqual({ seen: [5, 10], completedRuns: 10, stoppedBecause: 'until' })
   })
 
-  it('stops on the budget when the condition is never met', async () => {
-    const { coverage } = await propertyTest(ringMachine, {
-      adapter: randomAdapter({ seed: 4, maxCommands: 1 }),
-      events: { NEXT: constant({}) },
-      invariant: noop,
-      until: { runs: 1000 },
-      batchRuns: 4,
-      maxRuns: 8,
-    })
+  it('stops on the budget when the condition is never met', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(ringMachine, {
+        adapter: randomAdapter({ seed: 4, maxCommands: 1 }),
+        events: { NEXT: constant({}) },
+        invariant: noop,
+        until: { runs: 1000 },
+        batchRuns: 4,
+        maxRuns: 8,
+      })
+    )
 
-    expect(coverage.exploration.completedRuns).toBe(8)
-    expect(coverage.exploration.stoppedBecause).toBe('budget')
+    yield* expect({
+      completedRuns: coverage.exploration.completedRuns,
+      stoppedBecause: coverage.exploration.stoppedBecause,
+    }).toEqual({ completedRuns: 8, stoppedBecause: 'budget' })
   })
 
-  it('ORs the conditions listed under `any`', async () => {
-    const { coverage } = await propertyTest(ringMachine, {
-      adapter: randomAdapter({ seed: 5, maxCommands: 1 }),
-      events: { NEXT: constant({}) },
-      invariant: noop,
-      until: { any: [{ transitions: 1 }, { runs: 4 }] },
-      batchRuns: 4,
-      maxRuns: 40,
-    })
+  it('ORs the conditions listed under `any`', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(ringMachine, {
+        adapter: randomAdapter({ seed: 5, maxCommands: 1 }),
+        events: { NEXT: constant({}) },
+        invariant: noop,
+        until: { any: [{ transitions: 1 }, { runs: 4 }] },
+        batchRuns: 4,
+        maxRuns: 40,
+      })
+    )
 
-    expect(coverage.exploration.completedRuns).toBe(4)
-    expect(coverage.exploration.stoppedBecause).toBe('until')
+    yield* expect({
+      completedRuns: coverage.exploration.completedRuns,
+      stoppedBecause: coverage.exploration.stoppedBecause,
+    }).toEqual({ completedRuns: 4, stoppedBecause: 'until' })
   })
 })
 
 describe('coverage-guided exploration', () => {
-  it('reaches a deep branch that random exploration cannot', async () => {
+  it('reaches a deep branch that random exploration cannot', function*({ expect }) {
     const shared = {
       events: { GO: constant({}), DEEP: constant({}) },
       invariant: noop,
@@ -134,125 +159,175 @@ describe('coverage-guided exploration', () => {
       batchRuns: 5,
     } as const
 
-    const random = await propertyTest(deepMachine, {
-      adapter: randomAdapter({ seed: 11, maxCommands: 4 }),
-      ...shared,
-      until: { transitions: 1 },
-    })
-    const guided = await propertyTest(deepMachine, {
-      adapter: randomAdapter({ seed: 11, maxCommands: 4 }),
-      ...shared,
-      frontiers: 'auto',
-      until: { transitions: 1 },
-    })
-
-    // Four generated commands can never walk the five-step chain.
-    expect(random.coverage.stateNodes.covered).not.toContain('deep.s5')
-    expect(guided.coverage.stateNodes.covered).toContain('deep.s5')
-    expect(guided.coverage.stateNodes.covered).toContain('deep.done')
-    expect(transitionRatio(guided.coverage)).toBeGreaterThan(
-      transitionRatio(random.coverage),
+    const random = yield* Effect.promise(() =>
+      propertyTest(deepMachine, {
+        adapter: randomAdapter({ seed: 11, maxCommands: 4 }),
+        ...shared,
+        until: { transitions: 1 },
+      })
     )
-    expect(guided.coverage.exploration.frontiers.length).toBeGreaterThan(1)
+    const guided = yield* Effect.promise(() =>
+      propertyTest(deepMachine, {
+        adapter: randomAdapter({ seed: 11, maxCommands: 4 }),
+        ...shared,
+        frontiers: 'auto',
+        until: { transitions: 1 },
+      })
+    )
+
+    yield* expect({
+      randomCoversS5: random.coverage.stateNodes.covered.includes('deep.s5'),
+      guidedCoversS5: guided.coverage.stateNodes.covered.includes('deep.s5'),
+      guidedCoversDone: guided.coverage.stateNodes.covered.includes(
+        'deep.done',
+      ),
+      guidedRatioAboveRandom: transitionRatio(guided.coverage) >
+        transitionRatio(random.coverage),
+      moreThanOneFrontier: guided.coverage.exploration.frontiers.length > 1,
+    }).toEqual({
+      randomCoversS5: false,
+      guidedCoversS5: true,
+      guidedCoversDone: true,
+      guidedRatioAboveRandom: true,
+      moreThanOneFrontier: true,
+    })
   })
 
-  it('accepts the explicit `uncovered` strategy and reports frontiers', async () => {
-    const { coverage } = await propertyTest(deepMachine, {
-      adapter: randomAdapter({ seed: 2, maxCommands: 3 }),
-      events: { GO: constant({}), DEEP: constant({}) },
-      invariant: noop,
-      frontiers: { strategy: 'uncovered', maxFrontiers: 3, runsPerFrontier: 2 },
-      until: { transitions: 1 },
-      batchRuns: 6,
-      maxRuns: 30,
-    })
+  it('accepts the explicit `uncovered` strategy and reports frontiers', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(deepMachine, {
+        adapter: randomAdapter({ seed: 2, maxCommands: 3 }),
+        events: { GO: constant({}), DEEP: constant({}) },
+        invariant: noop,
+        frontiers: { strategy: 'uncovered', maxFrontiers: 3, runsPerFrontier: 2 },
+        until: { transitions: 1 },
+        batchRuns: 6,
+        maxRuns: 30,
+      })
+    )
 
-    expect(coverage.frontiers.covered.length).toBeGreaterThan(0)
-    for (const frontier of coverage.exploration.frontiers) {
-      expect(frontier.runBudget).toBe(2)
-    }
+    yield* expect({
+      someFrontierCovered: coverage.frontiers.covered.length > 0,
+      everyFrontierAtBudgetTwo: coverage.exploration.frontiers.every(
+        (frontier) => frontier.runBudget === 2,
+      ),
+    }).toEqual({
+      someFrontierCovered: true,
+      everyFrontierAtBudgetTwo: true,
+    })
   })
 
-  it('falls back to random exploration when nothing is uncovered', async () => {
-    const { coverage } = await propertyTest(ringMachine, {
-      adapter: randomAdapter({ seed: 6, maxCommands: 6 }),
-      events: { NEXT: constant({}) },
-      invariant: noop,
-      frontiers: 'auto',
-      batchRuns: 4,
-      maxRuns: 8,
-    })
+  it('falls back to random exploration when nothing is uncovered', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(ringMachine, {
+        adapter: randomAdapter({ seed: 6, maxCommands: 6 }),
+        events: { NEXT: constant({}) },
+        invariant: noop,
+        frontiers: 'auto',
+        batchRuns: 4,
+        maxRuns: 8,
+      })
+    )
 
-    expect(coverage.exploration.completedRuns).toBe(8)
-    expect(coverage.exploration.stoppedBecause).toBe('budget')
+    yield* expect({
+      completedRuns: coverage.exploration.completedRuns,
+      stoppedBecause: coverage.exploration.stoppedBecause,
+    }).toEqual({ completedRuns: 8, stoppedBecause: 'budget' })
   })
 })
 
 describe('labels and statistics', () => {
-  it('aggregates label counts, values and shares', async () => {
-    const { coverage } = await propertyTest(labelMachine, {
-      adapter: randomAdapter({ seed: 9, numRuns: 4, maxCommands: 3 }),
-      events: { INC: constant({}) },
-      invariant: ({ snapshot, label, classify }) => {
-        label('count', snapshot.context.count)
-        classify(snapshot.context.count === 0, 'initial')
-      },
-    })
+  it('aggregates label counts, values and shares', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(labelMachine, {
+        adapter: randomAdapter({ seed: 9, numRuns: 4, maxCommands: 3 }),
+        events: { INC: constant({}) },
+        invariant: ({ snapshot, label, classify }) => {
+          label('count', snapshot.context.count)
+          classify(snapshot.context.count === 0, 'initial')
+        },
+      })
+    )
 
     const countLabel = coverage.labels['count']
     const initialLabel = coverage.labels['initial']
     if (countLabel === undefined || initialLabel === undefined) {
       throw new Error('expected count and initial label statistics')
     }
-    expect(countLabel.count).toBe(coverage.invariantChecks)
-    expect(countLabel.values['0']).toBe(4)
-    expect(initialLabel.count).toBe(4)
-    expect(initialLabel.share).toBe(1)
-    expect(countLabel.share).toBe(1)
+    yield* expect({
+      countCount: countLabel.count,
+      zeroValues: countLabel.values['0'],
+      initialCount: initialLabel.count,
+      initialShare: initialLabel.share,
+      countShare: countLabel.share,
+    }).toEqual({
+      countCount: coverage.invariantChecks,
+      zeroValues: 4,
+      initialCount: 4,
+      initialShare: 1,
+      countShare: 1,
+    })
   })
 
-  it('renders labels in text, markdown and JSON', async () => {
-    const { coverage } = await propertyTest(labelMachine, {
-      adapter: randomAdapter({ seed: 9, numRuns: 2, maxCommands: 2 }),
-      events: { INC: constant({}) },
-      invariant: ({ snapshot, label }) => {
-        label('count', snapshot.context.count)
-      },
-    })
-
-    expect(formatTestCoverage(coverage)).toContain('labels:')
-    expect(formatTestCoverage(coverage, { format: 'markdown' })).toContain(
-      '## Labels',
+  it('renders labels in text, markdown and JSON', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(labelMachine, {
+        adapter: randomAdapter({ seed: 9, numRuns: 2, maxCommands: 2 }),
+        events: { INC: constant({}) },
+        invariant: ({ snapshot, label }) => {
+          label('count', snapshot.context.count)
+        },
+      })
     )
+
     const jsonCountLabel = testCoverageToJSON(coverage).labels['count']
     const countLabel = coverage.labels['count']
     if (jsonCountLabel === undefined || countLabel === undefined) {
       throw new Error('expected count label statistics')
     }
-    expect(jsonCountLabel.count).toBe(countLabel.count)
+    yield* expect({
+      textContainsLabels: formatTestCoverage(coverage).includes('labels:'),
+      markdownContainsLabelsHeading: formatTestCoverage(coverage, {
+        format: 'markdown',
+      }).includes('## Labels'),
+      jsonCount: jsonCountLabel.count,
+    }).toEqual({
+      textContainsLabels: true,
+      markdownContainsLabelsHeading: true,
+      jsonCount: countLabel.count,
+    })
   })
 
-  it('fails the campaign when `expectLabels` is not met', async () => {
-    const error = await propertyTest(labelMachine, {
-      adapter: randomAdapter({ seed: 9, numRuns: 3, maxCommands: 2 }),
-      events: { INC: constant({}) },
-      invariant: ({ snapshot, classify }) => {
-        classify(snapshot.context.count > 100, 'large')
-      },
-      expectLabels: { large: { min: 0.5, minCount: 1 } },
-    }).then(
-      () => undefined,
-      (cause: unknown) => cause as Error & { coverage: TestCoverage },
+  it('fails the campaign when `expectLabels` is not met', function*({ expect }) {
+    const error = yield* Effect.promise(() =>
+      propertyTest(labelMachine, {
+        adapter: randomAdapter({ seed: 9, numRuns: 3, maxCommands: 2 }),
+        events: { INC: constant({}) },
+        invariant: ({ snapshot, classify }) => {
+          classify(snapshot.context.count > 100, 'large')
+        },
+        expectLabels: { large: { min: 0.5, minCount: 1 } },
+      }).then(
+        () => undefined,
+        (cause: unknown) => cause as Error & { coverage: TestCoverage },
+      )
     )
 
-    expect(error).toBeInstanceOf(Error)
-    expect(error!.message).toContain('large: share 0.000 is below 0.5')
-    expect(error!.message).toContain('large: count 0 is below 1')
-    expect(error!.coverage.runs).toBe(3)
+    yield* expect({
+      isError: error instanceof Error,
+      shareMessage: error!.message.includes('large: share 0.000 is below 0.5'),
+      countMessage: error!.message.includes('large: count 0 is below 1'),
+      runs: error!.coverage.runs,
+    }).toEqual({
+      isError: true,
+      shareMessage: true,
+      countMessage: true,
+      runs: 3,
+    })
   })
 
-  it('passes when `expectLabels` is met', async () => {
-    await expect(
+  it('passes when `expectLabels` is met', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
       propertyTest(labelMachine, {
         adapter: randomAdapter({ seed: 9, numRuns: 3, maxCommands: 2 }),
         events: { INC: constant({}) },
@@ -260,7 +335,15 @@ describe('labels and statistics', () => {
           classify(true, 'always')
         },
         expectLabels: { always: { min: 1, minCount: 3 } },
-      }),
-    ).resolves.toBeDefined()
+      })
+    )
+
+    yield* expect({
+      labelCount: result.coverage.labels['always']?.count,
+      labelShare: result.coverage.labels['always']?.share,
+    }).toEqual({
+      labelCount: result.coverage.invariantChecks,
+      labelShare: 1,
+    })
   })
 })

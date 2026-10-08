@@ -1,5 +1,5 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { from } from 'rxjs'
-import { describe, expect, it } from 'vitest'
 import z from 'zod'
 import * as z4 from 'zod/v4'
 import {
@@ -65,8 +65,8 @@ type AnyNextStateNodeConfig = Next_StateNodeConfig<
   any
 >
 
-describe('SpecialExecutableAction', () => {
-  it('narrows built-in executable action fields by type', () => {
+describe('SpecialExecutableAction', (it) => {
+  it('narrows built-in executable action fields by type', function*({ expect }) {
     const consume = (action: SpecialExecutableAction) => {
       switch (action.type) {
         case '@xstate.spawn':
@@ -125,9 +125,11 @@ describe('SpecialExecutableAction', () => {
       const builtInAction: BuiltInExecutableActionObject = action
       consume(builtInAction)
     }
+
+    yield* expect(action).toEqual({})
   })
 
-  it('preserves built-in discriminants from transition results', () => {
+  it('preserves built-in discriminants from transition results', function*({ expect }) {
     const childMachine = createMachine({})
     const machine = createMachine({
       invoke: {
@@ -172,9 +174,10 @@ describe('SpecialExecutableAction', () => {
       // @ts-expect-error raise actions do not expose started actor metadata
       noop(action.actor)
     }
+    yield* expect(typeof childMachine.getInitialSnapshot).toEqual('function')
   })
 
-  it('preserves custom executable actions in transition results', () => {
+  it('preserves custom executable actions in transition results', function*({ expect }) {
     const machine = createMachine({
       entry: (_, enq) => enq(function customEffect() {}),
     })
@@ -192,12 +195,13 @@ describe('SpecialExecutableAction', () => {
       noop(customAction.action)
       noop(customAction.exec)
     }
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('Raise events', () => {
-  it('should accept a valid event type', () => {
-    createMachine({
+describe('Raise events', (it) => {
+  it('should accept a valid event type', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   events: { type: 'FOO' } | { type: 'BAR' };
       // },
@@ -215,10 +219,11 @@ describe('Raise events', () => {
           type: 'FOO',
         }),
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject an invalid event type', () => {
-    createMachine({
+  it('should reject an invalid event type', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   events: { type: 'FOO' } | { type: 'BAR' };
       // },
@@ -234,12 +239,13 @@ describe('Raise events', () => {
           type: 'UNKNOWN',
         }),
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject a string event type', () => {
+  it('should reject a string event type', function*({ expect }) {
     const event: { type: string } = { type: 'something' }
 
-    createMachine({
+    const machine = createMachine({
       // types: {
       //   events: {} as { type: 'FOO' } | { type: 'BAR' }
       // },
@@ -252,10 +258,11 @@ describe('Raise events', () => {
       // @ts-expect-error
       entry: (_, enq) => enq.raise(event),
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should provide a narrowed down expression event type when used as a transition action', () => {
-    createMachine({
+  it('should provide a narrowed down expression event type when used as a transition action', function*({ expect }) {
+    const machine = createMachine({
       // types: {
       //   events: {} as { type: 'FOO' } | { type: 'BAR' }
       // },
@@ -289,10 +296,11 @@ describe('Raise events', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept a valid event type returned from an expression', () => {
-    createMachine({
+  it('should accept a valid event type returned from an expression', function*({ expect }) {
+    const machine = createMachine({
       // types: {
       //   events: {} as { type: 'FOO' } | { type: 'BAR' }
       // },
@@ -307,10 +315,11 @@ describe('Raise events', () => {
           type: 'BAR' as const,
         }),
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject an invalid event type returned from an expression', () => {
-    createMachine({
+  it('should reject an invalid event type returned from an expression', function*({ expect }) {
+    const machine = createMachine({
       // types: {
       //   events: {} as { type: 'FOO' } | { type: 'BAR' }
       // },
@@ -326,12 +335,13 @@ describe('Raise events', () => {
           type: 'UNKNOWN',
         }),
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject a string event type returned from an expression', () => {
+  it('should reject a string event type returned from an expression', function*({ expect }) {
     const event: { type: string } = { type: 'something' }
 
-    createMachine({
+    const machine = createMachine({
       schemas: {
         events: {
           FOO: z.object({}),
@@ -342,11 +352,12 @@ describe('Raise events', () => {
       // entry: raise(() => event)
       entry: (_, enq) => enq.raise(event),
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('internalEvents', () => {
-  it('infers separate public and internal event schemas', () => {
+describe('internalEvents', (it) => {
+  it('infers separate public and internal event schemas', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -392,9 +403,10 @@ describe('internalEvents', () => {
       a.trigger['change.value']({ value: 'ready' })
     }
     void _expectInternalEventsRejected
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('supports separate event schemas declared in setup', () => {
+  it('supports separate event schemas declared in setup', function*({ expect }) {
     const machine = setup({
       schemas: {
         events: { start: z.object({}) },
@@ -421,9 +433,10 @@ describe('internalEvents', () => {
       a.send({ type: 'tick', count: 1 })
     }
     void _expectInternalEventRejected
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow raising internal and external events', () => {
+  it('should allow raising internal and external events', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -445,9 +458,10 @@ describe('internalEvents', () => {
 
     const actor = createActor(machine)
     actor.send({ type: 'foo' })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject sending internal events from outside', () => {
+  it('should reject sending internal events from outside', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -477,15 +491,13 @@ describe('internalEvents', () => {
     ;(actor.trigger as any).tick()
     ;(actor.trigger as any)['change.value']({ value: 'blocked' })
 
-    expect(rejections.map((rejection) => rejection.event.type)).toEqual([
-      'tick',
-      'change.value',
-      'tick',
-      'change.value',
-    ])
-    expect(
-      rejections.every((rejection) => rejection.reason === 'internalEvent'),
-    ).toBe(true)
+    yield* expect({
+      types: rejections.map((rejection) => rejection.event.type),
+      allInternal: rejections.every((rejection) => rejection.reason === 'internalEvent'),
+    }).toEqual({
+      types: ['tick', 'change.value', 'tick', 'change.value'],
+      allInternal: true,
+    })
 
     function _expectSendRejected(a: typeof actor) {
       // @ts-expect-error internal events are not sendable from outside
@@ -504,7 +516,7 @@ describe('internalEvents', () => {
     void _expectTriggerRejected
   })
 
-  it('should reject the removed top-level internalEvents key', () => {
+  it('should reject the removed top-level internalEvents key', function*({ expect }) {
     if (false) {
       createMachine({
         schemas: {
@@ -516,19 +528,22 @@ describe('internalEvents', () => {
         internalEvents: ['foo'] as const,
       })
     }
+
+    yield* expect(Object.keys({ foo: z.object({}) })).toEqual(['foo'])
   })
 })
 
-describe('context', () => {
-  it('defined context in createMachine() should be an object', () => {
-    createMachine({
+describe('context', (it) => {
+  it('defined context in createMachine() should be an object', function*({ expect }) {
+    const machine = createMachine({
       // @ts-expect-error
       context: 'string',
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('context should be required if present in types', () => {
-    createMachine({
+  it('context should be required if present in types', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   context: { count: number };
       // }
@@ -567,11 +582,12 @@ describe('context', () => {
         count: 0,
       }),
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('output', () => {
-  it('output type should be represented in state', () => {
+describe('output', (it) => {
+  it('output type should be represented in state', function*({ expect }) {
     const machine = createMachine({
       // types: {} as {
       //   output: number;
@@ -586,10 +602,11 @@ describe('output', () => {
     ;((_accept: number | undefined) => {})(state.output) // @ts-expect-error
     ;((_accept: number) => {})(state.output) // @ts-expect-error
     ;((_accept: string) => {})(state.output)
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept valid static output', () => {
-    createMachine({
+  it('should accept valid static output', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   output: number;
       // },
@@ -598,10 +615,11 @@ describe('output', () => {
       },
       output: 42,
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject invalid static output', () => {
-    createMachine({
+  it('should reject invalid static output', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   output: number;
       // },
@@ -611,10 +629,11 @@ describe('output', () => {
       // @ts-expect-error
       output: 'a string',
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept valid dynamic output', () => {
-    createMachine({
+  it('should accept valid dynamic output', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   output: number;
       // },
@@ -623,10 +642,11 @@ describe('output', () => {
       },
       output: () => 42,
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject invalid dynamic output', () => {
-    createMachine({
+  it('should reject invalid dynamic output', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   output: number;
       // },
@@ -636,10 +656,11 @@ describe('output', () => {
       // @ts-expect-error
       output: () => 'a string',
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should provide the context type to the dynamic top-level output', () => {
-    createMachine({
+  it('should provide the context type to the dynamic top-level output', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   context: { password: string };
       //   output: {
@@ -663,10 +684,11 @@ describe('output', () => {
         }
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should provide the context type to the dynamic nested output', () => {
-    createMachine({
+  it('should provide the context type to the dynamic nested output', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   context: { password: string };
       //   output: {
@@ -704,11 +726,12 @@ describe('output', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('emitted', () => {
-  it('emitted type should be represented in actor.on(…)', () => {
+describe('emitted', (it) => {
+  it('emitted type should be represented in actor.on(…)', function*({ expect }) {
     // const m = setup({
     //   types: {
     //     emitted: {} as
@@ -754,11 +777,12 @@ describe('emitted', () => {
 
     // @ts-expect-error
     actorRef.on('unknown', () => {})
+    yield* expect(typeof m.getInitialSnapshot).toEqual('function')
   })
 })
 
-it('should not use actions as possible inference sites', () => {
-  createMachine({
+it('should not use actions as possible inference sites', function*({ expect }) {
+  const machine = createMachine({
     // types: {
     //   context: {} as {
     //     count: number;
@@ -777,10 +801,11 @@ it('should not use actions as possible inference sites', () => {
       ;((_accept: string) => {})(context.count)
     },
   })
+  yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
 })
 
-it('should not widen literal types defined in `schema.context` based on `config.context`', () => {
-  createMachine({
+it('should not widen literal types defined in `schema.context` based on `config.context`', function*({ expect }) {
+  const machine = createMachine({
     // types: {
     //   context: {} as {
     //     literalTest: 'foo' | 'bar';
@@ -796,9 +821,10 @@ it('should not widen literal types defined in `schema.context` based on `config.
       literalTest: 'anything',
     },
   })
+  yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
 })
 
-it('should infer context type from config.context when no schemas.context is provided', () => {
+it('should infer context type from config.context when no schemas.context is provided', function*({ expect }) {
   const machine = createMachine({
     context: { count: 0, name: 'test' },
     initial: 'idle',
@@ -812,9 +838,10 @@ it('should infer context type from config.context when no schemas.context is pro
       },
     },
   })
+  yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
 })
 
-it('should expose schemas on machine', () => {
+it('should expose schemas on machine', function*({ expect }) {
   const schemas = {
     context: z.object({
       count: z.number(),
@@ -840,9 +867,10 @@ it('should expose schemas on machine', () => {
   machine.schemas?.context satisfies StandardSchemaV1 | undefined
   machine.schemas?.events?.['inc'] satisfies StandardSchemaV1 | undefined
   machine.schemas?.emitted?.['changed'] satisfies StandardSchemaV1 | undefined
+  yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
 })
 
-it('should expose non-context schemas on machine', () => {
+it('should expose non-context schemas on machine', function*({ expect }) {
   const schemas = {
     events: {
       inc: z.object({
@@ -858,9 +886,10 @@ it('should expose non-context schemas on machine', () => {
   })
 
   machine.schemas?.events?.['inc'] satisfies StandardSchemaV1 | undefined
+  yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
 })
 
-it('should expose schemas on setup return', () => {
+it('should expose schemas on setup return', function*({ expect }) {
   const s = setup({
     schemas: {
       context: z.object({
@@ -916,41 +945,46 @@ it('should expose schemas on setup return', () => {
   s.schemas.meta satisfies StandardSchemaV1
   s.schemas.tags satisfies StandardSchemaV1
   s.schemas.children.child satisfies StandardSchemaV1
+  yield* expect(typeof s.createMachine).toEqual('function')
 })
 
-describe('states', () => {
-  it('should accept a state handling subset of events as part of the whole config handling superset of those events', () => {
-    const italicState = {
-      on: {
-        TOGGLE_BOLD: () => {},
-      },
-    }
-
-    const boldState = {
-      on: {
-        TOGGLE_BOLD: () => {},
-      },
-    }
-
-    createMachine({
-      // types: {} as {
-      //   events: { type: 'TOGGLE_ITALIC' } | { type: 'TOGGLE_BOLD' };
-      // },
-      schemas: {
-        events: {
-          TOGGLE_ITALIC: z.object({}),
-          TOGGLE_BOLD: z.object({}),
+describe('states', (it) => {
+  it(
+    'should accept a state handling subset of events as part of the whole config handling superset of those events',
+    function*({ expect }) {
+      const italicState = {
+        on: {
+          TOGGLE_BOLD: () => {},
         },
-      },
-      type: 'parallel',
-      states: {
-        italic: italicState,
-        bold: boldState,
-      },
-    })
-  })
+      }
 
-  it('types snapshot.value structurally, including parallel states', () => {
+      const boldState = {
+        on: {
+          TOGGLE_BOLD: () => {},
+        },
+      }
+
+      const machine = createMachine({
+        // types: {} as {
+        //   events: { type: 'TOGGLE_ITALIC' } | { type: 'TOGGLE_BOLD' };
+        // },
+        schemas: {
+          events: {
+            TOGGLE_ITALIC: z.object({}),
+            TOGGLE_BOLD: z.object({}),
+          },
+        },
+        type: 'parallel',
+        states: {
+          italic: italicState,
+          bold: boldState,
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
+
+  it('types snapshot.value structurally, including parallel states', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -973,9 +1007,10 @@ describe('states', () => {
     value.bold satisfies 'off' | 'on'
     // @ts-expect-error - may also be 'on'
     value.bold satisfies 'off'
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('types snapshot.value as a string union for flat machines', () => {
+  it('types snapshot.value as a string union for flat machines', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: { a: {}, b: {} },
@@ -985,35 +1020,40 @@ describe('states', () => {
     value satisfies 'a' | 'b'
     // @ts-expect-error - c is not a state
     value satisfies 'c'
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
   // technically it wouldn't be a big problem accepting this, such transitions would just never be selected
   // it's not worth complicating our types to support this though unless a strong argument is made in favor for this
-  it('should not accept a state handling an event type outside of the events accepted by the machine', () => {
-    const underlineState = {
-      on: {
-        TOGGLE_UNDERLINE: () => {},
-      },
-    } as const
-
-    createMachine({
-      schemas: {
-        events: {
-          TOGGLE_ITALIC: z.object({}),
-          TOGGLE_BOLD: z.object({}),
+  it(
+    'should not accept a state handling an event type outside of the events accepted by the machine',
+    function*({ expect }) {
+      const underlineState = {
+        on: {
+          TOGGLE_UNDERLINE: () => {},
         },
-      },
-      type: 'parallel',
-      states: {
-        // @ts-expect-error
-        underline: underlineState,
-      },
-    })
-  })
+      } as const
+
+      const machine2 = createMachine({
+        schemas: {
+          events: {
+            TOGGLE_ITALIC: z.object({}),
+            TOGGLE_BOLD: z.object({}),
+          },
+        },
+        type: 'parallel',
+        states: {
+          // @ts-expect-error
+          underline: underlineState,
+        },
+      })
+      yield* expect(typeof machine2.getInitialSnapshot).toEqual('function')
+    },
+  )
 })
 
-describe('events', () => {
-  it('should not use actions as possible inference sites 1', () => {
+describe('events', (it) => {
+  it('should not use actions as possible inference sites 1', function*({ expect }) {
     const machine = createMachine({
       // types: {
       //   events: {} as {
@@ -1033,9 +1073,10 @@ describe('events', () => {
     service.send({ type: 'FOO' })
     // @ts-expect-error
     service.send({ type: 'UNKNOWN' })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should not use actions as possible inference sites 2', () => {
+  it('should not use actions as possible inference sites 2', function*({ expect }) {
     const machine = createMachine({
       // types: {
       //   events: {} as {
@@ -1055,9 +1096,10 @@ describe('events', () => {
     service.send({ type: 'FOO' })
     // @ts-expect-error
     service.send({ type: 'UNKNOWN' })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('event type should be inferable from a simple state machine type', () => {
+  it('event type should be inferable from a simple state machine type', function*({ expect }) {
     const toggleMachine = createMachine({
       schemas: {
         context: z.object({
@@ -1095,52 +1137,57 @@ describe('events', () => {
     ) {}
 
     acceptMachine(toggleMachine)
+    yield* expect(typeof toggleMachine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer inline function parameters when narrowing transition actions based on the event type', () => {
-    createMachine({
-      // types: {
-      //   context: {} as {
-      //     count: number;
-      //   },
-      //   events: {} as
-      //     | { type: 'EVENT_WITH_FLAG'; flag: boolean }
-      //     | {
-      //         type: 'EVENT_WITHOUT_FLAG';
-      //       }
-      // },
-      schemas: {
-        context: z.object({
-          count: z.number(),
-        }),
-        events: {
-          EVENT_WITH_FLAG: z.object({ flag: z.boolean() }),
-          EVENT_WITHOUT_FLAG: z.object({}),
+  it(
+    'should infer inline function parameters when narrowing transition actions based on the event type',
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {
+        //   context: {} as {
+        //     count: number;
+        //   },
+        //   events: {} as
+        //     | { type: 'EVENT_WITH_FLAG'; flag: boolean }
+        //     | {
+        //         type: 'EVENT_WITHOUT_FLAG';
+        //       }
+        // },
+        schemas: {
+          context: z.object({
+            count: z.number(),
+          }),
+          events: {
+            EVENT_WITH_FLAG: z.object({ flag: z.boolean() }),
+            EVENT_WITHOUT_FLAG: z.object({}),
+          },
         },
-      },
-      context: {
-        count: 0,
-      },
-      on: {
-        // EVENT_WITH_FLAG: {
-        //   actions: ({ event }) => {
-        //     ((_accept: 'EVENT_WITH_FLAG') => {})(event.type);
-        //     ((_accept: boolean) => {})(event.flag);
-        //     // @ts-expect-error
-        //     ((_accept: 'is not any') => {})(event);
-        //   }
-        // }
-        EVENT_WITH_FLAG: ({ event }) => {
-          ;((_accept: 'EVENT_WITH_FLAG') => {})(event.type)
-          ;((_accept: boolean) => {})(event.flag) // @ts-expect-error
-          ;((_accept: 'is not any') => {})(event)
+        context: {
+          count: 0,
         },
-      },
-    })
-  })
+        on: {
+          // EVENT_WITH_FLAG: {
+          //   actions: ({ event }) => {
+          //     ((_accept: 'EVENT_WITH_FLAG') => {})(event.type);
+          //     ((_accept: boolean) => {})(event.flag);
+          //     // @ts-expect-error
+          //     ((_accept: 'is not any') => {})(event);
+          //   }
+          // }
+          EVENT_WITH_FLAG: ({ event }) => {
+            ;((_accept: 'EVENT_WITH_FLAG') => {})(event.type)
+            ;((_accept: boolean) => {})(event.flag) // @ts-expect-error
+            ;((_accept: 'is not any') => {})(event)
+          },
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should infer inline function parameters when for a wildcard transition', () => {
-    createMachine({
+  it('should infer inline function parameters when for a wildcard transition', function*({ expect }) {
+    const machine = createMachine({
       // types: {
       //   context: {} as {
       //     count: number;
@@ -1181,206 +1228,235 @@ describe('events', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer inline function parameter with a partial transition descriptor matching multiple events with the matching count of segments', () => {
-    createMachine({
-      // types: {} as {
-      //   events:
-      //     | { type: 'mouse.click.up'; direction: 'up' }
-      //     | { type: 'mouse.click.down'; direction: 'down' }
-      //     | { type: 'mouse.move' }
-      //     | { type: 'mouse' }
-      //     | { type: 'keypress' };
-      // },
-      schemas: {
-        events: {
-          'mouse.click.up': z.object({ direction: z.literal('up') }),
-          'mouse.click.down': z.object({ direction: z.literal('down') }),
-          'mouse.move': z.object({}),
-          mouse: z.object({}),
-          keypress: z.object({}),
+  it(
+    'should infer inline function parameter with a partial transition descriptor matching multiple events with the matching count of segments',
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   events:
+        //     | { type: 'mouse.click.up'; direction: 'up' }
+        //     | { type: 'mouse.click.down'; direction: 'down' }
+        //     | { type: 'mouse.move' }
+        //     | { type: 'mouse' }
+        //     | { type: 'keypress' };
+        // },
+        schemas: {
+          events: {
+            'mouse.click.up': z.object({ direction: z.literal('up') }),
+            'mouse.click.down': z.object({ direction: z.literal('down') }),
+            'mouse.move': z.object({}),
+            mouse: z.object({}),
+            keypress: z.object({}),
+          },
         },
-      },
-      on: {
-        // 'mouse.click.*': {
-        //   actions: ({ event }) => {
-        //     ((_accept: 'mouse.click.up' | 'mouse.click.down') => {})(
-        //       event.type
-        //     );
-        //     ((_accept: 'up' | 'down') => {})(event.direction);
-        //     // @ts-expect-error
-        //     ((_accept: 'not any') => {})(event.type);
+        on: {
+          // 'mouse.click.*': {
+          //   actions: ({ event }) => {
+          //     ((_accept: 'mouse.click.up' | 'mouse.click.down') => {})(
+          //       event.type
+          //     );
+          //     ((_accept: 'up' | 'down') => {})(event.direction);
+          //     // @ts-expect-error
+          //     ((_accept: 'not any') => {})(event.type);
+          //   }
+          // }
+          'mouse.click.*': ({ event }) => {
+            ;((_accept: 'mouse.click.up' | 'mouse.click.down') => {})(event.type)
+            ;((_accept: 'up' | 'down') => {})(event.direction) // @ts-expect-error
+            ;((_accept: 'not any') => {})(event.type)
+          },
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
+
+  it(
+    'should infer inline function parameter with a partial transition descriptor matching multiple events with the same count of segments or more',
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   events:
+        //     | { type: 'mouse.click.up'; direction: 'up' }
+        //     | { type: 'mouse.click.down'; direction: 'down' }
+        //     | { type: 'mouse.move' }
+        //     | { type: 'mouse' }
+        //     | { type: 'keypress' };
+        // },
+        schemas: {
+          events: {
+            'mouse.click.up': z.object({ direction: z.literal('up') }),
+            'mouse.click.down': z.object({ direction: z.literal('down') }),
+            'mouse.move': z.object({}),
+            mouse: z.object({}),
+            keypress: z.object({}),
+          },
+        },
+        on: {
+          // 'mouse.*': {
+          //   actions: ({ event }) => {
+          //     ((
+          //       _accept: 'mouse.click.up' | 'mouse.click.down' | 'mouse.move'
+          //     ) => {})(event.type);
+          //     // @ts-expect-error
+          //     ((_accept: 'not any') => {})(event.type);
+          //   }
+          // }
+          'mouse.*': ({ event }) => {
+            ;((
+              _accept: 'mouse.click.up' | 'mouse.click.down' | 'mouse.move',
+            ) => {})(event.type) // @ts-expect-error
+            ;((_accept: 'not any') => {})(event.type)
+          },
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
+
+  it(
+    'should not allow a transition using an event type matching the possible prefix but one that is outside of the defines ones',
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   events:
+        //     | { type: 'mouse.click.up'; direction: 'up' }
+        //     | { type: 'mouse.click.down'; direction: 'down' }
+        //     | { type: 'mouse.move' }
+        //     | { type: 'mouse' }
+        //     | { type: 'keypress' };
+        // },
+        schemas: {
+          events: {
+            'mouse.click.up': z.object({ direction: z.literal('up') }),
+            'mouse.click.down': z.object({ direction: z.literal('down') }),
+            'mouse.move': z.object({}),
+            mouse: z.object({}),
+            keypress: z.object({}),
+          },
+        },
+        on: {
+          // @ts-expect-error - no declared event type matches this descriptor
+          'mouse.doubleClick': {},
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
+
+  it(
+    'should not allow a transition using an event type matching the possible prefix but one that is outside of the defines ones',
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   events:
+        //     | { type: 'mouse.click.up'; direction: 'up' }
+        //     | { type: 'mouse.click.down'; direction: 'down' }
+        //     | { type: 'mouse.move' }
+        //     | { type: 'mouse' }
+        //     | { type: 'keypress' };
+        // },
+        schemas: {
+          events: {
+            'mouse.click.up': z.object({ direction: z.literal('up') }),
+            'mouse.click.down': z.object({ direction: z.literal('down') }),
+            'mouse.move': z.object({}),
+            mouse: z.object({}),
+            keypress: z.object({}),
+          },
+        },
+        on: {
+          // @ts-expect-error - no declared event type matches this descriptor
+          'mouse.doubleClick': {},
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
+
+  it(
+    `should infer inline function parameter only using a direct match when the transition descriptor doesn't has a trailing wildcard`,
+    function*({ expect }) {
+      const machine = createMachine({
+        schemas: {
+          events: {
+            'mouse.click.up': z.object({ direction: z.literal('up') }),
+            'mouse.click.down': z.object({ direction: z.literal('down') }),
+            'mouse.move': z.object({}),
+            mouse: z.object({}),
+            keypress: z.object({}),
+          },
+        },
+        on: {
+          mouse: ({ event }) => {
+            ;((_accept: 'mouse') => {})(event.type) // @ts-expect-error
+            ;((_accept: 'not any') => {})(event.type)
+          },
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
+
+  it(
+    'should not allow a transition using a partial descriptor related to an event type that is only defined exxactly',
+    function*({ expect }) {
+      const machine = createMachine({
+        schemas: {
+          events: {
+            'mouse.click.up': z.object({ direction: z.literal('up') }),
+            'mouse.click.down': z.object({ direction: z.literal('down') }),
+            'mouse.move': z.object({}),
+            mouse: z.object({}),
+            keypress: z.object({}),
+          },
+        },
+        on: {
+          // @ts-expect-error - no declared event type matches this descriptor
+          'keypress.*': {},
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
+
+  it(
+    'should provide the default TEvent to transition actions when there is no specific TEvent configured',
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {
+        //   context: {} as {
+        //     count: number;
         //   }
-        // }
-        'mouse.click.*': ({ event }) => {
-          ;((_accept: 'mouse.click.up' | 'mouse.click.down') => {})(event.type)
-          ;((_accept: 'up' | 'down') => {})(event.direction) // @ts-expect-error
-          ;((_accept: 'not any') => {})(event.type)
+        // },
+        schemas: {
+          context: z.object({
+            count: z.number(),
+          }),
         },
-      },
-    })
-  })
+        context: {
+          count: 0,
+        },
+        on: {
+          // FOO: {
+          //   actions: ({ event }) => {
+          //     ((_accept: string) => {})(event.type);
+          //   }
+          // }
+          FOO: ({ event }) => {
+            ;((_accept: string) => {})(event.type)
+          },
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should infer inline function parameter with a partial transition descriptor matching multiple events with the same count of segments or more', () => {
-    createMachine({
-      // types: {} as {
-      //   events:
-      //     | { type: 'mouse.click.up'; direction: 'up' }
-      //     | { type: 'mouse.click.down'; direction: 'down' }
-      //     | { type: 'mouse.move' }
-      //     | { type: 'mouse' }
-      //     | { type: 'keypress' };
-      // },
-      schemas: {
-        events: {
-          'mouse.click.up': z.object({ direction: z.literal('up') }),
-          'mouse.click.down': z.object({ direction: z.literal('down') }),
-          'mouse.move': z.object({}),
-          mouse: z.object({}),
-          keypress: z.object({}),
-        },
-      },
-      on: {
-        // 'mouse.*': {
-        //   actions: ({ event }) => {
-        //     ((
-        //       _accept: 'mouse.click.up' | 'mouse.click.down' | 'mouse.move'
-        //     ) => {})(event.type);
-        //     // @ts-expect-error
-        //     ((_accept: 'not any') => {})(event.type);
-        //   }
-        // }
-        'mouse.*': ({ event }) => {
-          ;((
-            _accept: 'mouse.click.up' | 'mouse.click.down' | 'mouse.move',
-          ) => {})(event.type) // @ts-expect-error
-          ;((_accept: 'not any') => {})(event.type)
-        },
-      },
-    })
-  })
-
-  it('should not allow a transition using an event type matching the possible prefix but one that is outside of the defines ones', () => {
-    createMachine({
-      // types: {} as {
-      //   events:
-      //     | { type: 'mouse.click.up'; direction: 'up' }
-      //     | { type: 'mouse.click.down'; direction: 'down' }
-      //     | { type: 'mouse.move' }
-      //     | { type: 'mouse' }
-      //     | { type: 'keypress' };
-      // },
-      schemas: {
-        events: {
-          'mouse.click.up': z.object({ direction: z.literal('up') }),
-          'mouse.click.down': z.object({ direction: z.literal('down') }),
-          'mouse.move': z.object({}),
-          mouse: z.object({}),
-          keypress: z.object({}),
-        },
-      },
-      on: {
-        // @ts-expect-error - no declared event type matches this descriptor
-        'mouse.doubleClick': {},
-      },
-    })
-  })
-
-  it('should not allow a transition using an event type matching the possible prefix but one that is outside of the defines ones', () => {
-    createMachine({
-      // types: {} as {
-      //   events:
-      //     | { type: 'mouse.click.up'; direction: 'up' }
-      //     | { type: 'mouse.click.down'; direction: 'down' }
-      //     | { type: 'mouse.move' }
-      //     | { type: 'mouse' }
-      //     | { type: 'keypress' };
-      // },
-      schemas: {
-        events: {
-          'mouse.click.up': z.object({ direction: z.literal('up') }),
-          'mouse.click.down': z.object({ direction: z.literal('down') }),
-          'mouse.move': z.object({}),
-          mouse: z.object({}),
-          keypress: z.object({}),
-        },
-      },
-      on: {
-        // @ts-expect-error - no declared event type matches this descriptor
-        'mouse.doubleClick': {},
-      },
-    })
-  })
-
-  it(`should infer inline function parameter only using a direct match when the transition descriptor doesn't has a trailing wildcard`, () => {
-    createMachine({
-      schemas: {
-        events: {
-          'mouse.click.up': z.object({ direction: z.literal('up') }),
-          'mouse.click.down': z.object({ direction: z.literal('down') }),
-          'mouse.move': z.object({}),
-          mouse: z.object({}),
-          keypress: z.object({}),
-        },
-      },
-      on: {
-        mouse: ({ event }) => {
-          ;((_accept: 'mouse') => {})(event.type) // @ts-expect-error
-          ;((_accept: 'not any') => {})(event.type)
-        },
-      },
-    })
-  })
-
-  it('should not allow a transition using a partial descriptor related to an event type that is only defined exxactly', () => {
-    createMachine({
-      schemas: {
-        events: {
-          'mouse.click.up': z.object({ direction: z.literal('up') }),
-          'mouse.click.down': z.object({ direction: z.literal('down') }),
-          'mouse.move': z.object({}),
-          mouse: z.object({}),
-          keypress: z.object({}),
-        },
-      },
-      on: {
-        // @ts-expect-error - no declared event type matches this descriptor
-        'keypress.*': {},
-      },
-    })
-  })
-
-  it('should provide the default TEvent to transition actions when there is no specific TEvent configured', () => {
-    createMachine({
-      // types: {
-      //   context: {} as {
-      //     count: number;
-      //   }
-      // },
-      schemas: {
-        context: z.object({
-          count: z.number(),
-        }),
-      },
-      context: {
-        count: 0,
-      },
-      on: {
-        // FOO: {
-        //   actions: ({ event }) => {
-        //     ((_accept: string) => {})(event.type);
-        //   }
-        // }
-        FOO: ({ event }) => {
-          ;((_accept: string) => {})(event.type)
-        },
-      },
-    })
-  })
-
-  it('should reject string target shorthand in transition configs', () => {
-    createMachine({
+  it('should reject string target shorthand in transition configs', function*({ expect }) {
+    const machine = createMachine({
       initial: 'a',
       // @ts-expect-error
       states: {
@@ -1392,10 +1468,11 @@ describe('events', () => {
         b: {},
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject transition arrays in authored machine configs', () => {
-    createMachine({
+  it('should reject transition arrays in authored machine configs', function*({ expect }) {
+    const machine2 = createMachine({
       initial: 'a',
       // @ts-expect-error - transition arrays are reserved for serialized configs
       states: {
@@ -1408,9 +1485,10 @@ describe('events', () => {
         c: {},
       },
     })
+    yield* expect(typeof machine2.getInitialSnapshot).toEqual('function')
   })
 
-  it('should type context mappers on object transition configs', () => {
+  it('should type context mappers on object transition configs', function*({ expect }) {
     const worker = createAsyncLogic({
       schemas: {
         output: types<{ answer: number }>(),
@@ -1495,38 +1573,43 @@ describe('events', () => {
         done: {},
       },
     })
+    yield* expect(typeof worker.transition).toEqual('function')
   })
 
-  it('should provide contextual `event` type in transition actions when the matching event has a union `.type`', () => {
-    createMachine({
-      schemas: {
-        events: {
-          FOO: z.object({ value: z.string() }),
-          OTHER: z.object({}),
+  it(
+    'should provide contextual `event` type in transition actions when the matching event has a union `.type`',
+    function*({ expect }) {
+      const machine = createMachine({
+        schemas: {
+          events: {
+            FOO: z.object({ value: z.string() }),
+            OTHER: z.object({}),
+          },
         },
-      },
-      on: {
-        // FOO: {
-        //   actions: ({ event }) => {
-        //     event.type satisfies 'FOO' | 'BAR'; // it could be narrowed down to `FOO` but it's not worth the effort/complexity
-        //     event.value satisfies string;
-        //     // @ts-expect-error
-        //     event.value satisfies number;
-        //   }
-        // }
-        FOO: ({ event }) => {
-          event.type satisfies 'FOO' | 'BAR' // it could be narrowed down to `FOO` but it's not worth the effort/complexity
-          event.value satisfies string
-          // @ts-expect-error
-          event.value satisfies number
+        on: {
+          // FOO: {
+          //   actions: ({ event }) => {
+          //     event.type satisfies 'FOO' | 'BAR'; // it could be narrowed down to `FOO` but it's not worth the effort/complexity
+          //     event.value satisfies string;
+          //     // @ts-expect-error
+          //     event.value satisfies number;
+          //   }
+          // }
+          FOO: ({ event }) => {
+            event.type satisfies 'FOO' | 'BAR' // it could be narrowed down to `FOO` but it's not worth the effort/complexity
+            event.value satisfies string
+            // @ts-expect-error
+            event.value satisfies number
+          },
         },
-      },
-    })
-  })
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
 })
 
-describe('interpreter', () => {
-  it('should be convertible to Rx observable', () => {
+describe('interpreter', (it) => {
+  it('should be convertible to Rx observable', function*({ expect }) {
     const s = createActor(
       createMachine({
         // types: {
@@ -1548,11 +1631,12 @@ describe('interpreter', () => {
       ;((_val: number) => {})(state.context.count) // @ts-expect-error
       ;((_val: string) => {})(state.context.count)
     })
+    yield* expect(typeof s.send).toEqual('function')
   })
 })
 
-describe('spawnChild action', () => {
-  it('should reject actor outside of the defined ones at usage site', () => {
+describe('spawnChild action', (it) => {
+  it('should reject actor outside of the defined ones at usage site', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -1574,9 +1658,10 @@ describe('spawnChild action', () => {
         )
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should accept a defined actor at usage site', () => {
+  it('should accept a defined actor at usage site', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -1593,9 +1678,10 @@ describe('spawnChild action', () => {
         enq.spawn(actors.child)
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should allow valid configured actor id', () => {
+  it('should allow valid configured actor id', function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -1613,9 +1699,10 @@ describe('spawnChild action', () => {
         enq.spawn(actors.child, { id: 'ok1' })
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow invalid actor id', () => {
+  it('should disallow invalid actor id', function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -1638,9 +1725,10 @@ describe('spawnChild action', () => {
         enq.spawn(actors.child, { id: 'child' })
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should require id to be specified when it was configured', () => {
+  it('should require id to be specified when it was configured', function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -1659,9 +1747,10 @@ describe('spawnChild action', () => {
         enq.spawn(actors.child)
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it(`shouldn't require id to be specified when it was not configured`, () => {
+  it(`shouldn't require id to be specified when it was not configured`, function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -1677,9 +1766,10 @@ describe('spawnChild action', () => {
         enq.spawn(actors.child)
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should allow id to be specified when it was not configured`, () => {
+  it(`should allow id to be specified when it was not configured`, function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -1695,9 +1785,10 @@ describe('spawnChild action', () => {
         enq.spawn(actors.child, { id: 'someId' })
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should allow anonymous inline actor outside of the configured actors`, () => {
+  it(`should allow anonymous inline actor outside of the configured actors`, function*({ expect }) {
     const child1 = createMachine({
       context: {
         counter: 0,
@@ -1723,9 +1814,10 @@ describe('spawnChild action', () => {
         enq.spawn(child2)
       },
     })
+    yield* expect(typeof child1.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should disallow anonymous inline actor with an id outside of the configured actors`, () => {
+  it(`should disallow anonymous inline actor with an id outside of the configured actors`, function*({ expect }) {
     const child1 = createMachine({
       schemas: {
         context: z.object({
@@ -1766,9 +1858,10 @@ describe('spawnChild action', () => {
         enq.spawn(child2, { id: 'myChild' })
       },
     })
+    yield* expect(typeof child1.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should reject static wrong input`, () => {
+  it(`should reject static wrong input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -1795,9 +1888,10 @@ describe('spawnChild action', () => {
         })
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow static correct input`, () => {
+  it(`should allow static correct input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -1819,9 +1913,10 @@ describe('spawnChild action', () => {
         })
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow static input that is a subtype of the expected one`, () => {
+  it(`should allow static input that is a subtype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number | string }) => Promise.resolve('foo'),
     })
@@ -1843,9 +1938,10 @@ describe('spawnChild action', () => {
         })
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject static input that is a supertype of the expected one`, () => {
+  it(`should reject static input that is a supertype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -1872,9 +1968,10 @@ describe('spawnChild action', () => {
         })
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject dynamic wrong input`, () => {
+  it(`should reject dynamic wrong input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -1901,9 +1998,10 @@ describe('spawnChild action', () => {
         })
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow dynamic correct input`, () => {
+  it(`should allow dynamic correct input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -1925,9 +2023,10 @@ describe('spawnChild action', () => {
         })
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject dynamic input that is a supertype of the expected one`, () => {
+  it(`should reject dynamic input that is a supertype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -1954,9 +2053,10 @@ describe('spawnChild action', () => {
         })
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow dynamic input that is a subtype of the expected one`, () => {
+  it(`should allow dynamic input that is a subtype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number | string }) => Promise.resolve('foo'),
     })
@@ -1978,9 +2078,10 @@ describe('spawnChild action', () => {
         })
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject a valid input of a different provided actor`, () => {
+  it(`should reject a valid input of a different provided actor`, function*({ expect }) {
     const child1 = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve(100),
     })
@@ -2014,9 +2115,10 @@ describe('spawnChild action', () => {
         })
       },
     })
+    yield* expect(typeof child1.transition).toEqual('function')
   })
 
-  it(`should require input to be specified when it is required`, () => {
+  it(`should require input to be specified when it is required`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve(100),
     })
@@ -2039,9 +2141,10 @@ describe('spawnChild action', () => {
         enq.spawn(actors.child)
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should not require input when it's optional`, () => {
+  it(`should not require input when it's optional`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number | undefined }) => Promise.resolve(100),
     })
@@ -2062,11 +2165,12 @@ describe('spawnChild action', () => {
         enq.spawn(actors.child)
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 })
 
-describe('spawner in assign', () => {
-  it('should reject actor outside of the defined ones at usage site', () => {
+describe('spawner in assign', (it) => {
+  it('should reject actor outside of the defined ones at usage site', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -2091,9 +2195,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should accept a defined actor at usage site', () => {
+  it('should accept a defined actor at usage site', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -2113,9 +2218,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should allow valid configured actor id', () => {
+  it('should allow valid configured actor id', function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -2136,9 +2242,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow invalid actor id', () => {
+  it('should disallow invalid actor id', function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -2162,9 +2269,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should require id to be specified when it was configured', () => {
+  it('should require id to be specified when it was configured', function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -2186,9 +2294,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it(`shouldn't require id to be specified when it was not configured`, () => {
+  it(`shouldn't require id to be specified when it was not configured`, function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -2208,9 +2317,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should allow id to be specified when it was not configured`, () => {
+  it(`should allow id to be specified when it was not configured`, function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -2230,9 +2340,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should allow anonymous inline actor outside of the configured actors`, () => {
+  it(`should allow anonymous inline actor outside of the configured actors`, function*({ expect }) {
     const child1 = createMachine({
       schemas: {
         context: z.object({
@@ -2272,9 +2383,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child1.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should no allow anonymous inline actor with an id outside of the configured ones`, () => {
+  it(`should no allow anonymous inline actor with an id outside of the configured ones`, function*({ expect }) {
     const child1 = createMachine({
       schemas: {
         context: z.object({
@@ -2316,9 +2428,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child1.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should reject static wrong input`, () => {
+  it(`should reject static wrong input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -2346,9 +2459,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow static correct input`, () => {
+  it(`should allow static correct input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -2374,9 +2488,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow static input that is a subtype of the expected one`, () => {
+  it(`should allow static input that is a subtype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number | string }) => Promise.resolve('foo'),
     })
@@ -2402,9 +2517,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject static input that is a supertype of the expected one`, () => {
+  it(`should reject static input that is a supertype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -2432,9 +2548,10 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject an attempt to provide dynamic input`, () => {
+  it(`should reject an attempt to provide dynamic input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -2455,119 +2572,128 @@ describe('spawner in assign', () => {
         return {}
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should return a concrete actor ref type based on actor logic argument, one that is assignable to a location expecting that concrete actor ref type`, () => {
-    const child = createMachine({
-      // types: {} as {
-      //   context: {
-      //     counter: number;
-      //   };
-      // },
-      schemas: {
-        context: z.object({
-          counter: z.number(),
-        }),
-      },
-      context: {
-        counter: 100,
-      },
-    })
+  it(
+    `should return a concrete actor ref type based on actor logic argument, one that is assignable to a location expecting that concrete actor ref type`,
+    function*({ expect }) {
+      const child = createMachine({
+        // types: {} as {
+        //   context: {
+        //     counter: number;
+        //   };
+        // },
+        schemas: {
+          context: z.object({
+            counter: z.number(),
+          }),
+        },
+        context: {
+          counter: 100,
+        },
+      })
 
-    createMachine({
-      // types: {} as {
-      //   context: {
-      //     myChild?: ActorRefFrom<typeof child>;
-      //   };
-      // },
-      schemas: {
-        context: z.object({
-          myChild: z.custom<ActorRefFrom<typeof child>>().optional(),
-        }),
-      },
-      context: {},
-      // entry: assign({
-      //   myChild: ({ spawn }) => {
-      //     return spawn(child);
-      //   }
-      // })
-      entry: (_, enq) => {
-        return {
-          context: {
-            myChild: enq.spawn(child),
-          },
-        }
-      },
-    })
-  })
+      createMachine({
+        // types: {} as {
+        //   context: {
+        //     myChild?: ActorRefFrom<typeof child>;
+        //   };
+        // },
+        schemas: {
+          context: z.object({
+            myChild: z.custom<ActorRefFrom<typeof child>>().optional(),
+          }),
+        },
+        context: {},
+        // entry: assign({
+        //   myChild: ({ spawn }) => {
+        //     return spawn(child);
+        //   }
+        // })
+        entry: (_, enq) => {
+          return {
+            context: {
+              myChild: enq.spawn(child),
+            },
+          }
+        },
+      })
+      yield* expect(typeof child.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it(`should return a concrete actor ref type based on actor logic argument, one that isn't assignable to a location expecting a different concrete actor ref type`, () => {
-    const child = createMachine({
-      // types: {} as {
-      //   context: {
-      //     counter: number;
-      //   };
-      // },
-      schemas: {
-        context: z.object({
-          counter: z.number(),
-        }),
-      },
-      context: {
-        counter: 100,
-      },
-    })
+  it(
+    `should return a concrete actor ref type based on actor logic argument, one that isn't assignable to a location expecting a different concrete actor ref type`,
+    function*({ expect }) {
+      const child = createMachine({
+        // types: {} as {
+        //   context: {
+        //     counter: number;
+        //   };
+        // },
+        schemas: {
+          context: z.object({
+            counter: z.number(),
+          }),
+        },
+        context: {
+          counter: 100,
+        },
+      })
 
-    const otherChild = createMachine({
-      // types: {} as {
-      //   context: {
-      //     title: string;
-      //   };
-      // },
-      schemas: {
-        context: z.object({
-          title: z.string(),
-        }),
-      },
-      context: {
-        title: 'The Answer',
-      },
-    })
+      const otherChild = createMachine({
+        // types: {} as {
+        //   context: {
+        //     title: string;
+        //   };
+        // },
+        schemas: {
+          context: z.object({
+            title: z.string(),
+          }),
+        },
+        context: {
+          title: 'The Answer',
+        },
+      })
 
-    createMachine({
-      // types: {} as {
-      //   context: {
-      //     myChild?: ActorRefFrom<typeof child>;
-      //   };
-      // },
-      schemas: {
-        context: z.object({
-          myChild: z.custom<ActorRefFrom<typeof child>>().optional(),
-        }),
-      },
-      context: {},
-      // entry: assign({
-      //   // @ts-expect-error
-      //   myChild: ({ spawn }) => {
-      //     return spawn(otherChild);
-      //   }
-      // })
-      entry: (_, enq) => {
-        const otherChildRef = enq.spawn(otherChild)
-        // @ts-expect-error
-        const childRef: ActorRefFrom<typeof child> = otherChildRef
-        childRef
+      createMachine({
+        // types: {} as {
+        //   context: {
+        //     myChild?: ActorRefFrom<typeof child>;
+        //   };
+        // },
+        schemas: {
+          context: z.object({
+            myChild: z.custom<ActorRefFrom<typeof child>>().optional(),
+          }),
+        },
+        context: {},
+        // entry: assign({
+        //   // @ts-expect-error
+        //   myChild: ({ spawn }) => {
+        //     return spawn(otherChild);
+        //   }
+        // })
+        entry: (_, enq) => {
+          const otherChildRef = enq.spawn(otherChild)
+          // @ts-expect-error
+          const childRef: ActorRefFrom<typeof child> = otherChildRef
+          childRef
 
-        return {
-          context: {
-            myChild: undefined,
-          },
-        }
-      },
-    })
-  })
+          return {
+            context: {
+              myChild: undefined,
+            },
+          }
+        },
+      })
+      yield* expect(typeof child.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it(`should require input to be specified when it is required`, () => {
+  it(`should require input to be specified when it is required`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve(100),
     })
@@ -2590,9 +2716,10 @@ describe('spawner in assign', () => {
         enq.spawn(actors.child)
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should not require input when it's optional`, () => {
+  it(`should not require input when it's optional`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number | undefined }) => Promise.resolve(100),
     })
@@ -2613,11 +2740,12 @@ describe('spawner in assign', () => {
         enq.spawn(actors.child)
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 })
 
-describe('invoke', () => {
-  it('should reject actor outside of the defined ones at usage site', () => {
+describe('invoke', (it) => {
+  it('should reject actor outside of the defined ones at usage site', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -2634,9 +2762,10 @@ describe('invoke', () => {
           actors.other,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should accept a defined actor at usage site', () => {
+  it('should accept a defined actor at usage site', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -2651,9 +2780,10 @@ describe('invoke', () => {
         src: ({ actors }) => actors.child,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should accept a string actor logic reference', () => {
+  it('should accept a string actor logic reference', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -2662,10 +2792,11 @@ describe('invoke', () => {
         src: 'child',
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should infer async logic input and output from source schemas', () => {
-    createAsyncLogic({
+  it('should infer async logic input and output from source schemas', function*({ expect }) {
+    const logic2 = createAsyncLogic({
       schemas: {
         input: types<{ userId: string }>(),
         output: types<{ name: string }>(),
@@ -2690,9 +2821,10 @@ describe('invoke', () => {
         return { age: 42 }
       },
     })
+    yield* expect(typeof logic2.transition).toEqual('function')
   })
 
-  it('should strongly type registered invoke input from async logic schemas', () => {
+  it('should strongly type registered invoke input from async logic schemas', function*({ expect }) {
     const loadUser = createAsyncLogic({
       schemas: {
         input: types<{ userId: string }>(),
@@ -2786,9 +2918,10 @@ describe('invoke', () => {
         input: { userId: 42 },
       },
     })
+    yield* expect(typeof loadUser.transition).toEqual('function')
   })
 
-  it('should infer async logic output from run with input-only schemas', () => {
+  it('should infer async logic output from run with input-only schemas', function*({ expect }) {
     const logic = createAsyncLogic({
       schemas: {
         input: types<{ name: string }>(),
@@ -2847,10 +2980,11 @@ describe('invoke', () => {
         input: { name: 42 },
       },
     })
+    yield* expect(typeof logic.transition).toEqual('function')
   })
 
-  it('should narrow transition function events by keyed event', () => {
-    setup({
+  it('should narrow transition function events by keyed event', function*({ expect }) {
+    const machine = setup({
       schemas: {
         events: {
           REJECT: types<{ reason: string }>(),
@@ -2871,9 +3005,10 @@ describe('invoke', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow eventless setup machines to be assigned to AnyStateMachine', () => {
+  it('should allow eventless setup machines to be assigned to AnyStateMachine', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: types<{ value: string }>(),
@@ -2891,9 +3026,10 @@ describe('invoke', () => {
 
     const anyMachine: AnyStateMachine = machine
     noop(anyMachine)
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow invoked eventless setup machines to be assigned to any logic types', () => {
+  it('should allow invoked eventless setup machines to be assigned to any logic types', function*({ expect }) {
     const step = createAsyncLogic({
       schemas: {
         input: z.object({ value: z.string() }),
@@ -2947,9 +3083,10 @@ describe('invoke', () => {
       // @ts-expect-error empty events means no external events
       { type: 'ANYTHING' },
     )
+    yield* expect(typeof step.transition).toEqual('function')
   })
 
-  it('should preserve contextual typing when setup returns are decorated', () => {
+  it('should preserve contextual typing when setup returns are decorated', function*({ expect }) {
     const loadUser = createAsyncLogic({
       schemas: {
         input: types<{ userId: string }>(),
@@ -3037,9 +3174,10 @@ describe('invoke', () => {
 
     const extra: true = s.extra
     noop(extra)
+    yield* expect(typeof loadUser.transition).toEqual('function')
   })
 
-  it('should infer empty Zod v4 event schemas as type-only events', () => {
+  it('should infer empty Zod v4 event schemas as type-only events', function*({ expect }) {
     const machine = setup({
       schemas: {
         events: {
@@ -3057,9 +3195,10 @@ describe('invoke', () => {
     actor.send({ type: 'UPDATE', value: 'ok' })
     // @ts-expect-error
     actor.send({ type: 'UPDATE' })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer void and undefined event schemas as type-only events', () => {
+  it('should infer void and undefined event schemas as type-only events', function*({ expect }) {
     const machine = setup({
       schemas: {
         events: {
@@ -3112,9 +3251,10 @@ describe('invoke', () => {
     })
     // @ts-expect-error
     emittedActor.on('UNKNOWN', () => {})
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer callback logic input from source schemas', () => {
+  it('should infer callback logic input from source schemas', function*({ expect }) {
     const logic = createCallbackLogic({
       schemas: {
         input: types<{ userId: string }>(),
@@ -3135,9 +3275,10 @@ describe('invoke', () => {
 
     noop(input)
     noop(wrongInput)
+    yield* expect(typeof logic.transition).toEqual('function')
   })
 
-  it('should infer observable logic input from source schemas', () => {
+  it('should infer observable logic input from source schemas', function*({ expect }) {
     const logic = createObservableLogic({
       schemas: {
         input: types<{ period: number }>(),
@@ -3158,9 +3299,10 @@ describe('invoke', () => {
 
     noop(input)
     noop(wrongInput)
+    yield* expect(typeof logic.transition).toEqual('function')
   })
 
-  it('should infer event observable logic input from source schemas', () => {
+  it('should infer event observable logic input from source schemas', function*({ expect }) {
     const logic = createEventObservableLogic({
       schemas: {
         input: types<{ eventType: 'ready' }>(),
@@ -3181,9 +3323,10 @@ describe('invoke', () => {
 
     noop(input)
     noop(wrongInput)
+    yield* expect(typeof logic.transition).toEqual('function')
   })
 
-  it('should infer custom logic input and output from source schemas', () => {
+  it('should infer custom logic input and output from source schemas', function*({ expect }) {
     const logic = createLogic({
       schemas: {
         input: types<{ step: number }>(),
@@ -3226,9 +3369,10 @@ describe('invoke', () => {
     noop(wrongInput)
     noop(output)
     noop(wrongOutput)
+    yield* expect(typeof logic.transition).toEqual('function')
   })
 
-  it('should reject an unknown string actor logic reference', () => {
+  it('should reject an unknown string actor logic reference', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -3238,17 +3382,19 @@ describe('invoke', () => {
         src: 'other',
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should allow a string actor logic reference when no actors object exists', () => {
-    createMachine({
+  it('should allow a string actor logic reference when no actors object exists', function*({ expect }) {
+    const machine = createMachine({
       invoke: {
         src: 'child',
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow valid configured actor id', () => {
+  it('should allow valid configured actor id', function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -3265,9 +3411,10 @@ describe('invoke', () => {
         src: ({ actors }) => actors.child,
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow invalid actor id', () => {
+  it('should disallow invalid actor id', function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -3284,9 +3431,10 @@ describe('invoke', () => {
         src: ({ actors }) => actors.child,
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should require id to be specified when it was configured', () => {
+  it('should require id to be specified when it was configured', function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -3302,9 +3450,10 @@ describe('invoke', () => {
         src: ({ actors }) => actors.child,
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it(`shouldn't require id to be specified when it was not configured`, () => {
+  it(`shouldn't require id to be specified when it was not configured`, function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -3319,9 +3468,10 @@ describe('invoke', () => {
         src: ({ actors }) => actors.child,
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should allow id to be specified when it was not configured`, () => {
+  it(`should allow id to be specified when it was not configured`, function*({ expect }) {
     const child = createMachine({})
 
     createMachine({
@@ -3337,9 +3487,10 @@ describe('invoke', () => {
         src: ({ actors }) => actors.child,
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should allow anonymous inline actor outside of the configured actors`, () => {
+  it(`should allow anonymous inline actor outside of the configured actors`, function*({ expect }) {
     const child1 = createMachine({
       context: {
         counter: 0,
@@ -3364,9 +3515,10 @@ describe('invoke', () => {
         src: child2,
       },
     })
+    yield* expect(typeof child1.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should diallow anonymous inline actor with an id outside of the configured actors`, () => {
+  it(`should diallow anonymous inline actor with an id outside of the configured actors`, function*({ expect }) {
     const child1 = createMachine({
       context: {
         counter: 0,
@@ -3393,9 +3545,10 @@ describe('invoke', () => {
         id: 'myChild',
       },
     })
+    yield* expect(typeof child1.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should reject static wrong input`, () => {
+  it(`should reject static wrong input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -3414,9 +3567,10 @@ describe('invoke', () => {
         input: 'hello',
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow static correct input`, () => {
+  it(`should allow static correct input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -3434,9 +3588,10 @@ describe('invoke', () => {
         input: 42,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow static input that is a subtype of the expected one`, () => {
+  it(`should allow static input that is a subtype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number | string }) => Promise.resolve('foo'),
     })
@@ -3454,9 +3609,10 @@ describe('invoke', () => {
         input: 42,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject static input that is a supertype of the expected one`, () => {
+  it(`should reject static input that is a supertype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -3475,9 +3631,10 @@ describe('invoke', () => {
         input: Math.random() > 0.5 ? 'string' : 42,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject dynamic wrong input`, () => {
+  it(`should reject dynamic wrong input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -3495,9 +3652,10 @@ describe('invoke', () => {
         input: () => 'hello',
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow dynamic correct input`, () => {
+  it(`should allow dynamic correct input`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -3515,9 +3673,10 @@ describe('invoke', () => {
         input: () => 42,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject dynamic input that is a supertype of the expected one`, () => {
+  it(`should reject dynamic input that is a supertype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve('foo'),
     })
@@ -3536,9 +3695,10 @@ describe('invoke', () => {
         input: () => (Math.random() > 0.5 ? 42 : 'hello'),
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should allow dynamic input that is a subtype of the expected one`, () => {
+  it(`should allow dynamic input that is a subtype of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number | string }) => Promise.resolve('foo'),
     })
@@ -3556,9 +3716,10 @@ describe('invoke', () => {
         input: () => 'hello',
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should require input to be specified when it is required`, () => {
+  it(`should require input to be specified when it is required`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve(100),
     })
@@ -3575,9 +3736,10 @@ describe('invoke', () => {
         src: ({ actors }) => actors.child,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should not require input when it's optional`, () => {
+  it(`should not require input when it's optional`, function*({ expect }) {
     const child = createAsyncLogic({
       run: ({}: { input: number | undefined }) => Promise.resolve(100),
     })
@@ -3594,11 +3756,12 @@ describe('invoke', () => {
         src: ({ actors }) => actors.child,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 })
 
-describe('actor sources', () => {
-  it('should reject actor outside of the defined ones in provided sources', () => {
+describe('actor sources', (it) => {
+  it('should reject actor outside of the defined ones in provided sources', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -3615,9 +3778,10 @@ describe('actor sources', () => {
         other: child,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should accept a defined actor in provided sources', () => {
+  it('should accept a defined actor in provided sources', function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -3633,9 +3797,10 @@ describe('actor sources', () => {
         child,
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject the provided actor when the output doesn't match`, () => {
+  it(`should reject the provided actor when the output doesn't match`, function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -3652,9 +3817,10 @@ describe('actor sources', () => {
         child: createAsyncLogic({ run: () => Promise.resolve(42) }),
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject the provided actor when its output is a super type of the expected one`, () => {
+  it(`should reject the provided actor when its output is a super type of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({ run: () => Promise.resolve('foo') })
 
     createMachine({
@@ -3673,9 +3839,10 @@ describe('actor sources', () => {
         }),
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should accept the provided actor when its output is a sub type of the expected one`, () => {
+  it(`should accept the provided actor when its output is a sub type of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       run: () => Promise.resolve(Math.random() > 0.5 ? 'foo' : 42),
     })
@@ -3695,9 +3862,10 @@ describe('actor sources', () => {
         child: createAsyncLogic({ run: () => Promise.resolve('foo') }),
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should reject the provided actor when its input is a sub type of the expected one`, () => {
+  it(`should reject the provided actor when its input is a sub type of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       schemas: {
         input: types<{ userId: string }>(),
@@ -3720,9 +3888,10 @@ describe('actor sources', () => {
         }),
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it(`should accept the provided actor when its input is a super type of the expected one`, () => {
+  it(`should accept the provided actor when its input is a super type of the expected one`, function*({ expect }) {
     const child = createAsyncLogic({
       schemas: {
         input: types<{ userId: string }>(),
@@ -3744,9 +3913,10 @@ describe('actor sources', () => {
         }),
       },
     })
+    yield* expect(typeof child.transition).toEqual('function')
   })
 
-  it('should allow an actor with the expected snapshot type', () => {
+  it('should allow an actor with the expected snapshot type', function*({ expect }) {
     const child = createMachine({
       // types: {} as {
       //   context: {
@@ -3778,9 +3948,10 @@ describe('actor sources', () => {
         child,
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject an actor with an incorrect snapshot type', () => {
+  it('should reject an actor with an incorrect snapshot type', function*({ expect }) {
     const child = createMachine({
       // types: {} as {
       //   context: {
@@ -3827,9 +3998,10 @@ describe('actor sources', () => {
         }),
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow an actor with a snapshot type that is a subtype of the expected one', () => {
+  it('should allow an actor with a snapshot type that is a subtype of the expected one', function*({ expect }) {
     const child = createMachine({
       // types: {} as {
       //   context: {
@@ -3876,9 +4048,10 @@ describe('actor sources', () => {
         }),
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject an actor with a snapshot type that is a supertype of the expected one', () => {
+  it('should reject an actor with a snapshot type that is a supertype of the expected one', function*({ expect }) {
     const child = createMachine({
       // types: {} as {
       //   context: {
@@ -3925,9 +4098,10 @@ describe('actor sources', () => {
         }),
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow an actor with the expected event types', () => {
+  it('should allow an actor with the expected event types', function*({ expect }) {
     const child = createMachine({
       schemas: {
         events: {
@@ -3951,9 +4125,10 @@ describe('actor sources', () => {
         child,
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject an actor with wrong event types', () => {
+  it('should reject an actor with wrong event types', function*({ expect }) {
     const child = createMachine({
       // types: {} as {
       //   events: {
@@ -3994,9 +4169,10 @@ describe('actor sources', () => {
         }),
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject an actor with an event type that is a subtype of the expected one', () => {
+  it('should reject an actor with an event type that is a subtype of the expected one', function*({ expect }) {
     const child = createMachine({
       // types: {} as {
       //   events:
@@ -4043,9 +4219,10 @@ describe('actor sources', () => {
         }),
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow an actor with a snapshot type that is a supertype of the expected one', () => {
+  it('should allow an actor with a snapshot type that is a supertype of the expected one', function*({ expect }) {
     const child = createMachine({
       // types: {} as {
       //   events: {
@@ -4090,202 +4267,223 @@ describe('actor sources', () => {
         }),
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('state.children without setup', () => {
-  it('should return the correct child type on the available snapshot when the child ID for the actor was configured', () => {
-    const child = createMachine({
-      // types: {} as {
-      //   context: {
-      //     foo: string;
-      //   };
-      // },
-      schemas: {
-        context: z.object({
-          foo: z.string(),
-        }),
-      },
-      context: {
-        foo: '',
-      },
-    })
+describe('state.children without setup', (it) => {
+  it(
+    'should return the correct child type on the available snapshot when the child ID for the actor was configured',
+    function*({ expect }) {
+      const child = createMachine({
+        // types: {} as {
+        //   context: {
+        //     foo: string;
+        //   };
+        // },
+        schemas: {
+          context: z.object({
+            foo: z.string(),
+          }),
+        },
+        context: {
+          foo: '',
+        },
+      })
 
-    const machine = createMachine({
-      // types: {} as {
-      //   actors: {
-      //     src: 'child';
-      //     id: 'someChild';
-      //     logic: typeof child;
-      //   };
-      // },
-      actors: { child },
-      invoke: {
-        id: 'someChild',
-        src: ({ actors }) => actors.child,
-      },
-    })
+      const machine = createMachine({
+        // types: {} as {
+        //   actors: {
+        //     src: 'child';
+        //     id: 'someChild';
+        //     logic: typeof child;
+        //   };
+        // },
+        actors: { child },
+        invoke: {
+          id: 'someChild',
+          src: ({ actors }) => actors.child,
+        },
+      })
 
-    const snapshot = createActor(machine).getSnapshot()
-    const childSnapshot = snapshot.children['someChild']!.getSnapshot()
+      const snapshot = createActor(machine).getSnapshot()
+      const childSnapshot = snapshot.children['someChild']!.getSnapshot()
 
-    childSnapshot.context.foo satisfies string | undefined
-    childSnapshot.context.foo satisfies string
-    childSnapshot.context.foo satisfies ''
-    childSnapshot.context.foo satisfies number | undefined
-  })
+      childSnapshot.context.foo satisfies string | undefined
+      childSnapshot.context.foo satisfies string
+      childSnapshot.context.foo satisfies ''
+      childSnapshot.context.foo satisfies number | undefined
+      yield* expect(typeof child.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should have an optional child on the available snapshot when the child ID for the actor was configured', () => {
-    const child = createMachine({
-      context: {
-        counter: 0,
-      } as any,
-    })
+  it(
+    'should have an optional child on the available snapshot when the child ID for the actor was configured',
+    function*({ expect }) {
+      const child = createMachine({
+        context: {
+          counter: 0,
+        } as any,
+      })
 
-    const machine = createMachine({
-      // types: {} as {
-      //   actors: {
-      //     src: 'child';
-      //     id: 'myChild';
-      //     logic: typeof child;
-      //   };
-      // }
-      actors: {
-        child,
-      },
-    })
+      const machine = createMachine({
+        // types: {} as {
+        //   actors: {
+        //     src: 'child';
+        //     id: 'myChild';
+        //     logic: typeof child;
+        //   };
+        // }
+        actors: {
+          child,
+        },
+      })
 
-    const childActor = createActor(machine).getSnapshot().children['myChild']
+      const childActor = createActor(machine).getSnapshot().children['myChild']
 
-    childActor satisfies ActorRefFrom<typeof child> | undefined
-    if (childActor !== undefined) {
-      childActor satisfies ActorRefFrom<typeof child>
-    }
-  })
+      childActor satisfies ActorRefFrom<typeof child> | undefined
+      if (childActor !== undefined) {
+        childActor satisfies ActorRefFrom<typeof child>
+      }
+      yield* expect(typeof child.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should have an optional child on the available snapshot when the child ID for the actor was not configured', () => {
-    const child = createMachine({
-      context: {
-        counter: 0,
-      } as any,
-    })
+  it(
+    'should have an optional child on the available snapshot when the child ID for the actor was not configured',
+    function*({ expect }) {
+      const child = createMachine({
+        context: {
+          counter: 0,
+        } as any,
+      })
 
-    const machine = createMachine({
-      // types: {} as {
-      //   actors: {
-      //     src: 'child';
-      //     logic: typeof child;
-      //   };
-      // }
-      actors: {
-        child,
-      },
-    })
+      const machine = createMachine({
+        // types: {} as {
+        //   actors: {
+        //     src: 'child';
+        //     logic: typeof child;
+        //   };
+        // }
+        actors: {
+          child,
+        },
+      })
 
-    const childActor = createActor(machine).getSnapshot().children['someChild']
+      const childActor = createActor(machine).getSnapshot().children['someChild']
 
-    childActor satisfies ActorRefFrom<typeof child> | undefined
-    if (childActor !== undefined) {
-      childActor satisfies ActorRefFrom<typeof child>
-    }
-  })
+      childActor satisfies ActorRefFrom<typeof child> | undefined
+      if (childActor !== undefined) {
+        childActor satisfies ActorRefFrom<typeof child>
+      }
+      yield* expect(typeof child.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should not have an index signature on the available snapshot when child IDs were configured for all actors', () => {
-    const child1 = createMachine({
-      context: {
-        counter: 0,
-      } as any,
-    })
+  it(
+    'should not have an index signature on the available snapshot when child IDs were configured for all actors',
+    function*({ expect }) {
+      const child1 = createMachine({
+        context: {
+          counter: 0,
+        } as any,
+      })
 
-    const child2 = createMachine({
-      context: {
-        answer: '',
-      } as any,
-    })
+      const child2 = createMachine({
+        context: {
+          answer: '',
+        } as any,
+      })
 
-    const machine = createMachine({
-      // types: {} as {
-      //   actors:
-      //     | {
-      //         src: 'child1';
-      //         id: 'counter';
-      //         logic: typeof child1;
-      //       }
-      //     | {
-      //         src: 'child2';
-      //         id: 'quiz';
-      //         logic: typeof child2;
-      //       };
-      // }
-      actors: {
-        child1,
-        child2,
-      },
-    })
+      const machine = createMachine({
+        // types: {} as {
+        //   actors:
+        //     | {
+        //         src: 'child1';
+        //         id: 'counter';
+        //         logic: typeof child1;
+        //       }
+        //     | {
+        //         src: 'child2';
+        //         id: 'quiz';
+        //         logic: typeof child2;
+        //       };
+        // }
+        actors: {
+          child1,
+          child2,
+        },
+      })
 
-    createActor(machine).getSnapshot().children['counter']
-    createActor(machine).getSnapshot().children['quiz']
-    createActor(machine).getSnapshot().children['someChild']
-  })
+      createActor(machine).getSnapshot().children['counter']
+      createActor(machine).getSnapshot().children['quiz']
+      createActor(machine).getSnapshot().children['someChild']
+      yield* expect(typeof child1.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should have an index signature on the available snapshot when child IDs were configured only for some actors', () => {
-    const child1 = createMachine({
-      schemas: {
-        context: z.object({
-          counter: z.number(),
-        }),
-      },
-      context: {
-        counter: 0,
-      },
-    })
+  it(
+    'should have an index signature on the available snapshot when child IDs were configured only for some actors',
+    function*({ expect }) {
+      const child1 = createMachine({
+        schemas: {
+          context: z.object({
+            counter: z.number(),
+          }),
+        },
+        context: {
+          counter: 0,
+        },
+      })
 
-    const child2 = createMachine({
-      schemas: {
-        context: z.object({
-          answer: z.string(),
-        }),
-      },
-      context: {
-        answer: '',
-      },
-    })
+      const child2 = createMachine({
+        schemas: {
+          context: z.object({
+            answer: z.string(),
+          }),
+        },
+        context: {
+          answer: '',
+        },
+      })
 
-    const machine = createMachine({
-      // types: {} as {
-      //   actors:
-      //     | {
-      //         src: 'child1';
-      //         id: 'counter';
-      //         logic: typeof child1;
-      //       }
-      //     | {
-      //         src: 'child2';
-      //         logic: typeof child2;
-      //       };
-      // }
-      actors: {
-        child1,
-        child2,
-      },
-      // TODO: children schema
-    })
+      const machine = createMachine({
+        // types: {} as {
+        //   actors:
+        //     | {
+        //         src: 'child1';
+        //         id: 'counter';
+        //         logic: typeof child1;
+        //       }
+        //     | {
+        //         src: 'child2';
+        //         logic: typeof child2;
+        //       };
+        // }
+        actors: {
+          child1,
+          child2,
+        },
+        // TODO: children schema
+      })
 
-    const counterActor = createActor(machine).getSnapshot().children['counter']
-    counterActor satisfies ActorRefFrom<typeof child1> | undefined
+      const counterActor = createActor(machine).getSnapshot().children['counter']
+      counterActor satisfies ActorRefFrom<typeof child1> | undefined
 
-    const someActor = createActor(machine).getSnapshot().children['someChild']
-    someActor satisfies ActorRefFrom<typeof child2> | undefined
-    someActor satisfies
-      | ActorRefFrom<typeof child1>
-      | ActorRefFrom<typeof child2>
-      | undefined
-  })
+      const someActor = createActor(machine).getSnapshot().children['someChild']
+      someActor satisfies ActorRefFrom<typeof child2> | undefined
+      someActor satisfies
+        | ActorRefFrom<typeof child1>
+        | ActorRefFrom<typeof child2>
+        | undefined
+      yield* expect(typeof child1.getInitialSnapshot).toEqual('function')
+    },
+  )
 })
 
-describe('actions', () => {
-  it('context should get inferred for builtin actions used as an entry action', () => {
-    createMachine({
+describe('actions', (it) => {
+  it('context should get inferred for builtin actions used as an entry action', function*({ expect }) {
+    const machine = createMachine({
       // types: {
       //   context: {} as { count: number }
       // },
@@ -4303,10 +4501,11 @@ describe('actions', () => {
         return {}
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('context should get inferred for builtin actions used as a transition action', () => {
-    createMachine({
+  it('context should get inferred for builtin actions used as a transition action', function*({ expect }) {
+    const machine = createMachine({
       // types: {
       //   context: {} as { count: number },
       //   events: {} as { type: 'FOO' } | { type: 'BAR' }
@@ -4331,10 +4530,11 @@ describe('actions', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should report an error when the stop action returns an invalid actor ref', () => {
-    createMachine({
+  it('should report an error when the stop action returns an invalid actor ref', function*({ expect }) {
+    const machine = createMachine({
       // types: {
       //   context: {} as {
       //     count: number;
@@ -4361,10 +4561,11 @@ describe('actions', () => {
         )
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should NOT accept assign with partial static object', () => {
-    createMachine({
+  it('should NOT accept assign with partial static object', function*({ expect }) {
+    const machine = createMachine({
       // types: {
       //   events: {} as {
       //     type: 'TOGGLE';
@@ -4396,10 +4597,11 @@ describe('actions', () => {
         },
       }),
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow a defined parameterized action with params', () => {
-    createMachine({
+  it('should allow a defined parameterized action with params', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   actions: { type: 'greet'; params: { name: string } } | { type: 'poke' };
       // },
@@ -4413,10 +4615,11 @@ describe('actions', () => {
         })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow a non-defined parameterized action', () => {
-    createMachine({
+  it('should disallow a non-defined parameterized action', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   actions: { type: 'greet'; params: { name: string } } | { type: 'poke' };
       // },
@@ -4436,10 +4639,11 @@ describe('actions', () => {
         )
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow a defined parameterized action with invalid params', () => {
-    createMachine({
+  it('should disallow a defined parameterized action with invalid params', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   actions: { type: 'greet'; params: { name: string } } | { type: 'poke' };
       // },
@@ -4454,10 +4658,11 @@ describe('actions', () => {
         })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow a defined parameterized action when it lacks required params', () => {
-    createMachine({
+  it('should disallow a defined parameterized action when it lacks required params', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   actions: { type: 'greet'; params: { name: string } } | { type: 'poke' };
       // },
@@ -4478,28 +4683,33 @@ describe('actions', () => {
         )
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it("should allow a defined action without params when it only has optional params when it's referenced using an object", () => {
-    createMachine({
-      // types: {} as {
-      //   actions:
-      //     | { type: 'greet'; params: { name: string } }
-      //     | { type: 'poke'; params?: { target: string } };
-      // },
-      actions: {
-        greet: (params: { name: string }) => {},
-        poke: (params?: { target: string }) => {},
-      },
-      entry: ({ actions }, enq) => {
-        enq(actions.poke)
-        enq(() => actions.poke())
-      },
-    })
-  })
+  it(
+    "should allow a defined action without params when it only has optional params when it's referenced using an object",
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   actions:
+        //     | { type: 'greet'; params: { name: string } }
+        //     | { type: 'poke'; params?: { target: string } };
+        // },
+        actions: {
+          greet: (params: { name: string }) => {},
+          poke: (params?: { target: string }) => {},
+        },
+        entry: ({ actions }, enq) => {
+          enq(actions.poke)
+          enq(() => actions.poke())
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should type action params as the specific defined params in the provided custom action', () => {
-    createMachine({
+  it('should type action params as the specific defined params in the provided custom action', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   actions:
       //     | { type: 'greet'; params: { name: string } }
@@ -4517,10 +4727,11 @@ describe('actions', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should not allow a provided action outside of the defined ones', () => {
-    createMachine({
+  it('should not allow a provided action outside of the defined ones', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   actions:
       //     | { type: 'greet'; params: { name: string } }
@@ -4536,10 +4747,11 @@ describe('actions', () => {
         other: () => {},
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow dynamic params that return correct params type', () => {
-    createMachine({
+  it('should allow dynamic params that return correct params type', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   actions: { type: 'greet'; params: { name: string } } | { type: 'poke' };
       // },
@@ -4557,10 +4769,11 @@ describe('actions', () => {
         enq(actions.greet, { name: 'Anders' })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow dynamic params that return invalid params type', () => {
-    createMachine({
+  it('should disallow dynamic params that return invalid params type', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   actions:
       //     | { type: 'greet'; params: { surname: string } }
@@ -4584,10 +4797,11 @@ describe('actions', () => {
         })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should provide context type to dynamic params', () => {
-    createMachine({
+  it('should provide context type to dynamic params', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   context: {
       //     count: number;
@@ -4624,10 +4838,11 @@ describe('actions', () => {
         enq(actions.greet, { name: 'Anders' })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should provide narrowed down event type to dynamic params', () => {
-    createMachine({
+  it('should provide narrowed down event type to dynamic params', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   events: { type: 'FOO' } | { type: 'BAR' };
       //   actions: { type: 'greet'; params: { name: string } } | { type: 'poke' };
@@ -4665,12 +4880,13 @@ describe('actions', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('setup.extend', () => {
-  it('should infer action and guard params from setup schemas', () => {
-    setup({
+describe('setup.extend', (it) => {
+  it('should infer action and guard params from setup schemas', function*({ expect }) {
+    const machine = setup({
       schemas: {
         actions: {
           track: {
@@ -4707,10 +4923,11 @@ describe('setup.extend', () => {
         done: {},
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer action and guard params from machine schemas', () => {
-    setup().createMachine({
+  it('should infer action and guard params from machine schemas', function*({ expect }) {
+    const machine2 = setup().createMachine({
       schemas: {
         actions: {
           track: {
@@ -4746,9 +4963,10 @@ describe('setup.extend', () => {
         done: {},
       },
     })
+    yield* expect(typeof machine2.getInitialSnapshot).toEqual('function')
   })
 
-  it('extends action, guard, and delay maps', () => {
+  it('extends action, guard, and delay maps', function*({ expect }) {
     const s = setup({
       actions: {
         base: (params: { value: string }) => {},
@@ -4811,12 +5029,13 @@ describe('setup.extend', () => {
         b: {},
       },
     })
+    yield* expect(typeof s.createMachine).toEqual('function')
   })
 })
 
-describe('choice state types', () => {
-  it('should accept a choice function', () => {
-    createMachine({
+describe('choice state types', (it) => {
+  it('should accept a choice function', function*({ expect }) {
+    const machine = createMachine({
       context: {
         isVip: false,
       },
@@ -4842,10 +5061,11 @@ describe('choice state types', () => {
         standard: {},
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer context for no-event setup choice states', () => {
-    setup({
+  it('should infer context for no-event setup choice states', function*({ expect }) {
+    const machine = setup({
       schemas: {
         context: z.object({
           isVip: z.boolean(),
@@ -4877,9 +5097,10 @@ describe('choice state types', () => {
         standard: {},
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject an array of choices', () => {
+  it('should reject an array of choices', function*({ expect }) {
     const invalidArray: AnyNextStateNodeConfig = {
       type: 'choice',
       // @ts-expect-error - `choice` must be a function
@@ -4887,9 +5108,14 @@ describe('choice state types', () => {
     }
 
     noop(invalidArray)
+
+    yield* expect(invalidArray).toEqual({
+      type: 'choice',
+      choice: [{ target: 'done' }],
+    })
   })
 
-  it('should reject normal state capabilities on choice states', () => {
+  it('should reject normal state capabilities on choice states', function*({ expect }) {
     // @ts-expect-error
     const invalidOn: AnyNextStateNodeConfig = {
       type: 'choice',
@@ -4910,10 +5136,15 @@ describe('choice state types', () => {
 
     noop(invalidOn)
     noop(invalidInvoke)
+
+    yield* expect({
+      onChoice: typeof invalidOn.choice,
+      invokeChoice: typeof invalidInvoke.choice,
+    }).toEqual({ onChoice: 'function', invokeChoice: 'function' })
   })
 })
 
-describe('children schemas', () => {
+describe('children schemas', (it) => {
   const child = createMachine({
     schemas: {
       events: {
@@ -4936,8 +5167,8 @@ describe('children schemas', () => {
     },
   })
 
-  it('should type declared child refs from schemas.children', () => {
-    setup({}).createMachine({
+  it('should type declared child refs from schemas.children', function*({ expect }) {
+    const machine = setup({}).createMachine({
       schemas: {
         children: {
           someId: z.custom<ActorRefFromLogic<typeof child>>(),
@@ -4965,10 +5196,11 @@ describe('children schemas', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject an incompatible inline invoke src for a declared child id', () => {
-    createMachine({
+  it('should reject an incompatible inline invoke src for a declared child id', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         children: {
           someId: z.custom<ActorRefFromLogic<typeof child>>(),
@@ -4993,10 +5225,11 @@ describe('children schemas', () => {
         src: invalidChild,
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject an incompatible registered invoke src for a declared child id', () => {
-    setup({}).createMachine({
+  it('should reject an incompatible registered invoke src for a declared child id', function*({ expect }) {
+    const machine = setup({}).createMachine({
       schemas: {
         children: {
           someId: z.custom<ActorRefFromLogic<typeof child>>(),
@@ -5011,12 +5244,13 @@ describe('children schemas', () => {
         src: 'invalidChild',
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('input', () => {
-  it('should provide the input type to the context factory', () => {
-    createMachine({
+describe('input', (it) => {
+  it('should provide the input type to the context factory', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         input: z.object({
           count: z.number(),
@@ -5028,9 +5262,10 @@ describe('input', () => {
         return {}
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept valid input type when interpreting an actor', () => {
+  it('should accept valid input type when interpreting an actor', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         input: z.object({
@@ -5040,9 +5275,10 @@ describe('input', () => {
     })
 
     createActor(machine, { input: { count: 100 } })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject invalid input type when interpreting an actor', () => {
+  it('should reject invalid input type when interpreting an actor', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         input: z.object({
@@ -5057,9 +5293,10 @@ describe('input', () => {
         count: '',
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should require input to be specified when defined', () => {
+  it('should require input to be specified when defined', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         input: z.object({
@@ -5073,9 +5310,10 @@ describe('input', () => {
     // @ts-expect-error input is required
     createActor(machine, {})
     createActor(machine, { input: { count: 1 } })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should require input declared by a setup input schema', () => {
+  it('should require input declared by a setup input schema', function*({ expect }) {
     const machine = setup({
       schemas: {
         input: z.object({ id: z.string() }),
@@ -5087,9 +5325,10 @@ describe('input', () => {
     // @ts-expect-error input is required
     createActor(machine.provide({}))
     createActor(machine, { input: { id: 'a' } })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should not require input when the input schema is optional', () => {
+  it('should not require input when the input schema is optional', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         input: z.object({ id: z.string() }).optional(),
@@ -5097,9 +5336,10 @@ describe('input', () => {
     })
 
     createActor(machine)
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should not require input when restoring a snapshot', () => {
+  it('should not require input when restoring a snapshot', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         input: z.object({ id: z.string() }),
@@ -5116,15 +5356,17 @@ describe('input', () => {
     }
     // @ts-expect-error input is required without a snapshot
     createActor(machine, { inspect: () => {} })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should not require input when not defined', () => {
+  it('should not require input when not defined', function*({ expect }) {
     const machine = createMachine({})
 
     createActor(machine)
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should not require input when a setup input schema accepts undefined', () => {
+  it('should not require input when a setup input schema accepts undefined', function*({ expect }) {
     const machine = setup({
       schemas: {
         input: types<{} | null | undefined>(),
@@ -5137,9 +5379,10 @@ describe('input', () => {
 
     createActor(machine, { inspect: () => {} })
     createActor(machine.provide({}), { inspect: () => {} })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should create actors from provided no-event setup machines', () => {
+  it('should create actors from provided no-event setup machines', function*({ expect }) {
     const child = createMachine({})
     const machine = setup({
       schemas: {
@@ -5181,10 +5424,11 @@ describe('input', () => {
     createActor(provided, {
       input: { count: 1 },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer context for no-event always transitions', () => {
-    setup({
+  it('should infer context for no-event always transitions', function*({ expect }) {
+    const machine = setup({
       schemas: {
         context: z.object({
           count: z.number(),
@@ -5215,9 +5459,10 @@ describe('input', () => {
         done: {},
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject invalid declared events', () => {
+  it('should reject invalid declared events', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -5232,12 +5477,13 @@ describe('input', () => {
 
     // @ts-expect-error
     createActor(machine).send({ type: 'PONG' })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('guards', () => {
-  it('should allow a defined parameterized guard with params', () => {
-    createMachine({
+describe('guards', (it) => {
+  it('should allow a defined parameterized guard with params', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   guards:
       //     | {
@@ -5273,10 +5519,11 @@ describe('guards', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow a non-defined parameterized guard', () => {
-    createMachine({
+  it('should disallow a non-defined parameterized guard', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   guards:
       //     | {
@@ -5316,10 +5563,11 @@ describe('guards', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow a defined parameterized guard with invalid params', () => {
-    createMachine({
+  it('should disallow a defined parameterized guard with invalid params', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   guards:
       //     | {
@@ -5359,10 +5607,11 @@ describe('guards', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow a defined parameterized guard when it lacks required params', () => {
-    createMachine({
+  it('should disallow a defined parameterized guard when it lacks required params', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   guards:
       //     | {
@@ -5399,46 +5648,51 @@ describe('guards', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it("should allow a defined guard without params when it only has optional params when it's referenced using an object", () => {
-    createMachine({
-      // types: {} as {
-      //   guards:
-      //     | {
-      //         type: 'isGreaterThan';
-      //         params: {
-      //           count: number;
-      //         };
-      //       }
-      //     | { type: 'plainGuard'; params?: { foo: string } };
-      // },
-      guards: {
-        plainGuard: (params?: { foo: string }) => true,
-        isGreaterThan: (params: { count: number }) => {
-          ;((_accept: number) => {})(params.count) // @ts-expect-error
-          ;((_accept: 'not any') => {})(params)
-          return true
+  it(
+    "should allow a defined guard without params when it only has optional params when it's referenced using an object",
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   guards:
+        //     | {
+        //         type: 'isGreaterThan';
+        //         params: {
+        //           count: number;
+        //         };
+        //       }
+        //     | { type: 'plainGuard'; params?: { foo: string } };
+        // },
+        guards: {
+          plainGuard: (params?: { foo: string }) => true,
+          isGreaterThan: (params: { count: number }) => {
+            ;((_accept: number) => {})(params.count) // @ts-expect-error
+            ;((_accept: 'not any') => {})(params)
+            return true
+          },
         },
-      },
-      on: {
-        // EV: {
-        //   guard: {
-        //     type: 'plainGuard'
-        //   }
-        // }
-        EV: (args) => {
-          if (args.guards.plainGuard()) {
-            return {}
-          }
-          return undefined
+        on: {
+          // EV: {
+          //   guard: {
+          //     type: 'plainGuard'
+          //   }
+          // }
+          EV: (args) => {
+            if (args.guards.plainGuard()) {
+              return {}
+            }
+            return undefined
+          },
         },
-      },
-    })
-  })
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should type guard params as the specific params in the provided custom guard', () => {
-    createMachine({
+  it('should type guard params as the specific params in the provided custom guard', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   guards:
       //     | {
@@ -5465,9 +5719,10 @@ describe('guards', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should not allow a provided guard outside of the defined ones', () => {
+  it('should not allow a provided guard outside of the defined ones', function*({ expect }) {
     const machine = createMachine({
       guards: {
         isGreaterThan: (_params: { count: number }) => {
@@ -5481,10 +5736,11 @@ describe('guards', () => {
         other: () => true,
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow dynamic params that return correct params type', () => {
-    createMachine({
+  it('should allow dynamic params that return correct params type', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   guards:
       //     | {
@@ -5517,10 +5773,11 @@ describe('guards', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should disallow dynamic params that return invalid params type', () => {
-    createMachine({
+  it('should disallow dynamic params that return invalid params type', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   guards:
       //     | {
@@ -5559,10 +5816,11 @@ describe('guards', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should provide context type to dynamic params', () => {
-    createMachine({
+  it('should provide context type to dynamic params', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   context: {
       //     count: number;
@@ -5609,12 +5867,13 @@ describe('guards', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('delays', () => {
-  it('types generated after and timeout events by category and payload', () => {
-    createMachine({
+describe('delays', (it) => {
+  it('types generated after and timeout events by category and payload', function*({ expect }) {
+    const machine = createMachine({
       after: {
         100: ({ event }) => {
           event.type satisfies 'xstate.after'
@@ -5641,10 +5900,11 @@ describe('delays', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept delays in provide', () => {
-    createMachine({
+  it('should accept delays in provide', function*({ expect }) {
+    const machine = createMachine({
       delays: {
         short: 100,
       },
@@ -5664,60 +5924,73 @@ describe('delays', () => {
         unknown: 100,
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept a plain number as key of an after transitions object when delays are declared', () => {
-    createMachine({
-      // types: {} as {
-      //   delays: 'one second' | 'one minute';
-      // },
-      delays: {
-        'one second': 1000,
-        'one minute': 60000,
-      },
-      after: {
-        100: () => {},
-      },
-    })
-  })
+  it(
+    'should accept a plain number as key of an after transitions object when delays are declared',
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   delays: 'one second' | 'one minute';
+        // },
+        delays: {
+          'one second': 1000,
+          'one minute': 60000,
+        },
+        after: {
+          100: () => {},
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should accept a defined delay type as key of an after transitions object when delays are declared', () => {
-    createMachine({
-      // types: {} as {
-      //   delays: 'one second' | 'one minute';
-      // },
-      delays: {
-        'one second': 1000,
-        'one minute': 60000,
-      },
-      after: {
-        'one second': () => {},
-      },
-    })
-  })
+  it(
+    'should accept a defined delay type as key of an after transitions object when delays are declared',
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   delays: 'one second' | 'one minute';
+        // },
+        delays: {
+          'one second': 1000,
+          'one minute': 60000,
+        },
+        after: {
+          'one second': () => {},
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it(`should reject delay as key of an after transitions object if it's outside of the defined ones`, () => {
-    createMachine({
-      // types: {} as {
-      //   delays: 'one second' | 'one minute';
-      // },
-      delays: {
-        'one second': 1000,
-        'one minute': 60000,
-      },
-      after: {
-        // @ts-expect-error
-        'unknown delay': { target: '.done' },
-      },
-      initial: 'done',
-      states: {
-        done: {},
-      },
-    })
-  })
+  it(
+    `should reject delay as key of an after transitions object if it's outside of the defined ones`,
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   delays: 'one second' | 'one minute';
+        // },
+        delays: {
+          'one second': 1000,
+          'one minute': 60000,
+        },
+        after: {
+          // @ts-expect-error
+          'unknown delay': { target: '.done' },
+        },
+        initial: 'done',
+        states: {
+          done: {},
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should reject timeout delay strings outside of the defined ones', () => {
-    createMachine({
+  it('should reject timeout delay strings outside of the defined ones', function*({ expect }) {
+    const machine = createMachine({
       delays: {
         short: 100,
       },
@@ -5725,10 +5998,11 @@ describe('delays', () => {
       timeout: 'unknown delay',
       onTimeout: {},
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject nested after delay strings outside of the defined ones', () => {
-    createMachine({
+  it('should reject nested after delay strings outside of the defined ones', function*({ expect }) {
+    const machine = createMachine({
       delays: {
         short: 100,
       },
@@ -5743,10 +6017,11 @@ describe('delays', () => {
         done: {},
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject setup-created machine delay strings outside of the defined ones', () => {
-    setup({}).createMachine({
+  it('should reject setup-created machine delay strings outside of the defined ones', function*({ expect }) {
+    const machine2 = setup({}).createMachine({
       delays: {
         short: 100,
       },
@@ -5760,10 +6035,11 @@ describe('delays', () => {
         done: {},
       },
     })
+    yield* expect(typeof machine2.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject setup-created machine timeout delay strings outside of the defined ones', () => {
-    setup({}).createMachine({
+  it('should reject setup-created machine timeout delay strings outside of the defined ones', function*({ expect }) {
+    const machine2 = setup({}).createMachine({
       delays: {
         short: 100,
       },
@@ -5771,10 +6047,11 @@ describe('delays', () => {
       timeout: 'unknown delay',
       onTimeout: {},
     })
+    yield* expect(typeof machine2.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept a plain number as delay in `raise` when delays are declared', () => {
-    createMachine({
+  it('should accept a plain number as delay in `raise` when delays are declared', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   delays: 'one second' | 'one minute';
       // },
@@ -5787,10 +6064,11 @@ describe('delays', () => {
         enq.raise({ type: 'FOO' }, { delay: 100 })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept a defined delay in `raise`', () => {
-    createMachine({
+  it('should accept a defined delay in `raise`', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   delays: 'one second' | 'one minute';
       // },
@@ -5803,10 +6081,11 @@ describe('delays', () => {
         enq.raise({ type: 'FOO' }, { delay: 'one minute' as any })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject a delay outside of the defined ones in `raise`', () => {
-    createMachine({
+  it('should reject a delay outside of the defined ones in `raise`', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   delays: 'one second' | 'one minute';
       // },
@@ -5832,9 +6111,10 @@ describe('delays', () => {
         )
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept a plain number as delay in `sendTo` when delays are declared', () => {
+  it('should accept a plain number as delay in `sendTo` when delays are declared', function*({ expect }) {
     const otherActor = createActor(createMachine({}))
 
     createMachine({
@@ -5850,9 +6130,10 @@ describe('delays', () => {
         enq.sendTo(otherActor, { type: 'FOO' }, { delay: 100 })
       },
     })
+    yield* expect(typeof otherActor.send).toEqual('function')
   })
 
-  it('should type enq.sendTo events against context actor refs', () => {
+  it('should type enq.sendTo events against context actor refs', function*({ expect }) {
     const child = createMachine({
       schemas: {
         events: {
@@ -5879,9 +6160,10 @@ describe('delays', () => {
         enq.sendTo(context.child, { type: 'PONG' })
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should type enq.sendTo events against declared child ids', () => {
+  it('should type enq.sendTo events against declared child ids', function*({ expect }) {
     const child = createMachine({
       schemas: {
         events: {
@@ -5915,9 +6197,10 @@ describe('delays', () => {
         },
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should return typed actor refs from enq.spawn', () => {
+  it('should return typed actor refs from enq.spawn', function*({ expect }) {
     const child = createMachine({
       schemas: {
         events: {
@@ -5937,9 +6220,10 @@ describe('delays', () => {
         childRef.send({ type: 'PONG' })
       },
     })
+    yield* expect(typeof child.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept a defined delay in `sendTo`', () => {
+  it('should accept a defined delay in `sendTo`', function*({ expect }) {
     const otherActor = createActor(createMachine({}))
 
     createMachine({
@@ -5955,9 +6239,10 @@ describe('delays', () => {
         enq.sendTo(otherActor, { type: 'FOO' }, { delay: 'one minute' as any })
       },
     })
+    yield* expect(typeof otherActor.send).toEqual('function')
   })
 
-  it('should reject a delay outside of the defined ones in `sendTo`', () => {
+  it('should reject a delay outside of the defined ones in `sendTo`', function*({ expect }) {
     const otherActor = createActor(createMachine({}))
 
     createMachine({
@@ -5988,28 +6273,33 @@ describe('delays', () => {
         )
       },
     })
+    yield* expect(typeof otherActor.send).toEqual('function')
   })
 
-  it('should accept a plain number as delay in `raise` in `enqueueActions` when delays are declared', () => {
-    createMachine({
-      // types: {} as {
-      //   delays: 'one second' | 'one minute';
-      // },
-      delays: {
-        'one second': 1000,
-        'one minute': 60000,
-      },
-      // entry: enqueueActions(({ enqueue }) => {
-      //   enqueue.raise({ type: 'FOO' }, { delay: 100 });
-      // })
-      entry: (_, enq) => {
-        enq.raise({ type: 'FOO' }, { delay: 100 })
-      },
-    })
-  })
+  it(
+    'should accept a plain number as delay in `raise` in `enqueueActions` when delays are declared',
+    function*({ expect }) {
+      const machine = createMachine({
+        // types: {} as {
+        //   delays: 'one second' | 'one minute';
+        // },
+        delays: {
+          'one second': 1000,
+          'one minute': 60000,
+        },
+        // entry: enqueueActions(({ enqueue }) => {
+        //   enqueue.raise({ type: 'FOO' }, { delay: 100 });
+        // })
+        entry: (_, enq) => {
+          enq.raise({ type: 'FOO' }, { delay: 100 })
+        },
+      })
+      yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
+    },
+  )
 
-  it('should accept a defined delay in `raise` in `enqueueActions`', () => {
-    createMachine({
+  it('should accept a defined delay in `raise` in `enqueueActions`', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   delays: 'one second' | 'one minute';
       // },
@@ -6024,10 +6314,11 @@ describe('delays', () => {
         enq.raise({ type: 'FOO' }, { delay: 'one minute' as any })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject a delay outside of the defined ones in `raise` in `enqueueActions`', () => {
-    createMachine({
+  it('should reject a delay outside of the defined ones in `raise` in `enqueueActions`', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   delays: 'one second' | 'one minute';
       // },
@@ -6045,20 +6336,22 @@ describe('delays', () => {
         )
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should NOT accept any delay string when no explicit delays are defined', () => {
-    createMachine({
+  it('should NOT accept any delay string when no explicit delays are defined', function*({ expect }) {
+    const machine = createMachine({
       after: {
         just_any_delay: {},
       } as any,
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('tags', () => {
-  it(`should NOT allow a defined tag when it's set using a string`, () => {
-    createMachine({
+describe('tags', (it) => {
+  it(`should NOT allow a defined tag when it's set using a string`, function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   tags: 'pending' | 'success' | 'error';
       // },
@@ -6072,10 +6365,11 @@ describe('tags', () => {
       // @ts-expect-error
       tags: 'pending',
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should allow a defined tag when it's set using an array`, () => {
-    createMachine({
+  it(`should allow a defined tag when it's set using an array`, function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   tags: 'pending' | 'success' | 'error';
       // },
@@ -6088,10 +6382,11 @@ describe('tags', () => {
       },
       tags: ['pending'],
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should not allow a tag outside of the defined ones when it's set using a string`, () => {
-    createMachine({
+  it(`should not allow a tag outside of the defined ones when it's set using a string`, function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   tags: 'pending' | 'success' | 'error';
       // },
@@ -6105,10 +6400,11 @@ describe('tags', () => {
       // @ts-expect-error
       tags: 'other',
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it(`should not allow a tag outside of the defined ones when it's set using an array`, () => {
-    createMachine({
+  it(`should not allow a tag outside of the defined ones when it's set using an array`, function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   tags: 'pending' | 'success' | 'error';
       // },
@@ -6121,9 +6417,10 @@ describe('tags', () => {
       },
       tags: ['other'] as any,
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('`hasTag` should allow checking a defined tag', () => {
+  it('`hasTag` should allow checking a defined tag', function*({ expect }) {
     const machine = createMachine({
       // types: {} as {
       //   tags: 'a' | 'b' | 'c';
@@ -6136,9 +6433,10 @@ describe('tags', () => {
     const actor = createActor(machine).start()
 
     actor.getSnapshot().hasTag('a')
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('`hasTag` should not allow checking a tag outside of the defined ones', () => {
+  it('`hasTag` should not allow checking a tag outside of the defined ones', function*({ expect }) {
     const machine = createMachine({
       // types: {} as {
       //   tags: 'a' | 'b' | 'c';
@@ -6152,12 +6450,13 @@ describe('tags', () => {
 
     // @ts-expect-error
     actor.getSnapshot().hasTag('other')
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('createCallbackLogic', () => {
-  it('should reject a start callback that returns an explicit promise', () => {
-    createMachine({
+describe('createCallbackLogic', (it) => {
+  it('should reject a start callback that returns an explicit promise', function*({ expect }) {
+    const machine = createMachine({
       invoke: {
         src: createCallbackLogic(
           // @ts-ignore
@@ -6167,9 +6466,10 @@ describe('createCallbackLogic', () => {
         ),
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject a start callback that is an async function', () => {
+  it('should reject a start callback that is an async function', function*({ expect }) {
     // it's important to not give a false impression that we support returning promises from this setup as we supported that in the past
     // the problem is that people could accidentally~ use an async function for convenience purposes
     // then we'd listen for the promise to resolve and cleanup that actor, closing the communication channel between parent and the child
@@ -6183,7 +6483,7 @@ describe('createCallbackLogic', () => {
     //
     //   // implicit completion
     // })
-    createMachine({
+    const machine = createMachine({
       invoke: {
         src: createCallbackLogic(
           // @ts-ignore
@@ -6191,10 +6491,11 @@ describe('createCallbackLogic', () => {
         ),
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should reject a start callback that returns a non-function and non-undefined value', () => {
-    createMachine({
+  it('should reject a start callback that returns a non-function and non-undefined value', function*({ expect }) {
+    const machine = createMachine({
       invoke: {
         src: createCallbackLogic(
           // @ts-ignore
@@ -6204,40 +6505,44 @@ describe('createCallbackLogic', () => {
         ),
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow returning an implicit undefined from the start callback', () => {
-    createMachine({
+  it('should allow returning an implicit undefined from the start callback', function*({ expect }) {
+    const machine = createMachine({
       invoke: {
         src: createCallbackLogic(() => {}),
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow returning an explicit undefined from the start callback', () => {
-    createMachine({
+  it('should allow returning an explicit undefined from the start callback', function*({ expect }) {
+    const machine = createMachine({
       invoke: {
         src: createCallbackLogic(() => {
           return undefined
         }),
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow returning a cleanup function the start callback', () => {
-    createMachine({
+  it('should allow returning a cleanup function the start callback', function*({ expect }) {
+    const machine = createMachine({
       invoke: {
         src: createCallbackLogic(() => {
           return undefined
         }),
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('self', () => {
-  it('should accept correct event types in an inline entry custom action', () => {
-    createMachine({
+describe('self', (it) => {
+  it('should accept correct event types in an inline entry custom action', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         events: {
           FOO: z.object({}),
@@ -6251,10 +6556,11 @@ describe('self', () => {
         self.send({ type: 'BAZ' })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept correct event types in an inline entry builtin action', () => {
-    createMachine({
+  it('should accept correct event types in an inline entry builtin action', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   events: { type: 'FOO' } | { type: 'BAR' };
       // },
@@ -6271,10 +6577,11 @@ describe('self', () => {
         self.send({ type: 'BAZ' })
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept correct event types in an inline transition custom action', () => {
-    createMachine({
+  it('should accept correct event types in an inline transition custom action', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   events: { type: 'FOO' } | { type: 'BAR' };
       // },
@@ -6293,10 +6600,11 @@ describe('self', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept correct event types in an inline transition builtin action', () => {
-    createMachine({
+  it('should accept correct event types in an inline transition builtin action', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   events: { type: 'FOO' } | { type: 'BAR' };
       // },
@@ -6316,10 +6624,11 @@ describe('self', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should return correct snapshot in an inline entry custom action', () => {
-    createMachine({
+  it('should return correct snapshot in an inline entry custom action', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   context: { count: number };
       // },
@@ -6334,10 +6643,11 @@ describe('self', () => {
         ;((_accept: string) => {})(self.getSnapshot().context.count)
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should return correct snapshot in an inline entry action', () => {
-    createMachine({
+  it('should return correct snapshot in an inline entry action', function*({ expect }) {
+    const machine = createMachine({
       // types: {} as {
       //   context: { count: number };
       // },
@@ -6358,30 +6668,33 @@ describe('self', () => {
         ;((_accept: string) => {})(self.getSnapshot().context.count)
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-describe('createActor', () => {
-  it(`should require input to be specified when it is required`, () => {
+describe('createActor', (it) => {
+  it(`should require input to be specified when it is required`, function*({ expect }) {
     const logic = createAsyncLogic({
       run: ({}: { input: number }) => Promise.resolve(100),
     })
 
     // @ts-expect-error input is required
     createActor(logic)
+    yield* expect(typeof logic.transition).toEqual('function')
   })
 
-  it(`should not require input when it's optional`, () => {
+  it(`should not require input when it's optional`, function*({ expect }) {
     const logic = createAsyncLogic({
       run: ({}: { input: number | undefined }) => Promise.resolve(100),
     })
 
     createActor(logic)
+    yield* expect(typeof logic.transition).toEqual('function')
   })
 })
 
-describe('snapshot methods', () => {
-  it('should allow repeated matches checks with negative narrowing', () => {
+describe('snapshot methods', (it) => {
+  it('should allow repeated matches checks with negative narrowing', function*({ expect }) {
     const machine = setup({
       schemas: { context: types<{ id: string }>() },
     }).createMachine({
@@ -6399,9 +6712,10 @@ describe('snapshot methods', () => {
     const e = (s: Snap, value: StateValue) => s.matches(value) || s.matches('failed')
 
     void [a, b, c, d, e]
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should allow repeated matches checks with nested state values', () => {
+  it('should allow repeated matches checks with nested state values', function*({ expect }) {
     const machine = createMachine({
       initial: 'red',
       states: {
@@ -6422,9 +6736,10 @@ describe('snapshot methods', () => {
     const children = (s: Snap) => s.matches({ red: 'walk' }) || s.matches({ red: 'wait' })
 
     void [parent, children]
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should type infer actor union snapshot methods', () => {
+  it('should type infer actor union snapshot methods', function*({ expect }) {
     const typeOne = createMachine({
       schemas: {
         events: {
@@ -6476,11 +6791,12 @@ describe('snapshot methods', () => {
 
     snapshot.getMeta()
     snapshot.toJSON()
+    yield* expect(typeof typeOne.getInitialSnapshot).toEqual('function')
   })
 })
 
 // https://github.com/statelyai/xstate/issues/4931
-it('createAsyncLogic should not have issues with actors with emitted types', () => {
+it('createAsyncLogic should not have issues with actors with emitted types', function*({ expect }) {
   // const machine = setup({
   //   types: {
   //     emitted: {} as { type: 'FOO' }
@@ -6499,16 +6815,18 @@ it('createAsyncLogic should not have issues with actors with emitted types', () 
   const actor = createActor(machine).start()
 
   toPromise(actor)
+  yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
 })
 
-it('UnknownActorRef should return a Snapshot-typed value from getSnapshot()', () => {
+it('UnknownActorRef should return a Snapshot-typed value from getSnapshot()', function*({ expect }) {
   const actor: UnknownActorRef = createEmptyActor()
 
   // @ts-expect-error
   actor.getSnapshot().status === 'FOO'
+  yield* expect(typeof actor.send).toEqual('function')
 })
 
-it('Actor<T> should be assignable to ActorRefFromLogic<T>', () => {
+it('Actor<T> should be assignable to ActorRefFromLogic<T>', function*({ expect }) {
   const logic = createMachine({})
 
   class ActorThing<T extends AnyActorLogic> {
@@ -6522,9 +6840,10 @@ it('Actor<T> should be assignable to ActorRefFromLogic<T>', () => {
   }
 
   new ActorThing(logic, {})
+  yield* expect(typeof logic.getInitialSnapshot).toEqual('function')
 })
 
-it('createSystem registry keys typecheck registryKey usage', () => {
+it('createSystem registry keys typecheck registryKey usage', function*({ expect }) {
   const receiver = createCallbackLogic<{ type: 'HELLO' }>(() => {})
   const other = createCallbackLogic<{ type: 'OTHER' }>(() => {})
   const app = createSystem({
@@ -6593,9 +6912,10 @@ it('createSystem registry keys typecheck registryKey usage', () => {
     // @ts-expect-error registry key expects the registered logic
     app.createActor(other, { registryKey: 'receiver' })
   }
+  yield* expect(typeof app.createActor).toEqual('function')
 })
 
-it('createSystem().createActor requires input for required-input machines', () => {
+it('createSystem().createActor requires input for required-input machines', function*({ expect }) {
   const machine = setup({
     schemas: { input: z.object({ id: z.string() }) },
   }).createMachine({})
@@ -6622,14 +6942,15 @@ it('createSystem().createActor requires input for required-input machines', () =
     // @ts-expect-error registry key expects the registered logic
     app.createActor(machine, { input: { id: 'a' }, registryKey: 'receiver' })
   }
+  yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
 })
 
-describe('invoke onDone inference with heterogeneous actor maps', () => {
+describe('invoke onDone inference with heterogeneous actor maps', (it) => {
   const numberLogic = createAsyncLogic({ run: async () => 42 })
   const stringLogic = createAsyncLogic({ run: async () => 'hello' })
 
-  it('should infer per-actor event.output for a string src', () => {
-    setup({
+  it('should infer per-actor event.output for a string src', function*({ expect }) {
+    const machine = setup({
       actors: { numberLogic, stringLogic },
     }).createMachine({
       initial: 'a',
@@ -6656,10 +6977,11 @@ describe('invoke onDone inference with heterogeneous actor maps', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer per-actor event.output for a logic value src', () => {
-    setup({
+  it('should infer per-actor event.output for a logic value src', function*({ expect }) {
+    const machine = setup({
       actors: { numberLogic, stringLogic },
     }).createMachine({
       initial: 'a',
@@ -6686,10 +7008,11 @@ describe('invoke onDone inference with heterogeneous actor maps', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer event.output for a logic value src in a single-actor map', () => {
-    setup({
+  it('should infer event.output for a logic value src in a single-actor map', function*({ expect }) {
+    const machine = setup({
       actors: { numberLogic },
     }).createMachine({
       initial: 'a',
@@ -6705,10 +7028,11 @@ describe('invoke onDone inference with heterogeneous actor maps', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should infer per-actor event.output for a logic value src in plain createMachine', () => {
-    createMachine({
+  it('should infer per-actor event.output for a logic value src in plain createMachine', function*({ expect }) {
+    const machine = createMachine({
       actors: { numberLogic, stringLogic },
       initial: 'a',
       states: {
@@ -6723,10 +7047,11 @@ describe('invoke onDone inference with heterogeneous actor maps', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should accept object-form onDone for a logic value src', () => {
-    setup({
+  it('should accept object-form onDone for a logic value src', function*({ expect }) {
+    const machine = setup({
       actors: { numberLogic, stringLogic },
     }).createMachine({
       initial: 'a',
@@ -6740,9 +7065,10 @@ describe('invoke onDone inference with heterogeneous actor maps', () => {
         b: {},
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 
-  it('should keep function-form onDone for inline logic when no actors are registered', () => {
+  it('should keep function-form onDone for inline logic when no actors are registered', function*({ expect }) {
     const inlineLogic = createAsyncLogic({ run: async () => true })
 
     setup({}).createMachine({
@@ -6756,10 +7082,11 @@ describe('invoke onDone inference with heterogeneous actor maps', () => {
         },
       },
     })
+    yield* expect(typeof inlineLogic.transition).toEqual('function')
   })
 })
 
-it('generic aliases preserve invocation metadata, state input, and transition children', () => {
+it('generic aliases preserve invocation metadata, state input, and transition children', function*({ expect }) {
   type IsAny<T> = 0 extends 1 & T ? true : false
   type MetaOf<T> = T extends { meta?: infer M } ? M : never
   type Item<T> = T extends readonly (infer U)[] ? U : T
@@ -6779,7 +7106,7 @@ it('generic aliases preserve invocation metadata, state input, and transition ch
   const children: IsAny<
     Parameters<import('../src/index.js').AnyTransitionConfigFunction>[0]['children']
   > = true
-  expect([
+  yield* expect([
     invoke.onDone,
     invoke.onError,
     invoke.onSnapshot,
@@ -6789,9 +7116,9 @@ it('generic aliases preserve invocation metadata, state input, and transition ch
   ]).toEqual([true, true, true, true, true, true])
 })
 
-describe('entry/exit stateNode', () => {
-  it('provides the state node to entry and exit but not to transitions', () => {
-    createMachine({
+describe('entry/exit stateNode', (it) => {
+  it('provides the state node to entry and exit but not to transitions', function*({ expect }) {
+    const machine = createMachine({
       initial: 'a',
       states: {
         a: {
@@ -6812,10 +7139,11 @@ describe('entry/exit stateNode', () => {
         },
       },
     })
+    yield* expect(typeof machine.getInitialSnapshot).toEqual('function')
   })
 })
 
-it('generic state node containers keep arbitrary metadata as any', () => {
+it('generic state node containers keep arbitrary metadata as any', function*({ expect }) {
   // Ported intent of v5 #5712/#5718. `any` assigns both ways, so check that the
   // meta slots stay `any` instead of widening to `MetaObject`.
   type IsAny<T> = 0 extends 1 & T ? true : false
@@ -6853,7 +7181,7 @@ it('generic state node containers keep arbitrary metadata as any', () => {
   > = true
   const transition: IsAny<import('../src/index.js').AnyTransitionDefinition['meta']> = true
 
-  expect(
+  yield* expect(
     [
       root,
       history,
@@ -6863,8 +7191,21 @@ it('generic state node containers keep arbitrary metadata as any', () => {
       graphNode,
       graphTransition,
       transition,
-    ]
-      .flat()
-      .every(Boolean),
-  ).toBe(true)
+    ].flat(),
+  ).toEqual([
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+  ])
 })

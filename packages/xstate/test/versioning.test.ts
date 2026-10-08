@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
 import { createActor, createMachine } from '../src/index.js'
 
-describe('persisted snapshot versioning', () => {
-  it('stamps the machine version on persisted snapshots', () => {
+describe('persisted snapshot versioning', (it) => {
+  it('stamps the machine version on persisted snapshots', function*({ expect }) {
     const machine = createMachine({
       version: '1',
       initial: 'a',
@@ -12,11 +12,13 @@ describe('persisted snapshot versioning', () => {
     const actor = createActor(machine).start()
     const persisted = actor.getPersistedSnapshot()
 
-    expect((persisted as any).version).toBe('1')
-    expect(JSON.parse(JSON.stringify(persisted)).version).toBe('1')
+    yield* expect({
+      version: (persisted as any).version,
+      roundTripped: JSON.parse(JSON.stringify(persisted)).version,
+    }).toEqual({ version: '1', roundTripped: '1' })
   })
 
-  it('does not stamp a version when the machine has none', () => {
+  it('does not stamp a version when the machine has none', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: { a: {} },
@@ -25,10 +27,12 @@ describe('persisted snapshot versioning', () => {
     const actor = createActor(machine).start()
     const persisted = actor.getPersistedSnapshot()
 
-    expect('version' in (persisted as any)).toBe(false)
+    yield* expect({ hasVersion: 'version' in (persisted as any) }).toEqual({
+      hasVersion: false,
+    })
   })
 
-  it('restores a snapshot with a matching version', () => {
+  it('restores a snapshot with a matching version', function*({ expect }) {
     const machine = createMachine({
       version: '1',
       initial: 'a',
@@ -41,10 +45,10 @@ describe('persisted snapshot versioning', () => {
     actor.stop()
 
     const restored = createActor(machine, { snapshot: persisted }).start()
-    expect(restored.getSnapshot().value).toBe('b')
+    yield* expect(restored.getSnapshot().value).toBe('b')
   })
 
-  it('does not treat a live snapshot machine reference as persisted identity', () => {
+  it('does not treat a live snapshot machine reference as persisted identity', function*({ expect }) {
     const machineV1 = createMachine({
       id: 'checkout',
       version: '1',
@@ -63,12 +67,14 @@ describe('persisted snapshot versioning', () => {
 
     const restored = createActor(machineV2, { snapshot: migrated }).start()
 
-    expect(restored.getSnapshot().status).toBe('active')
-    expect(restored.getSnapshot().value).toBe('b')
-    expect(restored.getSnapshot().machine).toBe(machineV2)
+    yield* expect({
+      status: restored.getSnapshot().status,
+      value: restored.getSnapshot().value,
+      machineIsV2: restored.getSnapshot().machine === machineV2,
+    }).toEqual({ status: 'active', value: 'b', machineIsV2: true })
   })
 
-  it('restores from nested machine identity without the legacy top-level version', () => {
+  it('restores from nested machine identity without the legacy top-level version', function*({ expect }) {
     const machine = createMachine({
       id: 'checkout',
       version: '1',
@@ -81,10 +87,10 @@ describe('persisted snapshot versioning', () => {
 
     const restored = createActor(machine, { snapshot: persisted }).start()
 
-    expect(restored.getSnapshot().value).toBe('b')
+    yield* expect(restored.getSnapshot().value).toBe('b')
   })
 
-  it('errors when restoring a version-mismatched snapshot without a migrate function', () => {
+  it('errors when restoring a version-mismatched snapshot without a migrate function', function*({ expect }) {
     const machineV1 = createMachine({
       version: '1',
       initial: 'a',
@@ -103,13 +109,17 @@ describe('persisted snapshot versioning', () => {
     restored.start()
 
     const snapshot = restored.getSnapshot()
-    expect(snapshot.status).toBe('error')
-    expect((snapshot as any).error.message).toMatch(
-      /Persisted snapshot version '1' does not match machine version '2'/,
-    )
+    yield* expect({
+      status: snapshot.status,
+      message: (snapshot as any).error.message,
+    }).toEqual({
+      status: 'error',
+      message:
+        "Persisted snapshot version '1' does not match machine version '2' for machine '(machine)'. Provide a `migrate(persistedSnapshot, fromVersion)` function in the machine config to migrate old snapshots.",
+    })
   })
 
-  it('migrates a version-mismatched snapshot with the `migrate` function', () => {
+  it('migrates a version-mismatched snapshot with the `migrate` function', function*({ expect }) {
     const machineV1 = createMachine({
       version: '1',
       context: { count: 5 },
@@ -117,14 +127,15 @@ describe('persisted snapshot versioning', () => {
       states: { a: {} },
     })
 
-    const migrate = vi.fn((persisted: any, fromVersion: string | undefined) => {
-      expect(fromVersion).toBe('1')
+    const fromVersions: Array<string | undefined> = []
+    const migrate = (persisted: any, fromVersion: string | undefined) => {
+      fromVersions.push(fromVersion)
       return {
         ...persisted,
         version: '2',
         context: { total: persisted.context.count },
       }
-    })
+    }
 
     const machineV2 = createMachine({
       version: '2',
@@ -137,12 +148,18 @@ describe('persisted snapshot versioning', () => {
     const persisted = createActor(machineV1).start().getPersistedSnapshot()
     const restored = createActor(machineV2, { snapshot: persisted }).start()
 
-    expect(migrate).toHaveBeenCalledTimes(1)
-    expect(restored.getSnapshot().status).toBe('active')
-    expect(restored.getSnapshot().context).toEqual({ total: 5 })
+    yield* expect({
+      fromVersions,
+      status: restored.getSnapshot().status,
+      context: restored.getSnapshot().context,
+    }).toEqual({
+      fromVersions: ['1'],
+      status: 'active',
+      context: { total: 5 },
+    })
   })
 
-  it('passes the nested machine version to migration without a top-level version', () => {
+  it('passes the nested machine version to migration without a top-level version', function*({ expect }) {
     const machineV1 = createMachine({
       id: 'checkout',
       version: '1',
@@ -150,12 +167,14 @@ describe('persisted snapshot versioning', () => {
       initial: 'a',
       states: { a: {} },
     })
-    const migrate = vi.fn(
-      (persisted: any, fromVersion: string | undefined) => ({
+    const fromVersions: Array<string | undefined> = []
+    const migrate = (persisted: any, fromVersion: string | undefined) => {
+      fromVersions.push(fromVersion)
+      return {
         ...persisted,
         context: { total: persisted.context.count },
-      }),
-    )
+      }
+    }
     const machineV2 = createMachine({
       id: 'checkout',
       version: '2',
@@ -170,21 +189,24 @@ describe('persisted snapshot versioning', () => {
 
     const restored = createActor(machineV2, { snapshot: persisted }).start()
 
-    expect(migrate).toHaveBeenCalledWith(expect.anything(), '1')
-    expect(restored.getSnapshot().context).toEqual({ total: 5 })
+    yield* expect({
+      fromVersions,
+      context: restored.getSnapshot().context,
+    }).toEqual({ fromVersions: ['1'], context: { total: 5 } })
   })
 
-  it('migrates an unversioned snapshot (fromVersion is undefined)', () => {
+  it('migrates an unversioned snapshot (fromVersion is undefined)', function*({ expect }) {
     const legacyMachine = createMachine({
       context: { count: 3 },
       initial: 'a',
       states: { a: {} },
     })
 
+    const fromVersions: Array<string | undefined> = []
     const machineV1 = createMachine({
       version: '1',
-      migrate: (persisted: any, fromVersion) => {
-        expect(fromVersion).toBeUndefined()
+      migrate: (persisted: any, fromVersion: string | undefined) => {
+        fromVersions.push(fromVersion)
         return persisted
       },
       context: { count: 0 },
@@ -195,7 +217,14 @@ describe('persisted snapshot versioning', () => {
     const persisted = createActor(legacyMachine).start().getPersistedSnapshot()
     const restored = createActor(machineV1, { snapshot: persisted }).start()
 
-    expect(restored.getSnapshot().status).toBe('active')
-    expect(restored.getSnapshot().context).toEqual({ count: 3 })
+    yield* expect({
+      fromVersions,
+      status: restored.getSnapshot().status,
+      context: restored.getSnapshot().context,
+    }).toEqual({
+      fromVersions: [undefined],
+      status: 'active',
+      context: { count: 3 },
+    })
   })
 })

@@ -1,16 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import * as fsm from '../src/fsm/index.js'
 
 describe('xstate/fsm', () => {
-  it('exports only the pure FSM API', () => {
-    expect(fsm.createFSM).toBeDefined()
-    expect(fsm.setup).toBeDefined()
-    expect(fsm.types).toBeDefined()
-    expect(fsm).not.toHaveProperty('createActor')
-    expect(fsm).not.toHaveProperty('createFSMActor')
+  it('exports only the pure FSM API', function*({ expect }) {
+    yield* expect(Object.keys(fsm).sort()).toEqual([
+      'createFSM',
+      'setup',
+      'types',
+    ])
   })
 
-  it('creates and transitions a machine', () => {
+  it('creates and transitions a machine', function*({ expect }) {
     const machine = fsm.createFSM({
       initial: 'inactive',
       states: {
@@ -19,7 +19,7 @@ describe('xstate/fsm', () => {
       },
     })
 
-    expect(
+    yield* expect(
       machine.transition(machine.initialState, { type: 'toggle' }),
     ).toEqual([{ status: 'active', value: 'active', context: {} }, []])
   })

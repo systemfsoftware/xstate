@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createActor, createMachine } from '../src/index.js'
 
 describe('actor.trigger', () => {
-  it('should send events via trigger', () => {
+  it('should send events via trigger', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
@@ -18,18 +18,18 @@ describe('actor.trigger', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().value).toBe('idle')
-
     const nextTrigger = actor.trigger['NEXT']
     if (nextTrigger === undefined) {
       throw new Error('expected a NEXT trigger')
     }
+    const before = actor.getSnapshot().value
     nextTrigger()
+    const after = actor.getSnapshot().value
 
-    expect(actor.getSnapshot().value).toBe('active')
+    yield* expect({ before, after }).toEqual({ before: 'idle', after: 'active' })
   })
 
-  it('should send events with payload via trigger', () => {
+  it('should send events with payload via trigger', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({ count: z.number() }),
@@ -52,14 +52,16 @@ describe('actor.trigger', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().context.count).toBe(0)
+    const before = actor.getSnapshot().context.count
 
     actor.trigger.INC({ by: 5 })
 
-    expect(actor.getSnapshot().context.count).toBe(5)
+    const after = actor.getSnapshot().context.count
+
+    yield* expect({ before, after }).toEqual({ before: 0, after: 5 })
   })
 
-  it('should work with events with only type (no payload)', () => {
+  it('should work with events with only type (no payload)', function*({ expect }) {
     const events: string[] = []
 
     const machine = createMachine({
@@ -85,11 +87,13 @@ describe('actor.trigger', () => {
     }
     goTrigger()
 
-    expect(events).toEqual(['GO'])
-    expect(actor.getSnapshot().value).toBe('b')
+    yield* expect({ events, value: actor.getSnapshot().value }).toEqual({
+      events: ['GO'],
+      value: 'b',
+    })
   })
 
-  it('should work with multiple event types', () => {
+  it('should work with multiple event types', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({ count: z.number() }),
@@ -121,15 +125,18 @@ describe('actor.trigger', () => {
     const actor = createActor(machine).start()
 
     actor.trigger.INC()
-    expect(actor.getSnapshot().context.count).toBe(1)
+    const afterFirstInc = actor.getSnapshot().context.count
 
     actor.trigger.INC()
-    expect(actor.getSnapshot().context.count).toBe(2)
+    const afterSecondInc = actor.getSnapshot().context.count
 
     actor.trigger.DEC()
-    expect(actor.getSnapshot().context.count).toBe(1)
+    const afterDec = actor.getSnapshot().context.count
 
     actor.trigger.SET({ value: 100 })
-    expect(actor.getSnapshot().context.count).toBe(100)
+    const afterSet = actor.getSnapshot().context.count
+
+    yield* expect({ afterFirstInc, afterSecondInc, afterDec, afterSet })
+      .toEqual({ afterFirstInc: 1, afterSecondInc: 2, afterDec: 1, afterSet: 100 })
   })
 })

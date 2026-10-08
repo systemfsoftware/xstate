@@ -1,18 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine, createSystem, type EventRejection } from '../src/index.js'
-
-const reported: unknown[] = []
-
-// mocked reportUnhandledError due to unknown issue with vitest and global error
-// handlers not catching thrown errors
-// see: https://github.com/vitest-dev/vitest/issues/6292
-vi.mock('../src/reportUnhandledError.js', () => {
-  return {
-    reportUnhandledError: (err: unknown) => {
-      reported.push(err)
-    },
-  }
-})
 
 const machine = createMachine({})
 
@@ -23,11 +10,7 @@ function stoppedActor(options?: Parameters<typeof createActor>[1]) {
 }
 
 describe('system.onRejectedEvent', () => {
-  beforeEach(() => {
-    reported.length = 0
-  })
-
-  it('delivers a rejection to every listener in registration order', () => {
+  it('delivers a rejection to every listener in registration order', function*({ expect }) {
     const calls: string[] = []
     const rejections: EventRejection[] = []
     const actor = stoppedActor()
@@ -43,65 +26,93 @@ describe('system.onRejectedEvent', () => {
 
     actor.send({ type: 'PING' })
 
-    expect(calls).toEqual(['first', 'second'])
-    expect(rejections[0]).toBe(rejections[1])
-    expect(rejections[0]).toMatchObject({
-      event: { type: 'PING' },
-      targetRef: actor,
-      eventOrigin: 'external',
-      reason: 'stopped',
+    yield* expect({
+      calls,
+      firstIsSecond: rejections[0] === rejections[1],
+      firstRejection: {
+        event: rejections[0]?.event,
+        targetRef: rejections[0]?.targetRef,
+        eventOrigin: rejections[0]?.eventOrigin,
+        reason: rejections[0]?.reason,
+      },
+    }).toEqual({
+      calls: ['first', 'second'],
+      firstIsSecond: true,
+      firstRejection: {
+        event: { type: 'PING' },
+        targetRef: actor,
+        eventOrigin: 'external',
+        reason: 'stopped',
+      },
     })
   })
 
-  it('stops delivering after unsubscribe', () => {
+  it('stops delivering after unsubscribe', function*({ expect }) {
     const rejections: EventRejection[] = []
     const actor = stoppedActor()
 
-    const subscription = actor.system.onRejectedEvent((rejection) => rejections.push(rejection))
+    const subscription = actor.system.onRejectedEvent((rejection) => {
+      rejections.push(rejection)
+    })
     actor.send({ type: 'ONE' })
     subscription.unsubscribe()
     actor.send({ type: 'TWO' })
 
-    expect(rejections.map((r) => r.event.type)).toEqual(['ONE'])
+    yield* expect(rejections.map((r) => r.event.type)).toEqual(['ONE'])
   })
 
-  it('keeps delivering to later listeners when one throws', () => {
+  it('keeps delivering to later listeners when one throws', function*({ expect }) {
+    const reported: unknown[] = []
     const error = new Error('listener failed')
     const rejections: EventRejection[] = []
-    const actor = stoppedActor()
+    const actor = stoppedActor({
+      reportUnhandledError: (err) => {
+        reported.push(err)
+      },
+    })
 
     actor.system.onRejectedEvent(() => {
       throw error
     })
-    actor.system.onRejectedEvent((rejection) => rejections.push(rejection))
+    actor.system.onRejectedEvent((rejection) => {
+      rejections.push(rejection)
+    })
 
     actor.send({ type: 'PING' })
 
-    expect(rejections).toHaveLength(1)
-    expect(reported).toEqual([error])
+    yield* expect({
+      rejections: rejections.map((r) => r.event.type),
+      reported,
+    }).toEqual({ rejections: ['PING'], reported: [error] })
   })
 
-  it('registers the createActor onRejectedEvent option as a listener', () => {
+  it('registers the createActor onRejectedEvent option as a listener', function*({ expect }) {
     const calls: string[] = []
     const actor = stoppedActor({
-      onRejectedEvent: () => calls.push('option'),
+      onRejectedEvent: () => {
+        calls.push('option')
+      },
     })
-    actor.system.onRejectedEvent(() => calls.push('late'))
+    actor.system.onRejectedEvent(() => {
+      calls.push('late')
+    })
 
     actor.send({ type: 'PING' })
 
-    expect(calls).toEqual(['option', 'late'])
+    yield* expect(calls).toEqual(['option', 'late'])
   })
 
-  it('is exposed on createSystem before the first actor exists', () => {
+  it('is exposed on createSystem before the first actor exists', function*({ expect }) {
     const rejections: EventRejection[] = []
     const system = createSystem()
-    system.onRejectedEvent((rejection) => rejections.push(rejection))
+    system.onRejectedEvent((rejection) => {
+      rejections.push(rejection)
+    })
 
     const actor = system.createActor(machine).start()
     actor.stop()
     actor.send({ type: 'PING' })
 
-    expect(rejections.map((r) => r.event.type)).toEqual(['PING'])
+    yield* expect(rejections.map((r) => r.event.type)).toEqual(['PING'])
   })
 })

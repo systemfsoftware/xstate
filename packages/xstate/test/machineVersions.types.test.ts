@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import {
   createActor,
   createMachine,
@@ -112,165 +113,186 @@ if (false) {
   machineVersions([eventVersionV0, eventMachineV2], { unversioned: '0' })
 }
 
-async function checkSnapshotMigrationTypes() {
-  await schemaVersions.migrateSnapshot({} as unknown, {
-    to: '2',
-    migrations: {
-      '0': (snapshot) => {
-        const quantity: number = snapshot.context.quantity
-        const value: 'legacy' = snapshot.value
-        // @ts-expect-error descriptor schema output has no v2 context field
-        snapshot.context.total
-        void value
-        return {
-          ...snapshot,
-          context: { total: quantity },
-        }
-      },
-    },
-  })
-
-  await schemaVersions.migrateSnapshot(
-    {},
-    {
-      // @ts-expect-error snapshot-only versions cannot be migration targets
-      to: '0',
-      migrations: {},
-    },
-  )
-
-  const compatible = await versions.migrateSnapshot({} as unknown, {
-    to: '2',
-    migrations: {
-      '1': async (snapshot) => {
-        const count: number = snapshot.context.count
-        // @ts-expect-error v1 context does not contain the v2 field
-        snapshot.context.total
-        return {
-          ...snapshot,
-          context: { total: count },
-        }
-      },
-      '*': async (snapshot, source) => {
-        // @ts-expect-error wildcard snapshots are unknown
-        snapshot.context
-        const id: string | undefined = source.id
-        const version: string | undefined = source.version
-        void id
-        void version
-        return {
-          ...createActor(checkoutV2).getPersistedSnapshot(),
-          context: { total: 0 },
-        }
-      },
-    },
-  })
-
-  createActor(checkoutV2, { snapshot: compatible })
-  // a snapshot from another version of the same machine is accepted (migration path)
-  createActor(checkoutV1, { snapshot: compatible })
-
-  await versions.migrateSnapshot(
-    {},
-    {
-      // @ts-expect-error target version must be retained
-      to: '3',
-      migrations: {},
-    },
-  )
-
-  await versions.migrateSnapshot(
-    {},
-    {
+const checkSnapshotMigrationTypes = Effect.gen(function*() {
+  yield* Effect.promise(() =>
+    schemaVersions.migrateSnapshot({} as unknown, {
       to: '2',
       migrations: {
-        // @ts-expect-error the target version is validated without migration
-        '2': (snapshot) => snapshot,
-      },
-    },
-  )
-}
-
-async function checkEventAdaptationTypes() {
-  await eventDescriptorVersions.adaptEvents([], {
-    from: { id: 'events', version: '0' },
-    to: '2',
-    adapters: {
-      '0': (events) => {
-        const event = events[0]
-        if (event?.type === 'INCREMENT') {
-          const amount: number = event.amount
-          // @ts-expect-error historical event schema has no delta
-          event.delta
-          void amount
-        }
-        return [{ type: 'CHANGE', delta: events.length }]
-      },
-    },
-  })
-
-  await eventDescriptorVersions.adaptEvents([], {
-    from: { id: 'events', version: '2' },
-    // @ts-expect-error schema-only versions cannot be event targets
-    to: '0',
-    adapters: {},
-  })
-
-  await machineVersions([checkoutV0, eventMachineV2]).adaptEvents([], {
-    from: { id: 'checkout', version: '0' },
-    to: '2',
-    adapters: {
-      // @ts-expect-error snapshot-only versions do not provide event typing
-      '0': () => [{ type: 'CHANGE', delta: 0 }],
-    },
-  })
-
-  const adapted = await eventVersions.adaptEvents([], {
-    from: { id: 'events', version: '1' },
-    to: '2',
-    adapters: {
-      '1': async (events) => {
-        const event = events[0]
-        if (event?.type === 'ADD') {
-          const value: number = event.value
-          // @ts-expect-error v1 ADD events do not contain the v2 field
-          event.delta
+        '0': (snapshot) => {
+          const quantity: number = snapshot.context.quantity
+          const value: 'legacy' = snapshot.value
+          // @ts-expect-error descriptor schema output has no v2 context field
+          snapshot.context.total
           void value
-        }
-        return [{ type: 'CHANGE', delta: events.length }]
+          return {
+            ...snapshot,
+            context: { total: quantity },
+          }
+        },
       },
-      '*': async (events, source) => {
-        // @ts-expect-error wildcard event values are unknown
-        events[0].type
-        const id: string | undefined = source.id
-        const version: string | undefined = source.version
-        void id
-        void version
-        return [{ type: 'CHANGE', delta: 0 }]
+    })
+  )
+
+  yield* Effect.promise(() =>
+    schemaVersions.migrateSnapshot(
+      {},
+      {
+        // @ts-expect-error snapshot-only versions cannot be migration targets
+        to: '0',
+        migrations: {},
       },
-    },
-  })
+    )
+  )
+
+  const compatible = yield* Effect.promise(() =>
+    versions.migrateSnapshot({} as unknown, {
+      to: '2',
+      migrations: {
+        '1': (snapshot) => {
+          const count: number = snapshot.context.count
+          // @ts-expect-error v1 context does not contain the v2 field
+          snapshot.context.total
+          return {
+            ...snapshot,
+            context: { total: count },
+          }
+        },
+        '*': (snapshot, source) => {
+          // @ts-expect-error wildcard snapshots are unknown
+          snapshot.context
+          const id: string | undefined = source.id
+          const version: string | undefined = source.version
+          void id
+          void version
+          return {
+            ...createActor(checkoutV2).getPersistedSnapshot(),
+            context: { total: 0 },
+          }
+        },
+      },
+    })
+  )
+
+  createActor(checkoutV2, { snapshot: compatible })
+  createActor(checkoutV1, { snapshot: compatible })
+
+  yield* Effect.promise(() =>
+    versions.migrateSnapshot(
+      {},
+      {
+        // @ts-expect-error target version must be retained
+        to: '3',
+        migrations: {},
+      },
+    )
+  )
+
+  yield* Effect.promise(() =>
+    versions.migrateSnapshot(
+      {},
+      {
+        to: '2',
+        migrations: {
+          // @ts-expect-error the target version is validated without migration
+          '2': (snapshot) => snapshot,
+        },
+      },
+    )
+  )
+})
+
+const checkEventAdaptationTypes = Effect.gen(function*() {
+  yield* Effect.promise(() =>
+    eventDescriptorVersions.adaptEvents([], {
+      from: { id: 'events', version: '0' },
+      to: '2',
+      adapters: {
+        '0': (events) => {
+          const event = events[0]
+          if (event?.type === 'INCREMENT') {
+            const amount: number = event.amount
+            // @ts-expect-error historical event schema has no delta
+            event.delta
+            void amount
+          }
+          return [{ type: 'CHANGE', delta: events.length }]
+        },
+      },
+    })
+  )
+
+  yield* Effect.promise(() =>
+    eventDescriptorVersions.adaptEvents([], {
+      from: { id: 'events', version: '2' },
+      // @ts-expect-error schema-only versions cannot be event targets
+      to: '0',
+      adapters: {},
+    })
+  )
+
+  yield* Effect.promise(() =>
+    machineVersions([checkoutV0, eventMachineV2]).adaptEvents([], {
+      from: { id: 'checkout', version: '0' },
+      to: '2',
+      adapters: {
+        // @ts-expect-error snapshot-only versions do not provide event typing
+        '0': () => [{ type: 'CHANGE', delta: 0 }],
+      },
+    })
+  )
+
+  const adapted = yield* Effect.promise(() =>
+    eventVersions.adaptEvents([], {
+      from: { id: 'events', version: '1' },
+      to: '2',
+      adapters: {
+        '1': (events) => {
+          const event = events[0]
+          if (event?.type === 'ADD') {
+            const value: number = event.value
+            // @ts-expect-error v1 ADD events do not contain the v2 field
+            event.delta
+            void value
+          }
+          return [{ type: 'CHANGE', delta: events.length }]
+        },
+        '*': (events, source) => {
+          // @ts-expect-error wildcard event values are unknown
+          events[0].type
+          const id: string | undefined = source.id
+          const version: string | undefined = source.version
+          void id
+          void version
+          return [{ type: 'CHANGE', delta: 0 }]
+        },
+      },
+    })
+  )
   const targetEvents: Array<{ type: 'CHANGE'; delta: number }> = adapted
   void targetEvents
 
-  await eventVersions.adaptEvents([], {
-    from: { id: 'events', version: '1' },
-    to: '2',
-    adapters: {
-      // @ts-expect-error the target version is validated without adaptation
-      '2': (events) => events,
-    },
-  })
+  yield* Effect.promise(() =>
+    eventVersions.adaptEvents([], {
+      from: { id: 'events', version: '1' },
+      to: '2',
+      adapters: {
+        // @ts-expect-error the target version is validated without adaptation
+        '2': (events) => events,
+      },
+    })
+  )
 
-  await eventVersions.adaptEvents([], {
-    from: { id: 'events', version: '1' },
-    to: '2',
-    adapters: {
-      // @ts-expect-error adapters must return target-version events
-      '1': () => [{ type: 'ADD', value: 1 }],
-    },
-  })
-}
+  yield* Effect.promise(() =>
+    eventVersions.adaptEvents([], {
+      from: { id: 'events', version: '1' },
+      to: '2',
+      adapters: {
+        // @ts-expect-error adapters must return target-version events
+        '1': () => [{ type: 'ADD', value: 1 }],
+      },
+    })
+  )
+})
 
 void version
 void setupVersion
@@ -278,8 +300,12 @@ void versionsWithUnversioned
 void checkSnapshotMigrationTypes
 void checkEventAdaptationTypes
 
-describe('machine version types', () => {
-  it('checks machine and migration versions at compile time', () => {
-    expect(true).toBe(true)
+describe('machine version types', (it) => {
+  it('checks machine and migration versions at compile time', function*({
+    expect,
+  }) {
+    yield* expect(
+      Object.keys(machineVersions([checkoutV1, checkoutV2])),
+    ).toEqual(['parseSnapshot', 'adaptEvents', 'migrateSnapshot'])
   })
 })

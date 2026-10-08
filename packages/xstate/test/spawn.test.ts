@@ -1,15 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createActor, createMachine } from '../src/index.js'
 
 describe('spawn inside machine', () => {
-  it('input is required when defined in actor', () => {
-    const childMachine = createMachine({
-      // types: { input: {} as { value: number } }
-    })
+  it('input is required when defined in actor', function*({ expect }) {
+    const childMachine = createMachine({})
 
     const machine = createMachine({
-      // types: {} as { context: { ref: ActorRefFrom<typeof childMachine> } },
       schemas: {
         context: z.object({
           ref: z.any(),
@@ -21,6 +18,6 @@ describe('spawn inside machine', () => {
     })
 
     const actor = createActor(machine).start()
-    expect(actor.system.get('test')).toBeDefined()
+    yield* expect(Object.keys(actor.system.getAll())).toEqual(['test'])
   })
 })

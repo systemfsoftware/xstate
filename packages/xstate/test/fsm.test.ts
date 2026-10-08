@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createFSM } from '../src/fsm.js'
 
 describe('createFSM', () => {
-  it('transitions through a flat event table', () => {
+  it('transitions through a flat event table', function*({ expect }) {
     const machine = createFSM({
       initial: 'off',
       states: {
@@ -15,11 +15,15 @@ describe('createFSM', () => {
       type: 'toggle',
     })
 
-    expect(next).toEqual({ status: 'active', value: 'on', context: {} })
-    expect(effects).toEqual([])
+    yield* expect({ next, effects }).toEqual({
+      next: { status: 'active', value: 'on', context: {} },
+      effects: [],
+    })
   })
 
-  it('supports pure function transitions with context updates', () => {
+  it('supports pure function transitions with context updates', function*({
+    expect,
+  }) {
     const machine = createFSM<
       { count: number },
       { type: 'increment'; by: number }
@@ -44,14 +48,16 @@ describe('createFSM', () => {
       by: 2,
     })
 
-    expect(next).toEqual({
+    yield* expect(next).toEqual({
       status: 'active',
       value: 'ready',
       context: { count: 2 },
     })
   })
 
-  it('preserves snapshot identity for no-op context patches', () => {
+  it('preserves snapshot identity for no-op context patches', function*({
+    expect,
+  }) {
     const machine = createFSM<{ count: number }, { type: 'noop' }>({
       context: { count: 0 },
       initial: 'idle',
@@ -60,12 +66,11 @@ describe('createFSM', () => {
       },
     })
 
-    expect(machine.transition(machine.initialState, { type: 'noop' })[0]).toBe(
-      machine.initialState,
-    )
+    yield* expect(machine.transition(machine.initialState, { type: 'noop' })[0])
+      .toBe(machine.initialState)
   })
 
-  it('applies only own context patch keys', () => {
+  it('applies only own context patch keys', function*({ expect }) {
     const machine = createFSM<
       { count: number; inherited?: number },
       { type: 'inherited' } | { type: 'own' }
@@ -82,27 +87,37 @@ describe('createFSM', () => {
       },
     })
 
-    expect(
-      machine.transition(machine.initialState, { type: 'inherited' })[0],
-    ).toBe(machine.initialState)
+    const inheritedNext = machine.transition(machine.initialState, {
+      type: 'inherited',
+    })[0]
 
     const [next] = machine.transition(machine.initialState, { type: 'own' })
-    expect(next).not.toBe(machine.initialState)
-    expect(next.context).toEqual({ count: 1 })
+
+    yield* expect({
+      inheritedKeepsIdentity: inheritedNext === machine.initialState,
+      ownKeepsIdentity: next === machine.initialState,
+      nextContext: next.context,
+    }).toEqual({
+      inheritedKeepsIdentity: true,
+      ownKeepsIdentity: false,
+      nextContext: { count: 1 },
+    })
   })
 
-  it('ignores inherited event names', () => {
+  it('ignores inherited event names', function*({ expect }) {
     const machine = createFSM({
       initial: 'idle',
       states: { idle: { on: { ping: 'idle' } } },
     })
 
-    expect(
+    yield* expect(
       machine.transition(machine.initialState, { type: 'constructor' })[0],
     ).toBe(machine.initialState)
   })
 
-  it('materializes output and error as own snapshot properties', () => {
+  it('materializes output and error as own snapshot properties', function*({
+    expect,
+  }) {
     const machine = createFSM({
       initial: 'inactive',
       context: { count: 0 },
@@ -116,18 +131,24 @@ describe('createFSM', () => {
       type: 'toggle',
     })
 
-    for (
-      const snapshot of [
-        machine.initialState,
-        machine.getInitialSnapshot(),
-        next,
-      ]
-    ) {
-      expect(Object.keys(snapshot)).toEqual(keys)
+    const observations = [
+      machine.initialState,
+      machine.getInitialSnapshot(),
+      next,
+    ].map((snapshot) => {
       const roundTripped = JSON.parse(
         JSON.stringify(snapshot, (_, value) => value === undefined ? null : value),
       )
-      expect(Object.keys(roundTripped)).toEqual(keys)
-    }
+      return {
+        keys: Object.keys(snapshot),
+        roundTrippedKeys: Object.keys(roundTripped),
+      }
+    })
+
+    yield* expect(observations).toEqual([
+      { keys, roundTrippedKeys: keys },
+      { keys, roundTrippedKeys: keys },
+      { keys, roundTrippedKeys: keys },
+    ])
   })
 })

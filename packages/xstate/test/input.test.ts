@@ -1,14 +1,30 @@
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { of } from 'rxjs'
-import { describe, expect, it, vi } from 'vitest'
 import z from 'zod'
 import { createAsyncLogic, createCallbackLogic, createObservableLogic } from '../src/actors/index.js'
 import { createActor, createLogic, createMachine, setup } from '../src/index.js'
 import { standardSchemaValidator } from '../src/validation/index.js'
 import { toSubscribable } from './utils.js'
 
-describe('input', () => {
-  it('should create a machine with input', () => {
-    const spy = vi.fn()
+const greetingFromInitEvent = (event: unknown): string | undefined => {
+  if (event === null || typeof event !== 'object' || !('input' in event)) {
+    return undefined
+  }
+  const input = event.input
+  if (input === null || typeof input !== 'object' || !('greeting' in input)) {
+    return undefined
+  }
+  const greeting = input.greeting
+  return typeof greeting === 'string' ? greeting : undefined
+}
+
+describe('input', (it) => {
+  it('should create a machine with input', function*({ expect }) {
+    const calls: Array<ReadonlyArray<unknown>> = []
+    const record = (...args: unknown[]) => {
+      calls.push(args)
+    }
 
     const machine = createMachine({
       // types: {} as {
@@ -27,17 +43,18 @@ describe('input', () => {
         count: input.startCount,
       }),
       entry: ({ context }, enq) => {
-        enq(spy, context.count)
+        enq(record, context.count)
       },
     })
 
     createActor(machine, { input: { startCount: 42 } }).start()
 
-    expect(spy).toHaveBeenCalledWith(42)
+    yield* expect(calls).toEqual([[42]])
   })
 
-  it('initial event should have input property', () => {
+  it('initial event should have input property', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
+    let greeting: string | undefined
     const machine = createMachine({
       schemas: {
         input: z.object({
@@ -45,19 +62,18 @@ describe('input', () => {
         }),
       },
       entry: ({ event }) => {
-        expect(
-          (event as unknown as { input: { greeting: string } }).input.greeting,
-        ).toBe('hello')
+        greeting = greetingFromInitEvent(event)
         resolve()
       },
     })
 
     createActor(machine, { input: { greeting: 'hello' } }).start()
 
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect(greeting).toEqual('hello')
   })
 
-  it('should error if input is expected but not provided', () => {
+  it('should error if input is expected but not provided', function*({ expect }) {
     const machine = createMachine({
       // types: {} as {
       //   input: { greeting: string };
@@ -79,10 +95,10 @@ describe('input', () => {
     // @ts-expect-error input is required
     const snapshot = createActor(machine).getSnapshot()
 
-    expect(snapshot.status).toBe('error')
+    yield* expect(snapshot.status).toBe('error')
   })
 
-  it('should retain the machine snapshot interface when resolving input throws', () => {
+  it('should retain the machine snapshot interface when resolving input throws', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         input: z.object({
@@ -104,37 +120,48 @@ describe('input', () => {
     // @ts-expect-error input is required
     const snapshot = createActor(machine).getSnapshot()
 
-    expect(snapshot.status).toBe('error')
-    expect(snapshot.matches('saving')).toBe(true)
+    yield* expect({
+      status: snapshot.status,
+      matchesSaving: snapshot.matches('saving'),
+    }).toEqual({ status: 'error', matchesSaving: true })
   })
 
-  it('should retain the machine snapshot interface and factory error when resolving input throws with result validation', () => {
-    const factoryError = new Error('factory failed')
-    const machine = setup({
-      validator: standardSchemaValidator(),
-      schemas: {
-        context: z.object({
-          message: z.string(),
-        }),
-      },
-    }).createMachine({
-      context: () => {
-        throw factoryError
-      },
-      initial: 'saving',
-      states: {
-        saving: {},
-      },
-    })
+  it(
+    'should retain the machine snapshot interface and factory error when resolving input throws with result validation',
+    function*({ expect }) {
+      const factoryError = new Error('factory failed')
+      const machine = setup({
+        validator: standardSchemaValidator(),
+        schemas: {
+          context: z.object({
+            message: z.string(),
+          }),
+        },
+      }).createMachine({
+        context: () => {
+          throw factoryError
+        },
+        initial: 'saving',
+        states: {
+          saving: {},
+        },
+      })
 
-    const snapshot = createActor(machine).getSnapshot()
+      const snapshot = createActor(machine).getSnapshot()
 
-    expect(typeof snapshot.matches).toBe('function')
-    expect(snapshot.status).toBe('error')
-    expect(snapshot.error).toBe(factoryError)
-  })
+      yield* expect({
+        matchesType: typeof snapshot.matches,
+        status: snapshot.status,
+        errorIsFactoryError: snapshot.error === factoryError,
+      }).toEqual({
+        matchesType: 'function',
+        status: 'error',
+        errorIsFactoryError: true,
+      })
+    },
+  )
 
-  it('should be a type error if input is not expected yet provided', () => {
+  it('should be a type error if input is not expected yet provided', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({ count: z.number() }),
@@ -142,14 +169,19 @@ describe('input', () => {
       context: { count: 42 },
     })
 
-    expect(() => {
-      // TODO: add ts-expect-errpr
-      createActor(machine).start()
-    }).not.toThrowError()
+    // TODO: add ts-expect-errpr
+    const actor = createActor(machine).start()
+
+    yield* expect({
+      status: actor.getSnapshot().status,
+      context: actor.getSnapshot().context,
+    }).toEqual({ status: 'active', context: { count: 42 } })
   })
 
-  it('should provide input data to invoked machines', () => {
+  it('should provide input data to invoked machines', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
+    let contextGreeting: string | undefined
+    let eventInputGreeting: string | undefined
 
     const invokedMachine = createMachine({
       // types: {} as {
@@ -166,10 +198,8 @@ describe('input', () => {
       },
       context: ({ input }) => input,
       entry: ({ context, event }) => {
-        expect(context.greeting).toBe('hello')
-        expect(
-          (event as unknown as { input: { greeting: string } }).input.greeting,
-        ).toBe('hello')
+        contextGreeting = context.greeting
+        eventInputGreeting = greetingFromInitEvent(event)
         resolve()
       },
     })
@@ -183,11 +213,17 @@ describe('input', () => {
 
     createActor(machine).start()
 
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect({ contextGreeting, eventInputGreeting }).toEqual({
+      contextGreeting: 'hello',
+      eventInputGreeting: 'hello',
+    })
   })
 
-  it('should provide input data to spawned machines', () => {
+  it('should provide input data to spawned machines', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
+    let contextGreeting: string | undefined
+    let eventInputGreeting: string | undefined
     const spawnedMachine = createMachine({
       // types: {} as {
       //   input: { greeting: string };
@@ -208,10 +244,8 @@ describe('input', () => {
         return input
       },
       entry: ({ context, event }) => {
-        expect(context.greeting).toBe('hello')
-        expect(
-          (event as unknown as { input: { greeting: string } }).input.greeting,
-        ).toBe('hello')
+        contextGreeting = context.greeting
+        eventInputGreeting = greetingFromInitEvent(event)
         resolve()
       },
     })
@@ -234,10 +268,14 @@ describe('input', () => {
 
     createActor(machine).start()
 
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect({ contextGreeting, eventInputGreeting }).toEqual({
+      contextGreeting: 'hello',
+      eventInputGreeting: 'hello',
+    })
   })
 
-  it('should create a promise with input', async () => {
+  it('should create a promise with input', function*({ expect }) {
     const promiseLogic = createAsyncLogic<{ count: number }, { count: number }>(
       {
         run: ({ input }) => Promise.resolve(input),
@@ -246,14 +284,20 @@ describe('input', () => {
 
     const promiseActor = createActor(promiseLogic, {
       input: { count: 42 },
-    }).start()
+    })
+    const settled = new Promise<void>((resolve) => {
+      promiseActor.subscribe((snapshot) => {
+        if (snapshot.status === 'done') resolve()
+      })
+    })
+    promiseActor.start()
 
-    await new Promise((res) => setTimeout(res, 5))
+    yield* Effect.promise(() => settled)
 
-    expect(promiseActor.getSnapshot().output).toEqual({ count: 42 })
+    yield* expect(promiseActor.getSnapshot().output).toEqual({ count: 42 })
   })
 
-  it('should infer async logic input from schemas', async () => {
+  it('should infer async logic input from schemas', function*({ expect }) {
     const promiseLogic = createAsyncLogic({
       schemas: {
         input: z.object({ count: z.number() }),
@@ -270,17 +314,23 @@ describe('input', () => {
 
     const promiseActor = createActor(promiseLogic, {
       input: { count: 42 },
-    }).start()
+    })
+    const settled = new Promise<void>((resolve) => {
+      promiseActor.subscribe((snapshot) => {
+        if (snapshot.status === 'done') resolve()
+      })
+    })
+    promiseActor.start()
 
     // @ts-expect-error
     createActor(promiseLogic, { input: { count: 'not a number' } })
 
-    await new Promise((res) => setTimeout(res, 5))
+    yield* Effect.promise(() => settled)
 
-    expect(promiseActor.getSnapshot().output).toEqual({ count: 42 })
+    yield* expect(promiseActor.getSnapshot().output).toEqual({ count: 42 })
   })
 
-  it('should create a transition function actor with input', () => {
+  it('should create a transition function actor with input', function*({ expect }) {
     const transitionLogic = createLogic({
       context: ({ input }: { input: { count: number } }) => input,
       run: () => undefined,
@@ -290,11 +340,12 @@ describe('input', () => {
       input: { count: 42 },
     }).start()
 
-    expect(transitionActor.getSnapshot().context).toEqual({ count: 42 })
+    yield* expect(transitionActor.getSnapshot().context).toEqual({ count: 42 })
   })
 
-  it('should create an observable actor with input', () => {
+  it('should create an observable actor with input', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
+    let observedContext: { count: number } | undefined
     const observableLogic = createObservableLogic<
       { count: number },
       { count: number }
@@ -306,20 +357,22 @@ describe('input', () => {
 
     const sub = observableActor.subscribe((state) => {
       if (state.context?.count !== 42) return
-      expect(state.context).toEqual({ count: 42 })
+      observedContext = state.context
       sub.unsubscribe()
       resolve()
     })
 
     observableActor.start()
 
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect(observedContext).toEqual({ count: 42 })
   })
 
-  it('should create a callback actor with input', () => {
+  it('should create a callback actor with input', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
+    let receivedInput: unknown
     const callbackLogic = createCallbackLogic(({ input }) => {
-      expect(input).toEqual({ count: 42 })
+      receivedInput = input
       resolve()
     })
 
@@ -327,18 +380,22 @@ describe('input', () => {
       input: { count: 42 },
     }).start()
 
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect(receivedInput).toEqual({ count: 42 })
   })
 
-  it('should provide a static inline input to the referenced actor', () => {
-    const spy = vi.fn()
+  it('should provide a static inline input to the referenced actor', function*({ expect }) {
+    const calls: Array<ReadonlyArray<unknown>> = []
+    const record = (...args: unknown[]) => {
+      calls.push(args)
+    }
 
     const child = createMachine({
       schemas: {
         input: z.number(),
       },
       context: ({ input }) => {
-        spy(input)
+        record(input)
         return {}
       },
     })
@@ -352,18 +409,21 @@ describe('input', () => {
 
     createActor(machine).start()
 
-    expect(spy).toHaveBeenCalledWith(42)
+    yield* expect(calls).toEqual([[42]])
   })
 
-  it('should provide a dynamic inline input to the referenced actor', () => {
-    const spy = vi.fn()
+  it('should provide a dynamic inline input to the referenced actor', function*({ expect }) {
+    const calls: Array<ReadonlyArray<unknown>> = []
+    const record = (...args: unknown[]) => {
+      calls.push(args)
+    }
 
     const child = createMachine({
       schemas: {
         input: z.number(),
       },
       context: ({ input }) => {
-        spy(input)
+        record(input)
         return {}
       },
     })
@@ -388,21 +448,28 @@ describe('input', () => {
 
     createActor(machine, { input: 42 }).start()
 
-    expect(spy).toHaveBeenCalledWith(142)
+    yield* expect(calls).toEqual([[142]])
   })
 
-  it('should call the input factory with self when invoking', () => {
-    const spy = vi.fn()
+  it('should call the input factory with self when invoking', function*({ expect }) {
+    const selfs: unknown[] = []
+    const record = (self: unknown): unknown => {
+      selfs.push(self)
+      return self
+    }
 
     const machine = createMachine({
       invoke: {
         src: createMachine({}),
-        input: ({ self }) => spy(self),
+        input: ({ self }) => record(self),
       },
     })
 
     const actor = createActor(machine).start()
 
-    expect(spy).toHaveBeenCalledWith(actor)
+    yield* expect({
+      calls: selfs.length,
+      selfIsActor: selfs[0] === actor,
+    }).toEqual({ calls: 1, selfIsActor: true })
   })
 })

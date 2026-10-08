@@ -1,8 +1,20 @@
-import { describe, expect, it, vi } from 'vitest'
-import { createActor, createMachine as createMachine, waitFor } from '../src/index.js'
+import { describe } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
+import { createActor, createMachine, waitFor } from '../src/index.js'
 
-describe('waitFor', () => {
-  it('should wait for a condition to be true and return the emitted value', async () => {
+const rejectionOf = (promise: Promise<unknown>): Promise<unknown> =>
+  promise.then(
+    () => new Error('expected the promise to reject'),
+    (error: unknown) => error,
+  )
+
+const errorShape = (error: unknown): { name: string; message: string } =>
+  error instanceof Error
+    ? { name: error.name, message: error.message }
+    : { name: 'NotAnError', message: String(error) }
+
+describe('waitFor', (it) => {
+  it.live('should wait for a condition to be true and return the emitted value', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -17,12 +29,12 @@ describe('waitFor', () => {
 
     setTimeout(() => service.send({ type: 'NEXT' }), 10)
 
-    const state = await waitFor(service, (s) => s.matches('b'))
+    const state = yield* Effect.promise(() => waitFor(service, (s) => s.matches('b')))
 
-    expect(state.value).toEqual('b')
+    yield* expect(state.value).toEqual('b')
   })
 
-  it('should throw an error after a timeout', async () => {
+  it.live('should throw an error after a timeout', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -38,14 +50,17 @@ describe('waitFor', () => {
 
     const service = createActor(machine).start()
 
-    try {
-      await waitFor(service, (state) => state.matches('c'), { timeout: 10 })
-    } catch (e) {
-      expect(e).toBeInstanceOf(Error)
-    }
+    const error = yield* Effect.promise(() =>
+      rejectionOf(waitFor(service, (state) => state.matches('c'), { timeout: 10 }))
+    )
+
+    yield* expect(errorShape(error)).toEqual({
+      name: 'Error',
+      message: 'Timeout of 10 ms exceeded',
+    })
   })
 
-  it('should not reject immediately when passing Infinity as timeout', async () => {
+  it.live('should not reject immediately when passing Infinity as timeout', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -59,18 +74,20 @@ describe('waitFor', () => {
       },
     })
     const service = createActor(machine).start()
-    const result = await Promise.race([
-      waitFor(service, (state) => state.matches('c'), {
-        timeout: Infinity,
-      }),
-      new Promise((res) => setTimeout(res, 10)).then(() => 'timeout'),
-    ])
+    const result = yield* Effect.promise(() =>
+      Promise.race([
+        waitFor(service, (state) => state.matches('c'), {
+          timeout: Infinity,
+        }),
+        new Promise((res) => setTimeout(res, 10)).then(() => 'timeout'),
+      ])
+    )
 
-    expect(result).toBe('timeout')
+    yield* expect(result).toBe('timeout')
     service.stop()
   })
 
-  it('should throw an error when reaching a final state that does not match the predicate', async () => {
+  it.live('should throw an error when reaching a final state that does not match the predicate', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -89,14 +106,15 @@ describe('waitFor', () => {
       service.send({ type: 'NEXT' })
     }, 10)
 
-    await expect(
-      waitFor(service, (state) => state.matches('never')),
-    ).rejects.toMatchInlineSnapshot(
-      `[Error: Actor terminated without satisfying predicate]`,
-    )
+    const error = yield* Effect.promise(() => rejectionOf(waitFor(service, (state) => state.matches('never'))))
+
+    yield* expect(errorShape(error)).toEqual({
+      name: 'Error',
+      message: 'Actor terminated without satisfying predicate',
+    })
   })
 
-  it('should resolve correctly when the predicate immediately matches the current state', async () => {
+  it.live('should resolve correctly when the predicate immediately matches the current state', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -106,129 +124,113 @@ describe('waitFor', () => {
 
     const service = createActor(machine).start()
 
-    await expect(
-      waitFor(service, (state) => state.matches('a')),
-    ).resolves.toHaveProperty('value', 'a')
+    const state = yield* Effect.promise(() => waitFor(service, (state) => state.matches('a')))
+
+    yield* expect(state.value).toEqual('a')
   })
 
-  it('should not subscribe when the predicate immediately matches', () => {
+  it.live('should not subscribe when the predicate immediately matches', function*({ expect }) {
     const machine = createMachine({})
 
     const actorRef = createActor(machine).start()
-    const spy = vi.fn()
-    actorRef.subscribe = spy
-
-    waitFor(actorRef, () => true).then(() => {})
-
-    expect(spy).not.toHaveBeenCalled()
-  })
-
-  it('should internally unsubscribe when the predicate immediately matches the current state', async () => {
-    let count = 0
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: {
-          on: {
-            NEXT: { target: 'b' },
-          },
-        },
-        b: {},
-      },
-    })
-
-    const service = createActor(machine).start()
-
-    await waitFor(service, (state) => {
-      count++
-      return state.matches('a')
-    })
-
-    service.send({ type: 'NEXT' })
-
-    expect(count).toBe(1)
-  })
-
-  it('should immediately resolve for an actor in its final state that matches the predicate', async () => {
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: {
-          on: {
-            NEXT: { target: 'b' },
-          },
-        },
-        b: {
-          type: 'final',
-        },
-      },
-    })
-
-    const service = createActor(machine).start()
-    service.send({ type: 'NEXT' })
-
-    await expect(
-      waitFor(service, (state) => state.matches('b')),
-    ).resolves.toHaveProperty('value', 'b')
-  })
-
-  it('should immediately reject for an actor in its final state that does not match the predicate', async () => {
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: {
-          on: {
-            NEXT: { target: 'b' },
-          },
-        },
-        b: {
-          type: 'final',
-        },
-      },
-    })
-
-    const service = createActor(machine).start()
-    service.send({ type: 'NEXT' })
-
-    await expect(
-      waitFor(service, (state) => state.matches('a')),
-    ).rejects.toMatchInlineSnapshot(
-      `[Error: Actor terminated without satisfying predicate]`,
-    )
-  })
-
-  it('should not subscribe to the actor when it receives an aborted signal', async () => {
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: {
-          on: {
-            NEXT: { target: 'b' },
-          },
-        },
-        b: {
-          type: 'final',
-        },
-      },
-    })
-
-    const service = createActor(machine).start()
-    service.send({ type: 'NEXT' })
-
-    const controller = new AbortController()
-    const { signal } = controller
-    controller.abort(new Error('Aborted!'))
-    const spy = vi.fn()
-    service.subscribe = spy
-    try {
-      await waitFor(service, (state) => state.matches('b'), { signal })
-      throw new Error('Should not be reached')
-    } catch {
-      expect(spy).not.toHaveBeenCalled()
+    const subscribeCalls: Array<ReadonlyArray<unknown>> = []
+    actorRef.subscribe = (...args: Array<unknown>) => {
+      subscribeCalls.push(args)
+      return { unsubscribe: () => {} }
     }
+
+    void waitFor(actorRef, () => true)
+
+    yield* expect(subscribeCalls).toEqual([])
   })
 
-  it('should not listen for the "abort" event when it receives an aborted signal', async () => {
+  it.live(
+    'should internally unsubscribe when the predicate immediately matches the current state',
+    function*({ expect }) {
+      let count = 0
+      const machine = createMachine({
+        initial: 'a',
+        states: {
+          a: {
+            on: {
+              NEXT: { target: 'b' },
+            },
+          },
+          b: {},
+        },
+      })
+
+      const service = createActor(machine).start()
+
+      yield* Effect.promise(() =>
+        waitFor(service, (state) => {
+          count++
+          return state.matches('a')
+        })
+      )
+
+      service.send({ type: 'NEXT' })
+
+      yield* expect(count).toBe(1)
+    },
+  )
+
+  it.live(
+    'should immediately resolve for an actor in its final state that matches the predicate',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        states: {
+          a: {
+            on: {
+              NEXT: { target: 'b' },
+            },
+          },
+          b: {
+            type: 'final',
+          },
+        },
+      })
+
+      const service = createActor(machine).start()
+      service.send({ type: 'NEXT' })
+
+      const state = yield* Effect.promise(() => waitFor(service, (state) => state.matches('b')))
+
+      yield* expect(state.value).toEqual('b')
+    },
+  )
+
+  it.live(
+    'should immediately reject for an actor in its final state that does not match the predicate',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        states: {
+          a: {
+            on: {
+              NEXT: { target: 'b' },
+            },
+          },
+          b: {
+            type: 'final',
+          },
+        },
+      })
+
+      const service = createActor(machine).start()
+      service.send({ type: 'NEXT' })
+
+      const error = yield* Effect.promise(() => rejectionOf(waitFor(service, (state) => state.matches('a'))))
+
+      yield* expect(errorShape(error)).toEqual({
+        name: 'Error',
+        message: 'Actor terminated without satisfying predicate',
+      })
+    },
+  )
+
+  it.live('should not subscribe to the actor when it receives an aborted signal', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -249,47 +251,22 @@ describe('waitFor', () => {
     const controller = new AbortController()
     const { signal } = controller
     controller.abort(new Error('Aborted!'))
-
-    const spy = vi.fn()
-    signal.addEventListener = spy
-
-    try {
-      await waitFor(service, (state) => state.matches('b'), { signal })
-      throw new Error('Should not be reached')
-    } catch {
-      expect(spy).not.toHaveBeenCalled()
+    const subscribeCalls: Array<ReadonlyArray<unknown>> = []
+    service.subscribe = (...args: Array<unknown>) => {
+      subscribeCalls.push(args)
+      return { unsubscribe: () => {} }
     }
-  })
 
-  it('should not listen for the "abort" event for actor in its final state that matches the predicate', async () => {
-    const machine = createMachine({
-      initial: 'a',
-      states: {
-        a: {
-          on: {
-            NEXT: { target: 'b' },
-          },
-        },
-        b: {
-          type: 'final',
-        },
-      },
+    const error = yield* Effect.promise(() => rejectionOf(waitFor(service, (state) => state.matches('b'), { signal })))
+
+    yield* expect({ ...errorShape(error), subscribeCalls }).toEqual({
+      name: 'Error',
+      message: 'Aborted!',
+      subscribeCalls: [],
     })
-
-    const service = createActor(machine).start()
-    service.send({ type: 'NEXT' })
-
-    const controller = new AbortController()
-    const { signal } = controller
-
-    const spy = vi.fn()
-    signal.addEventListener = spy
-
-    await waitFor(service, (state) => state.matches('b'), { signal })
-    expect(spy).not.toHaveBeenCalled()
   })
 
-  it('should immediately reject when it receives an aborted signal', async () => {
+  it.live('should not listen for the "abort" event when it receives an aborted signal', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -311,12 +288,85 @@ describe('waitFor', () => {
     const { signal } = controller
     controller.abort(new Error('Aborted!'))
 
-    await expect(
-      waitFor(service, (state) => state.matches('b'), { signal }),
-    ).rejects.toMatchInlineSnapshot(`[Error: Aborted!]`)
+    const addEventListenerCalls: Array<ReadonlyArray<unknown>> = []
+    signal.addEventListener = (...args: Array<unknown>) => {
+      addEventListenerCalls.push(args)
+    }
+
+    const error = yield* Effect.promise(() => rejectionOf(waitFor(service, (state) => state.matches('b'), { signal })))
+
+    yield* expect({ ...errorShape(error), addEventListenerCalls }).toEqual({
+      name: 'Error',
+      message: 'Aborted!',
+      addEventListenerCalls: [],
+    })
   })
 
-  it('should reject when the signal is aborted while waiting', async () => {
+  it.live(
+    'should not listen for the "abort" event for actor in its final state that matches the predicate',
+    function*({ expect }) {
+      const machine = createMachine({
+        initial: 'a',
+        states: {
+          a: {
+            on: {
+              NEXT: { target: 'b' },
+            },
+          },
+          b: {
+            type: 'final',
+          },
+        },
+      })
+
+      const service = createActor(machine).start()
+      service.send({ type: 'NEXT' })
+
+      const controller = new AbortController()
+      const { signal } = controller
+
+      const addEventListenerCalls: Array<ReadonlyArray<unknown>> = []
+      signal.addEventListener = (...args: Array<unknown>) => {
+        addEventListenerCalls.push(args)
+      }
+
+      const state = yield* Effect.promise(() => waitFor(service, (state) => state.matches('b'), { signal }))
+
+      yield* expect({ value: state.value, addEventListenerCalls }).toEqual({
+        value: 'b',
+        addEventListenerCalls: [],
+      })
+    },
+  )
+
+  it.live('should immediately reject when it receives an aborted signal', function*({ expect }) {
+    const machine = createMachine({
+      initial: 'a',
+      states: {
+        a: {
+          on: {
+            NEXT: { target: 'b' },
+          },
+        },
+        b: {
+          type: 'final',
+        },
+      },
+    })
+
+    const service = createActor(machine).start()
+    service.send({ type: 'NEXT' })
+
+    const controller = new AbortController()
+    const { signal } = controller
+    controller.abort(new Error('Aborted!'))
+
+    const error = yield* Effect.promise(() => rejectionOf(waitFor(service, (state) => state.matches('b'), { signal })))
+
+    yield* expect(errorShape(error)).toEqual({ name: 'Error', message: 'Aborted!' })
+  })
+
+  it.live('should reject when the signal is aborted while waiting', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -332,12 +382,12 @@ describe('waitFor', () => {
     const { signal } = controller
     setTimeout(() => controller.abort(new Error('Aborted!')), 10)
 
-    await expect(
-      waitFor(service, (state) => state.matches('b'), { signal }),
-    ).rejects.toMatchInlineSnapshot(`[Error: Aborted!]`)
+    const error = yield* Effect.promise(() => rejectionOf(waitFor(service, (state) => state.matches('b'), { signal })))
+
+    yield* expect(errorShape(error)).toEqual({ name: 'Error', message: 'Aborted!' })
   })
 
-  it('should stop listening for the "abort" event upon successful completion', async () => {
+  it.live('should stop listening for the "abort" event upon successful completion', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -359,15 +409,17 @@ describe('waitFor', () => {
 
     const controller = new AbortController()
     const { signal } = controller
-    const spy = vi.fn()
-    signal.removeEventListener = spy
+    const removeEventListenerCalls: Array<[string, string]> = []
+    signal.removeEventListener = (...args: Array<unknown>) => {
+      removeEventListenerCalls.push([String(args[0]), typeof args[1]])
+    }
 
-    await waitFor(service, (state) => state.matches('b'), { signal })
+    yield* Effect.promise(() => waitFor(service, (state) => state.matches('b'), { signal }))
 
-    expect(spy).toHaveBeenCalledTimes(1)
+    yield* expect(removeEventListenerCalls).toEqual([['abort', 'function']])
   })
 
-  it('should stop listening for the "abort" event upon failure', async (ctx) => {
+  it.live('should stop listening for the "abort" event upon failure', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -388,14 +440,19 @@ describe('waitFor', () => {
 
     const controller = new AbortController()
     const { signal } = controller
-    const spy = vi.fn()
-    signal.removeEventListener = spy
-
-    try {
-      await waitFor(service, (state) => state.matches('never'), { signal })
-      throw new Error('Should not be reached')
-    } catch {
-      expect(spy).toHaveBeenCalledTimes(1)
+    const removeEventListenerCalls: Array<[string, string]> = []
+    signal.removeEventListener = (...args: Array<unknown>) => {
+      removeEventListenerCalls.push([String(args[0]), typeof args[1]])
     }
+
+    const error = yield* Effect.promise(() =>
+      rejectionOf(waitFor(service, (state) => state.matches('never'), { signal }))
+    )
+
+    yield* expect({ ...errorShape(error), removeEventListenerCalls }).toEqual({
+      name: 'Error',
+      message: 'Actor terminated without satisfying predicate',
+      removeEventListenerCalls: [['abort', 'function']],
+    })
   })
 })

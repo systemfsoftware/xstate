@@ -1,5 +1,6 @@
-import { from, interval } from 'rxjs'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
+import { from, interval, Subject } from 'rxjs'
 import z from 'zod'
 import { createCallbackLogic } from '../src/actors/callback.js'
 import { createObservableLogic } from '../src/actors/observable.js'
@@ -42,7 +43,7 @@ const lightMachine = createMachine({
 
 describe('interpreter', () => {
   describe('initial state', () => {
-    it('.getSnapshot returns the initial state', () => {
+    it('.getSnapshot returns the initial state', function*({ expect }) {
       const machine = createMachine({
         initial: 'foo',
         states: {
@@ -52,12 +53,13 @@ describe('interpreter', () => {
       })
       const service = createActor(machine)
 
-      expect(service.getSnapshot().value).toEqual('foo')
+      yield* expect(service.getSnapshot().value).toEqual('foo')
     })
 
-    it('initially spawned actors should not be spawned when reading initial state', () => {
-      const { resolve, promise } = Promise.withResolvers<void>()
+    it('initially spawned actors should not be spawned when reading initial state', function*({ expect }) {
       let promiseSpawned = 0
+      const { promise: spawnSignal, resolve: markSpawned } = Promise.withResolvers<void>()
+      const neverResolves = Promise.withResolvers<void>().promise
 
       const machine = createMachine({
         initial: 'idle',
@@ -75,10 +77,11 @@ describe('interpreter', () => {
               context: {
                 actor: enq.spawn(
                   createAsyncLogic({
-                    run: () =>
-                      new Promise(() => {
-                        promiseSpawned++
-                      }),
+                    run: () => {
+                      promiseSpawned++
+                      markSpawned()
+                      return neverResolves
+                    },
                   }),
                 ),
               },
@@ -89,25 +92,31 @@ describe('interpreter', () => {
 
       const service = createActor(machine)
 
-      expect(promiseSpawned).toEqual(0)
+      const spawnedBeforeReads = promiseSpawned
 
       service.getSnapshot()
       service.getSnapshot()
       service.getSnapshot()
 
-      expect(promiseSpawned).toEqual(0)
+      const spawnedAfterReads = promiseSpawned
 
       service.start()
 
-      setTimeout(() => {
-        expect(promiseSpawned).toEqual(1)
-        resolve()
-      }, 100)
-      return promise
+      yield* Effect.promise(() => spawnSignal)
+
+      yield* expect({
+        spawnedBeforeReads,
+        spawnedAfterReads,
+        spawnedAfterStart: promiseSpawned,
+      }).toEqual({
+        spawnedBeforeReads: 0,
+        spawnedAfterReads: 0,
+        spawnedAfterStart: 1,
+      })
     })
 
-    it('does not execute actions from a restored state', () => {
-      let called = false
+    it('does not execute actions from a restored state', function*({ expect }) {
+      const executed: string[] = []
       const machine = createMachine({
         initial: 'green',
         states: {
@@ -119,7 +128,7 @@ describe('interpreter', () => {
               // }
               TIMER: (_, enq) => {
                 enq(() => {
-                  called = true
+                  executed.push('TIMER')
                 })
                 return { target: 'yellow' }
               },
@@ -143,23 +152,28 @@ describe('interpreter', () => {
       let actorRef = createActor(machine).start()
 
       actorRef.send({ type: 'TIMER' })
-      called = false
+      const executedOnLiveSend = [...executed]
       const persisted = actorRef.getPersistedSnapshot()
       actorRef = createActor(machine, { snapshot: persisted }).start()
 
-      expect(called).toBe(false)
+      yield* expect({
+        executedOnLiveSend,
+        executedAfterRestore: [...executed],
+      }).toEqual({
+        executedOnLiveSend: ['TIMER'],
+        executedAfterRestore: ['TIMER'],
+      })
     })
 
-    it('should not execute actions that are not part of the actual persisted state', () => {
-      let called = false
+    it('should not execute actions that are not part of the actual persisted state', function*({ expect }) {
+      const executed: string[] = []
       const machine = createMachine({
         initial: 'a',
         states: {
           a: {
             entry: (_, enq) => {
-              // this should not be called when starting from a different state
               enq(() => {
-                called = true
+                executed.push('a-entry')
               })
             },
             always: { target: 'b' },
@@ -169,13 +183,21 @@ describe('interpreter', () => {
       })
 
       const actorRef = createActor(machine).start()
-      called = false
-      expect(actorRef.getSnapshot().value).toEqual('b')
+      const valueAfterStart = actorRef.getSnapshot().value
+      const executedAfterStart = [...executed]
       const persisted = actorRef.getPersistedSnapshot()
 
       createActor(machine, { snapshot: persisted }).start()
 
-      expect(called).toBe(false)
+      yield* expect({
+        valueAfterStart,
+        executedAfterStart,
+        executedAfterRestore: [...executed],
+      }).toEqual({
+        valueAfterStart: 'b',
+        executedAfterStart: ['a-entry'],
+        executedAfterRestore: ['a-entry'],
+      })
     })
   })
 
@@ -187,18 +209,20 @@ describe('interpreter', () => {
       },
     })
 
-    it('should not notify subscribers of the current state upon subscription (subscribe)', () => {
-      const spy = vi.fn()
+    it('should not notify subscribers of the current state upon subscription (subscribe)', function*({ expect }) {
+      const calls: unknown[][] = []
       const service = createActor(machine).start()
 
-      service.subscribe(spy)
+      service.subscribe((...args: unknown[]) => {
+        calls.push(args)
+      })
 
-      expect(spy).not.toHaveBeenCalled()
+      yield* expect(calls).toEqual([])
     })
   })
 
   describe('send with delay', () => {
-    it('can send an event after a delay', () => {
+    it('can send an event after a delay', function*({ expect }) {
       const machine = createMachine({
         initial: 'foo',
         states: {
@@ -216,24 +240,37 @@ describe('interpreter', () => {
       })
       const idleClock = new SimulatedClock()
       const idleActorRef = createActor(machine, { clock: idleClock })
-      expect(idleActorRef.getSnapshot().value).toBe('foo')
+      const idleValueBeforeIncrement = idleActorRef.getSnapshot().value
 
       idleClock.increment(10)
-      expect(idleActorRef.getSnapshot().value).toBe('foo')
+      const idleValueAfterIncrement = idleActorRef.getSnapshot().value
 
       const clock = new SimulatedClock()
       const actorRef = createActor(machine, { clock })
       actorRef.start()
-      expect(actorRef.getSnapshot().value).toBe('foo')
+      const startedValue = actorRef.getSnapshot().value
 
       clock.increment(5)
-      expect(actorRef.getSnapshot().value).toBe('foo')
+      const valueAfterFive = actorRef.getSnapshot().value
 
       clock.increment(5)
-      expect(actorRef.getSnapshot().value).toBe('bar')
+
+      yield* expect({
+        idleValueBeforeIncrement,
+        idleValueAfterIncrement,
+        startedValue,
+        valueAfterFive,
+        valueAfterTen: actorRef.getSnapshot().value,
+      }).toEqual({
+        idleValueBeforeIncrement: 'foo',
+        idleValueAfterIncrement: 'foo',
+        startedValue: 'foo',
+        valueAfterFive: 'foo',
+        valueAfterTen: 'bar',
+      })
     })
 
-    it('can send an event after a delay (expression)', () => {
+    it('can send an event after a delay (expression)', function*({ expect }) {
       interface DelayExprMachineCtx {
         initialDelay: number
       }
@@ -292,7 +329,7 @@ describe('interpreter', () => {
         },
       })
 
-      let stopped = false
+      const completed: string[] = []
 
       const clock = new SimulatedClock()
 
@@ -301,7 +338,7 @@ describe('interpreter', () => {
       })
       delayExprService.subscribe({
         complete: () => {
-          stopped = true
+          completed.push('complete')
         },
       })
       delayExprService.start()
@@ -312,15 +349,17 @@ describe('interpreter', () => {
       })
 
       clock.increment(101)
-
-      expect(stopped).toBe(false)
+      const completedAfter101 = [...completed]
 
       clock.increment(50)
 
-      expect(stopped).toBe(true)
+      yield* expect({ completedAfter101, completed }).toEqual({
+        completedAfter101: [],
+        completed: ['complete'],
+      })
     })
 
-    it('can send an event after a delay (expression using _event)', () => {
+    it('can send an event after a delay (expression using _event)', function*({ expect }) {
       interface DelayExprMachineCtx {
         initialDelay: number
       }
@@ -388,7 +427,7 @@ describe('interpreter', () => {
         },
       })
 
-      let stopped = false
+      const completed: string[] = []
 
       const clock = new SimulatedClock()
 
@@ -397,7 +436,7 @@ describe('interpreter', () => {
       })
       delayExprService.subscribe({
         complete: () => {
-          stopped = true
+          completed.push('complete')
         },
       })
       delayExprService.start()
@@ -408,15 +447,17 @@ describe('interpreter', () => {
       })
 
       clock.increment(101)
-
-      expect(stopped).toBe(false)
+      const completedAfter101 = [...completed]
 
       clock.increment(50)
 
-      expect(stopped).toBe(true)
+      yield* expect({ completedAfter101, completed }).toEqual({
+        completedAfter101: [],
+        completed: ['complete'],
+      })
     })
 
-    it('can send an event after a delay (delayed transitions)', () => {
+    it('can send an event after a delay (delayed transitions)', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
       const clock = new SimulatedClock()
       const letterMachine = createMachine(
@@ -494,180 +535,174 @@ describe('interpreter', () => {
       })
       actor.start()
 
-      expect(actor.getSnapshot().value).toEqual('a')
+      const valueAfterStart = actor.getSnapshot().value
       clock.increment(100)
-      expect(actor.getSnapshot().value).toEqual('b')
+      const valueAfter100 = actor.getSnapshot().value
       clock.increment(100 + 50)
-      expect(actor.getSnapshot().value).toEqual('c')
+      const valueAfter250 = actor.getSnapshot().value
       clock.increment(20)
-      expect(actor.getSnapshot().value).toEqual('d')
+      const valueAfter270 = actor.getSnapshot().value
       clock.increment(100 + 200)
-      expect(actor.getSnapshot().value).toEqual('e')
+      const valueAfter570 = actor.getSnapshot().value
       clock.increment(100 + 50)
 
-      return promise
+      yield* expect({
+        valueAfterStart,
+        valueAfter100,
+        valueAfter250,
+        valueAfter270,
+        valueAfter570,
+      }).toEqual({
+        valueAfterStart: 'a',
+        valueAfter100: 'b',
+        valueAfter250: 'c',
+        valueAfter270: 'd',
+        valueAfter570: 'e',
+      })
+
+      yield* Effect.promise(() => promise)
     })
   })
 
   describe('activities (deprecated)', () => {
-    it('should start activities', () => {
-      const spy = vi.fn()
+    it('should start activities', function*({ expect }) {
+      const started: string[] = []
+      const activity = () => {
+        started.push('activity')
+      }
 
-      const activityMachine = createMachine(
-        {
-          id: 'activity',
-          initial: 'on',
-          states: {
-            on: {
-              invoke: {
-                src: createCallbackLogic(spy),
-              },
-              on: {
-                TURN_OFF: { target: 'off' },
-              },
+      const activityMachine = createMachine({
+        id: 'activity',
+        initial: 'on',
+        states: {
+          on: {
+            invoke: {
+              src: createCallbackLogic(activity),
             },
-            off: {},
+            on: {
+              TURN_OFF: { target: 'off' },
+            },
           },
+          off: {},
         },
-        // {
-        //   actors: {
-        //     myActivity: createCallbackLogic(spy)
-        //   }
-        // }
-      )
+      })
       const service = createActor(activityMachine)
 
       service.start()
 
-      expect(spy).toHaveBeenCalled()
+      yield* expect(started).toEqual(['activity'])
     })
 
-    it('should stop activities', () => {
-      const spy = vi.fn()
+    it('should stop activities', function*({ expect }) {
+      const cleanupCalls: string[] = []
+      const cleanup = () => {
+        cleanupCalls.push('stopped')
+      }
 
-      const activityMachine = createMachine(
-        {
-          id: 'activity',
-          initial: 'on',
-          states: {
-            on: {
-              invoke: {
-                src: createCallbackLogic(() => spy),
-              },
-              on: {
-                TURN_OFF: { target: 'off' },
-              },
+      const activityMachine = createMachine({
+        id: 'activity',
+        initial: 'on',
+        states: {
+          on: {
+            invoke: {
+              src: createCallbackLogic(() => cleanup),
             },
-            off: {},
+            on: {
+              TURN_OFF: { target: 'off' },
+            },
           },
+          off: {},
         },
-        // {
-        //   actors: {
-        //     myActivity: createCallbackLogic(() => spy)
-        //   }
-        // }
-      )
+      })
       const service = createActor(activityMachine)
 
       service.start()
 
-      expect(spy).not.toHaveBeenCalled()
+      const beforeTurnOff = [...cleanupCalls]
 
       service.send({ type: 'TURN_OFF' })
 
-      expect(spy).toHaveBeenCalled()
+      yield* expect({ beforeTurnOff, afterTurnOff: [...cleanupCalls] }).toEqual({
+        beforeTurnOff: [],
+        afterTurnOff: ['stopped'],
+      })
     })
 
-    it('should stop activities upon stopping the service', () => {
-      const spy = vi.fn()
+    it('should stop activities upon stopping the service', function*({ expect }) {
+      const cleanupCalls: string[] = []
+      const cleanup = () => {
+        cleanupCalls.push('stopped')
+      }
 
-      const stopActivityMachine = createMachine(
-        {
-          id: 'stopActivity',
-          initial: 'on',
-          states: {
-            on: {
-              invoke: {
-                src: createCallbackLogic(() => spy),
-              },
-              on: {
-                TURN_OFF: { target: 'off' },
-              },
+      const stopActivityMachine = createMachine({
+        id: 'stopActivity',
+        initial: 'on',
+        states: {
+          on: {
+            invoke: {
+              src: createCallbackLogic(() => cleanup),
             },
-            off: {},
+            on: {
+              TURN_OFF: { target: 'off' },
+            },
           },
+          off: {},
         },
-        // {
-        //   actors: {
-        //     myActivity: createCallbackLogic(() => spy)
-        //   }
-        // }
-      )
+      })
 
       const stopActivityService = createActor(stopActivityMachine).start()
 
-      expect(spy).not.toHaveBeenCalled()
+      const beforeStop = [...cleanupCalls]
 
       stopActivityService.stop()
 
-      expect(spy).toHaveBeenCalled()
+      yield* expect({ beforeStop, afterStop: [...cleanupCalls] }).toEqual({
+        beforeStop: [],
+        afterStop: ['stopped'],
+      })
     })
 
-    // TODO: event sourcing
-    it.skip('should restart activities from a compound state', () => {
-      let activityActive = false
+    it.skip('should restart activities from a compound state', function*({ expect }) {
+      const activityEvents: string[] = []
 
-      const machine = createMachine(
-        {
-          initial: 'inactive',
-          states: {
-            inactive: {
-              on: { TOGGLE: { target: 'active' } },
+      const machine = createMachine({
+        initial: 'inactive',
+        states: {
+          inactive: {
+            on: { TOGGLE: { target: 'active' } },
+          },
+          active: {
+            invoke: {
+              src: createCallbackLogic(() => {
+                activityEvents.push('active')
+                return () => {
+                  activityEvents.push('inactive')
+                }
+              }),
             },
-            active: {
-              invoke: {
-                src: createCallbackLogic(() => {
-                  activityActive = true
-                  return () => {
-                    activityActive = false
-                  }
-                }),
-              },
-              on: { TOGGLE: { target: 'inactive' } },
-              initial: 'A',
-              states: {
-                A: { on: { SWITCH: { target: 'B' } } },
-                B: { on: { SWITCH: { target: 'A' } } },
-              },
+            on: { TOGGLE: { target: 'inactive' } },
+            initial: 'A',
+            states: {
+              A: { on: { SWITCH: { target: 'B' } } },
+              B: { on: { SWITCH: { target: 'A' } } },
             },
           },
         },
-        // {
-        //   actors: {
-        //     blink: createCallbackLogic(() => {
-        //       activityActive = true;
-        //       return () => {
-        //         activityActive = false;
-        //       };
-        //     })
-        //   }
-        // }
-      )
+      })
 
       const actorRef = createActor(machine).start()
       actorRef.send({ type: 'TOGGLE' })
       actorRef.send({ type: 'SWITCH' })
       const bState = actorRef.getPersistedSnapshot()
       actorRef.stop()
-      activityActive = false
 
       createActor(machine, { snapshot: bState }).start()
 
-      expect(activityActive).toBeTruthy()
+      yield* expect(activityEvents).toContain('active')
     })
   })
 
-  it('can cancel a delayed event', () => {
+  it('can cancel a delayed event', function*({ expect }) {
     const service = createActor(lightMachine, {
       clock: new SimulatedClock(),
     })
@@ -677,12 +712,16 @@ describe('interpreter', () => {
     clock.increment(5)
     service.send({ type: 'KEEP_GOING' })
 
-    expect(service.getSnapshot().value).toEqual('green')
+    const valueAfterFive = service.getSnapshot().value
     clock.increment(10)
-    expect(service.getSnapshot().value).toEqual('green')
+
+    yield* expect({ valueAfterFive, valueAfterFifteen: service.getSnapshot().value }).toEqual({
+      valueAfterFive: 'green',
+      valueAfterFifteen: 'green',
+    })
   })
 
-  it('can cancel a delayed event using expression to resolve send id', () => {
+  it('can cancel a delayed event using expression to resolve send id', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     const machine = createMachine({
       initial: 'first',
@@ -725,22 +764,36 @@ describe('interpreter', () => {
 
     const service = createActor(machine).start()
 
+    const completedValues: StateValue[] = []
     service.subscribe({
       complete: () => {
-        expect(service.getSnapshot().value).toBe('pass')
+        completedValues.push(service.getSnapshot().value)
         resolve()
       },
     })
-    return promise
+
+    yield* Effect.promise(() => promise)
+
+    yield* expect(completedValues).toEqual(['pass'])
   })
 
-  it('should not throw an error if an event is sent to an uninitialized interpreter', () => {
+  it('should not throw an error if an event is sent to an uninitialized interpreter', function*({ expect }) {
     const actorRef = createActor(lightMachine)
 
-    expect(() => actorRef.send({ type: 'SOME_EVENT' })).not.toThrow()
+    let thrown: unknown
+    try {
+      actorRef.send({ type: 'SOME_EVENT' })
+    } catch (error) {
+      thrown = error
+    }
+
+    yield* expect({ thrown, value: actorRef.getSnapshot().value }).toEqual({
+      thrown: undefined,
+      value: 'green',
+    })
   })
 
-  it('should defer events sent to an uninitialized service', () => {
+  it('should defer events sent to an uninitialized service', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     const deferMachine = createMachine({
       id: 'defer',
@@ -758,28 +811,32 @@ describe('interpreter', () => {
       },
     })
 
-    let state: any
+    let lastValue: StateValue | undefined
     const deferService = createActor(deferMachine)
 
     deferService.subscribe({
       next: (nextState) => {
-        state = nextState
+        lastValue = nextState.value
       },
       complete: resolve,
     })
 
-    // uninitialized
     deferService.send({ type: 'NEXT_A' })
     deferService.send({ type: 'NEXT_B' })
 
-    expect(state).not.toBeDefined()
+    const valueBeforeStart = lastValue
 
-    // initialized
     deferService.start()
-    return promise
+
+    yield* Effect.promise(() => promise)
+
+    yield* expect({ valueBeforeStart, valueAfterStart: lastValue }).toEqual({
+      valueBeforeStart: undefined,
+      valueAfterStart: 'c',
+    })
   })
 
-  it('should throw an error if initial state sent to interpreter is invalid', () => {
+  it('should throw an error if initial state sent to interpreter is invalid', function*({ expect }) {
     const invalidMachine = {
       id: 'fetchMachine',
       initial: 'create',
@@ -800,36 +857,55 @@ describe('interpreter', () => {
 
     const snapshot = createActor(createMachine(invalidMachine)).getSnapshot()
 
-    expect(snapshot.status).toBe('error')
-    expect(snapshot.error).toMatchInlineSnapshot(
-      `[Error: Initial state node "create" not found on parent state node #fetchMachine]`,
-    )
+    yield* expect({
+      status: snapshot.status,
+      error: snapshot.error instanceof Error
+        ? { name: snapshot.error.name, message: snapshot.error.message }
+        : snapshot.error,
+    }).toEqual({
+      status: 'error',
+      error: {
+        name: 'Error',
+        message: 'Initial state node "create" not found on parent state node #fetchMachine',
+      },
+    })
   })
 
-  it('should not update when stopped', () => {
-    const warnSpy = vi.spyOn(console, 'warn')
+  it('should not update when stopped', function*({ expect }) {
+    const written: string[] = []
     const service = createActor(lightMachine, {
       clock: new SimulatedClock(),
+      warn: (message) => written.push(message),
     })
 
     service.start()
-    service.send({ type: 'TIMER' }) // yellow
-    expect(service.getSnapshot().value).toEqual('yellow')
+    service.send({ type: 'TIMER' })
+    const valueAfterTimer = service.getSnapshot().value
 
     service.stop()
+    let thrown: unknown
     try {
-      service.send({ type: 'TIMER' }) // red if interpreter is not stopped
-    } catch (e) {
-      expect(service.getSnapshot().value).toEqual('yellow')
+      service.send({ type: 'TIMER' })
+    } catch (error) {
+      thrown = error
     }
+    const valueAfterStoppedSend = service.getSnapshot().value
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      `Event "TIMER" to actor "light" was not delivered (stopped).`,
-    )
+    yield* expect({
+      valueAfterTimer,
+      thrown,
+      valueAfterStoppedSend,
+      written,
+    }).toEqual({
+      valueAfterTimer: 'yellow',
+      thrown: undefined,
+      valueAfterStoppedSend: 'yellow',
+      written: ['Event "TIMER" to actor "light" was not delivered (stopped).'],
+    })
   })
 
-  it('should be able to log (log action)', () => {
-    const logs: any[] = []
+  it('should be able to log (log action)', function*({ expect }) {
+    const logs: unknown[] = []
 
     const logMachine = createMachine({
       // types: {} as { context: { count: number } },
@@ -865,12 +941,11 @@ describe('interpreter', () => {
     service.send({ type: 'LOG' })
     service.send({ type: 'LOG' })
 
-    expect(logs.length).toBe(2)
-    expect(logs).toEqual([{ count: 1 }, { count: 2 }])
+    yield* expect(logs).toEqual([{ count: 1 }, { count: 2 }])
   })
 
-  it('should receive correct event (log action)', () => {
-    const logs: any[] = []
+  it('should receive correct event (log action)', function*({ expect }) {
+    const logs: unknown[] = []
 
     const parentMachine = createMachine({
       initial: 'foo',
@@ -903,8 +978,7 @@ describe('interpreter', () => {
 
     service.send({ type: 'EXTERNAL_EVENT' })
 
-    expect(logs.length).toBe(2)
-    expect(logs).toEqual(['EXTERNAL_EVENT', 'RAISED_EVENT'])
+    yield* expect(logs).toEqual(['EXTERNAL_EVENT', 'RAISED_EVENT'])
   })
 
   describe('send() event expressions', () => {
@@ -954,17 +1028,20 @@ describe('interpreter', () => {
       },
     })
 
-    it('should resolve send event expressions', () => {
+    it('should resolve send event expressions', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
       const actor = createActor(machine)
       actor.subscribe({ complete: () => resolve() })
       actor.start()
-      return promise
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect(actor.getSnapshot().value).toEqual('finish')
     })
   })
 
   describe('sendParent() event expressions', () => {
-    it('should resolve sendParent event expressions', () => {
+    it('should resolve sendParent event expressions', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
       const childMachine = createMachine({
         // types: {} as {
@@ -1019,7 +1096,7 @@ describe('interpreter', () => {
               id: 'child',
               src: childMachine,
               input: { password: 'foo' },
-            } as any,
+            },
             on: {
               // NEXT: {
               //   target: 'finish',
@@ -1039,19 +1116,26 @@ describe('interpreter', () => {
         },
       })
 
+      const childSendTypes: string[] = []
       const actor = createActor(parentMachine)
       actor.subscribe({
         next: (state) => {
           if (state.matches('start')) {
             const childActor = state.children['child']
 
-            expect(typeof childActor!.send).toBe('function')
+            childSendTypes.push(typeof childActor!.send)
           }
         },
         complete: () => resolve(),
       })
       actor.start()
-      return promise
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect({
+        childSendTypes: [...new Set(childSendTypes)],
+        value: actor.getSnapshot().value,
+      }).toEqual({ childSendTypes: ['function'], value: 'finish' })
     })
   })
 
@@ -1087,37 +1171,46 @@ describe('interpreter', () => {
       },
     })
 
-    it('can send events with a string', () => {
+    it('can send events with a string', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
       const service = createActor(sendMachine)
       service.subscribe({ complete: () => resolve() })
       service.start()
 
       service.send({ type: 'ACTIVATE' })
-      return promise
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect(service.getSnapshot().value).toEqual('active')
     })
 
-    it('can send events with an object', () => {
+    it('can send events with an object', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
       const service = createActor(sendMachine)
       service.subscribe({ complete: () => resolve() })
       service.start()
 
       service.send({ type: 'ACTIVATE' })
-      return promise
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect(service.getSnapshot().value).toEqual('active')
     })
 
-    it('can send events with an object with payload', () => {
+    it('can send events with an object with payload', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
       const service = createActor(sendMachine)
       service.subscribe({ complete: () => resolve() })
       service.start()
 
       service.send({ type: 'EVENT', id: 42 })
-      return promise
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect(service.getSnapshot().value).toEqual('active')
     })
 
-    it('should receive and process all events sent simultaneously', () => {
+    it('should receive and process all events sent simultaneously', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
       const toggleMachine = createMachine({
         id: 'toggle',
@@ -1151,21 +1244,28 @@ describe('interpreter', () => {
 
       toggleService.send({ type: 'ACTIVATE' })
       toggleService.send({ type: 'INACTIVATE' })
-      return promise
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect(toggleService.getSnapshot().value).toEqual('success')
     })
   })
 
   describe('.start()', () => {
-    it('should initialize the service', () => {
-      const contextSpy = vi.fn()
-      const entrySpy = vi.fn()
+    it('should initialize the service', function*({ expect }) {
+      const contextCalls: string[] = []
+      const entryCalls: string[] = []
 
       const machine = createMachine({
         schemas: {
           context: z.object({}),
         },
-        context: contextSpy,
-        entry: () => entrySpy(),
+        context: () => {
+          contextCalls.push('context')
+        },
+        entry: () => {
+          entryCalls.push('entry')
+        },
         initial: 'foo',
         states: {
           foo: {},
@@ -1174,32 +1274,46 @@ describe('interpreter', () => {
       const actor = createActor(machine)
       actor.start()
 
-      expect(contextSpy).toHaveBeenCalled()
-      expect(entrySpy).toHaveBeenCalled()
-      expect(actor.getSnapshot()).toBeDefined()
-      expect(actor.getSnapshot().matches('foo')).toBeTruthy()
+      yield* expect({
+        contextCalls,
+        entryCalls,
+        value: actor.getSnapshot().value,
+        matchesFoo: actor.getSnapshot().matches('foo'),
+      }).toEqual({
+        contextCalls: ['context'],
+        entryCalls: ['entry'],
+        value: 'foo',
+        matchesFoo: true,
+      })
     })
 
-    it('should not reinitialize a started service', () => {
-      const contextSpy = vi.fn()
-      const entrySpy = vi.fn()
+    it('should not reinitialize a started service', function*({ expect }) {
+      const contextCalls: string[] = []
+      const entryCalls: string[] = []
 
       const machine = createMachine({
         schemas: {
           context: z.object({}),
         },
-        context: contextSpy,
-        entry: (_, enq) => enq(entrySpy),
+        context: () => {
+          contextCalls.push('context')
+        },
+        entry: (_, enq) =>
+          enq(() => {
+            entryCalls.push('entry')
+          }),
       })
       const actor = createActor(machine)
       actor.start()
       actor.start()
 
-      expect(contextSpy).toHaveBeenCalledTimes(1)
-      expect(entrySpy).toHaveBeenCalledTimes(1)
+      yield* expect({ contextCalls, entryCalls }).toEqual({
+        contextCalls: ['context'],
+        entryCalls: ['entry'],
+      })
     })
 
-    it('should be able to be initialized at a custom state', () => {
+    it('should be able to be initialized at a custom state', function*({ expect }) {
       const machine = createMachine({
         initial: 'foo',
         states: {
@@ -1211,12 +1325,16 @@ describe('interpreter', () => {
         snapshot: machine.resolveState({ value: 'bar' }),
       })
 
-      expect(actor.getSnapshot().matches('bar')).toBeTruthy()
+      const valueBeforeStart = actor.getSnapshot().value
       actor.start()
-      expect(actor.getSnapshot().matches('bar')).toBeTruthy()
+
+      yield* expect({
+        valueBeforeStart,
+        valueAfterStart: actor.getSnapshot().value,
+      }).toEqual({ valueBeforeStart: 'bar', valueAfterStart: 'bar' })
     })
 
-    it('should be able to be initialized at a custom state value', () => {
+    it('should be able to be initialized at a custom state value', function*({ expect }) {
       const machine = createMachine({
         initial: 'foo',
         states: {
@@ -1228,12 +1346,16 @@ describe('interpreter', () => {
         snapshot: machine.resolveState({ value: 'bar' }),
       })
 
-      expect(actor.getSnapshot().matches('bar')).toBeTruthy()
+      const valueBeforeStart = actor.getSnapshot().value
       actor.start()
-      expect(actor.getSnapshot().matches('bar')).toBeTruthy()
+
+      yield* expect({
+        valueBeforeStart,
+        valueAfterStart: actor.getSnapshot().value,
+      }).toEqual({ valueBeforeStart: 'bar', valueAfterStart: 'bar' })
     })
 
-    it('should be able to resolve a custom initialized state', () => {
+    it('should be able to resolve a custom initialized state', function*({ expect }) {
       const machine = createMachine({
         id: 'start',
         initial: 'foo',
@@ -1251,31 +1373,32 @@ describe('interpreter', () => {
         snapshot: machine.resolveState({ value: 'foo' }),
       })
 
-      expect(actor.getSnapshot().matches({ foo: 'one' })).toBeTruthy()
+      const valueBeforeStart = actor.getSnapshot().value
       actor.start()
-      expect(actor.getSnapshot().matches({ foo: 'one' })).toBeTruthy()
+
+      yield* expect({
+        valueBeforeStart,
+        valueAfterStart: actor.getSnapshot().value,
+      }).toEqual({
+        valueBeforeStart: { foo: 'one' },
+        valueAfterStart: { foo: 'one' },
+      })
     })
   })
 
   describe('.stop()', () => {
-    it('should cancel delayed events', () => {
-      const { resolve, promise } = Promise.withResolvers<void>()
-      let called = false
+    it('should cancel delayed events', function*({ expect }) {
+      const executed: string[] = []
+      const clock = new SimulatedClock()
       const delayedMachine = createMachine({
         id: 'delayed',
         initial: 'foo',
         states: {
           foo: {
             after: {
-              // 50: {
-              //   target: 'bar',
-              //   actions: () => {
-              //     called = true;
-              //   }
-              // }
               50: (_, enq) => {
                 enq(() => {
-                  called = true
+                  executed.push('bar-entry')
                 })
                 return { target: 'bar' }
               },
@@ -1285,21 +1408,22 @@ describe('interpreter', () => {
         },
       })
 
-      const delayedService = createActor(delayedMachine).start()
+      const delayedService = createActor(delayedMachine, { clock }).start()
 
       delayedService.stop()
 
-      setTimeout(() => {
-        expect(called).toBe(false)
-        resolve()
-      }, 60)
-      return promise
+      clock.increment(50)
+
+      yield* expect({
+        executed,
+        value: delayedService.getSnapshot().value,
+      }).toEqual({ executed: [], value: 'foo' })
     })
 
-    it('should not execute transitions after being stopped', () => {
-      const { resolve, promise } = Promise.withResolvers<void>()
-      const warnSpy = vi.spyOn(console, 'warn')
-      let called = false
+    it('should not execute transitions after being stopped', function*({ expect }) {
+      const executed: string[] = []
+      const written: string[] = []
+      const clock = new SimulatedClock()
 
       const testMachine = createMachine({
         initial: 'waiting',
@@ -1312,31 +1436,32 @@ describe('interpreter', () => {
           active: {
             entry: (_, enq) => {
               enq(() => {
-                called = true
+                executed.push('active-entry')
               })
             },
           },
         },
       })
 
-      const service = createActor(testMachine).start()
+      const service = createActor(testMachine, {
+        clock,
+        warn: (message) => written.push(message),
+      }).start()
 
       service.stop()
 
       service.send({ type: 'TRIGGER' })
 
-      setTimeout(() => {
-        expect(called).toBeFalsy()
-        expect(warnSpy).toHaveBeenCalledWith(
-          `Event "TRIGGER" to actor "x:0" was not delivered (stopped).`,
-        )
-        resolve()
-      }, 10)
-      return promise
+      clock.increment(10)
+
+      yield* expect({ executed, written }).toEqual({
+        executed: [],
+        written: ['Event "TRIGGER" to actor "x:0" was not delivered (stopped).'],
+      })
     })
 
-    it('should not throw when sending an unserializable event to a stopped actor', () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    it('should not throw when sending an unserializable event to a stopped actor', function*({ expect }) {
+      const written: string[] = []
 
       const testMachine = createMachine({
         initial: 'waiting',
@@ -1350,24 +1475,29 @@ describe('interpreter', () => {
         },
       })
 
-      const service = createActor(testMachine).start()
+      const service = createActor(testMachine, {
+        warn: (message) => written.push(message),
+      }).start()
 
       service.stop()
 
-      // event with a circular reference cannot be JSON.stringify'd
-      const circular: any = { type: 'TRIGGER' }
+      const circular: { type: string; self?: unknown } = { type: 'TRIGGER' }
       circular.self = circular
 
-      expect(() => {
+      let thrown: unknown
+      try {
         service.send(circular)
-      }).not.toThrow()
+      } catch (error) {
+        thrown = error
+      }
 
-      expect(warnSpy).toHaveBeenCalledTimes(1)
-
-      warnSpy.mockRestore()
+      yield* expect({ thrown, written }).toEqual({
+        thrown: undefined,
+        written: ['Event "TRIGGER" to actor "x:0" was not delivered (stopped).'],
+      })
     })
 
-    it('stopping a not-started interpreter should not crash', () => {
+    it('stopping a not-started interpreter should not crash', function*({ expect }) {
       const service = createActor(
         createMachine({
           initial: 'a',
@@ -1375,14 +1505,22 @@ describe('interpreter', () => {
         }),
       )
 
-      expect(() => {
+      let thrown: unknown
+      try {
         service.stop()
-      }).not.toThrow()
+      } catch (error) {
+        thrown = error
+      }
+
+      yield* expect({ thrown, value: service.getSnapshot().value }).toEqual({
+        thrown: undefined,
+        value: 'a',
+      })
     })
   })
 
   describe('.unsubscribe()', () => {
-    it('should remove transition listeners', () => {
+    it('should remove transition listeners', function*({ expect }) {
       const toggleMachine = createMachine({
         id: 'toggle',
         initial: 'inactive',
@@ -1403,26 +1541,33 @@ describe('interpreter', () => {
       const listener = () => stateCount++
 
       const sub = toggleService.subscribe(listener)
-
-      expect(stateCount).toEqual(0)
-
-      toggleService.send({ type: 'TOGGLE' })
-
-      expect(stateCount).toEqual(1)
+      const afterSubscribe = stateCount
 
       toggleService.send({ type: 'TOGGLE' })
+      const afterFirstToggle = stateCount
 
-      expect(stateCount).toEqual(2)
+      toggleService.send({ type: 'TOGGLE' })
+      const afterSecondToggle = stateCount
 
       sub.unsubscribe()
       toggleService.send({ type: 'TOGGLE' })
 
-      expect(stateCount).toEqual(2)
+      yield* expect({
+        afterSubscribe,
+        afterFirstToggle,
+        afterSecondToggle,
+        afterUnsubscribe: stateCount,
+      }).toEqual({
+        afterSubscribe: 0,
+        afterFirstToggle: 1,
+        afterSecondToggle: 2,
+        afterUnsubscribe: 2,
+      })
     })
   })
 
   describe('transient states', () => {
-    it('should transition in correct order', () => {
+    it('should transition in correct order', function*({ expect }) {
       const stateMachine = createMachine({
         id: 'transient',
         initial: 'idle',
@@ -1440,14 +1585,10 @@ describe('interpreter', () => {
       service.start()
       service.send({ type: 'START' })
 
-      const expectedStateValues = ['idle', 'next']
-      expect(stateValues.length).toEqual(expectedStateValues.length)
-      for (let i = 0; i < expectedStateValues.length; i++) {
-        expect(stateValues[i]).toEqual(expectedStateValues[i])
-      }
+      yield* expect(stateValues).toEqual(['idle', 'next'])
     })
 
-    it('should transition in correct order when there is a condition', () => {
+    it('should transition in correct order when there is a condition', function*({ expect }) {
       const alwaysFalse = () => false
       const stateMachine = createMachine(
         {
@@ -1484,11 +1625,7 @@ describe('interpreter', () => {
       service.start()
       service.send({ type: 'START' })
 
-      const expectedStateValues = ['idle', 'next']
-      expect(stateValues.length).toEqual(expectedStateValues.length)
-      for (let i = 0; i < expectedStateValues.length; i++) {
-        expect(stateValues[i]).toEqual(expectedStateValues[i])
-      }
+      yield* expect(stateValues).toEqual(['idle', 'next'])
     })
   })
 
@@ -1534,12 +1671,13 @@ describe('interpreter', () => {
       },
     })
 
-    it('should be subscribable', () => {
+    it('should be subscribable', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
-      let count: number
-      const intervalService = createActor(intervalMachine).start()
+      let count: number | undefined
+      const clock = new SimulatedClock()
+      const intervalService = createActor(intervalMachine, { clock }).start()
 
-      expect(typeof intervalService.subscribe === 'function').toBeTruthy()
+      const subscribeType = typeof intervalService.subscribe
 
       intervalService.subscribe(
         (state) => {
@@ -1547,17 +1685,27 @@ describe('interpreter', () => {
         },
         undefined,
         () => {
-          expect(count).toEqual(5)
           resolve()
         },
       )
-      return promise
+
+      for (let i = 0; i < 5; i++) {
+        clock.increment(10)
+      }
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect({ subscribeType, count }).toEqual({
+        subscribeType: 'function',
+        count: 5,
+      })
     })
 
-    it('should be interoperable with RxJS, etc. via Symbol.observable', () => {
+    it('should be interoperable with RxJS, etc. via Symbol.observable', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
       let count = 0
-      const intervalService = createActor(intervalMachine).start()
+      const clock = new SimulatedClock()
+      const intervalService = createActor(intervalMachine, { clock }).start()
 
       const state$ = from(intervalService)
 
@@ -1566,14 +1714,20 @@ describe('interpreter', () => {
           count += 1
         },
         complete: () => {
-          expect(count).toEqual(5)
           resolve()
         },
       })
-      return promise
+
+      for (let i = 0; i < 5; i++) {
+        clock.increment(10)
+      }
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect(count).toEqual(5)
     })
 
-    it('should be unsubscribable', () => {
+    it('should be unsubscribable', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
       const countContext = { count: 0 }
       const machine = createMachine({
@@ -1611,11 +1765,12 @@ describe('interpreter', () => {
         },
       })
 
-      let count: number
+      let count: number | undefined
+      const completedCounts: (number | undefined)[] = []
       const service = createActor(machine)
       service.subscribe({
         complete: () => {
-          expect(count).toEqual(2)
+          completedCounts.push(count)
           resolve()
         },
       })
@@ -1631,11 +1786,14 @@ describe('interpreter', () => {
       service.send({ type: 'INC' })
       service.send({ type: 'INC' })
       service.send({ type: 'INC' })
-      return promise
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect(completedCounts).toEqual([2])
     })
 
-    it('should call complete() once a final state is reached', () => {
-      const completeCb = vi.fn()
+    it('should call complete() once a final state is reached', function*({ expect }) {
+      const completions: string[] = []
 
       const service = createActor(
         createMachine({
@@ -1652,61 +1810,68 @@ describe('interpreter', () => {
       ).start()
 
       service.subscribe({
-        complete: completeCb,
+        complete: () => {
+          completions.push('complete')
+        },
       })
 
       service.send({ type: 'NEXT' })
 
-      expect(completeCb).toHaveBeenCalledTimes(1)
+      yield* expect({
+        completions,
+        value: service.getSnapshot().value,
+      }).toEqual({ completions: ['complete'], value: 'done' })
     })
 
-    it('should call complete() once the interpreter is stopped', () => {
-      const completeCb = vi.fn()
+    it('should call complete() once the interpreter is stopped', function*({ expect }) {
+      const completions: string[] = []
 
       const service = createActor(createMachine({})).start()
 
       service.subscribe({
         complete: () => {
-          completeCb()
+          completions.push('complete')
         },
       })
 
       service.stop()
 
-      expect(completeCb).toHaveBeenCalledTimes(1)
+      yield* expect(completions).toEqual(['complete'])
     })
   })
 
   describe('actors', () => {
-    it("doesn't crash cryptically on undefined return from the actor creator", () => {
-      const child = createCallbackLogic(() => {
-        // nothing
-      })
-      const machine = createMachine(
-        {
-          initial: 'initial',
-          states: {
-            initial: {
-              invoke: {
-                src: child,
-              },
+    it("doesn't crash cryptically on undefined return from the actor creator", function*({ expect }) {
+      const child = createCallbackLogic(() => {})
+
+      const machine = createMachine({
+        initial: 'initial',
+        states: {
+          initial: {
+            invoke: {
+              src: child,
             },
           },
         },
-        // {
-        //   actors: {
-        //     testService: child
-        //   }
-        // }
-      )
+      })
 
       const service = createActor(machine)
-      expect(() => service.start()).not.toThrow()
+      let thrown: unknown
+      try {
+        service.start()
+      } catch (error) {
+        thrown = error
+      }
+
+      yield* expect({ thrown, value: service.getSnapshot().value }).toEqual({
+        thrown: undefined,
+        value: 'initial',
+      })
     })
   })
 
   describe('children', () => {
-    it('state.children should reference invoked child actors (machine)', () => {
+    it('state.children should reference invoked child actors (machine)', function*({ expect }) {
       const childMachine = createMachine({
         initial: 'active',
         states: {
@@ -1743,24 +1908,25 @@ describe('interpreter', () => {
       const actor = createActor(parentMachine)
       actor.start()
       const childActor = actor.getSnapshot().children['childActor']
-      if (childActor === undefined) {
-        throw new Error('expected a child actor')
-      }
-      childActor.send({ type: 'FIRE' })
+      const childPresent = childActor !== undefined
+      childActor?.send({ type: 'FIRE' })
 
-      // the actor should be done by now
-      expect(actor.getSnapshot().children).not.toHaveProperty('childActor')
+      yield* expect({
+        childPresent,
+        childAfterFire: actor.getSnapshot().children['childActor'],
+        value: actor.getSnapshot().value,
+      }).toEqual({
+        childPresent: true,
+        childAfterFire: undefined,
+        value: 'success',
+      })
     })
 
-    it('state.children should reference invoked child actors (promise)', () => {
+    it('state.children should reference invoked child actors (promise)', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
+      const child = Promise.withResolvers<number>()
       const num = createAsyncLogic({
-        run: () =>
-          new Promise<number>((res) => {
-            setTimeout(() => {
-              res(42)
-            }, 100)
-          }),
+        run: () => child.promise,
       })
       const parentMachine = createMachine(
         {
@@ -1812,31 +1978,45 @@ describe('interpreter', () => {
 
       const service = createActor(parentMachine)
 
+      const childSendTypes: string[] = []
+      let finalValue: StateValue | undefined
+      let childAfterComplete: unknown
+
       service.subscribe({
         next: (state) => {
           if (state.matches('active')) {
             const childActor = state.children['childActor']
 
-            expect(childActor).toHaveProperty('send')
+            childSendTypes.push(typeof childActor!.send)
           }
         },
         complete: () => {
-          expect(service.getSnapshot().matches('success')).toBeTruthy()
-          expect(service.getSnapshot().children).not.toHaveProperty(
-            'childActor',
-          )
+          finalValue = service.getSnapshot().value
+          childAfterComplete = service.getSnapshot().children['childActor']
           resolve()
         },
       })
 
       service.start()
-      return promise
+      child.resolve(42)
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect({
+        childSendTypes: [...new Set(childSendTypes)],
+        finalValue,
+        childAfterComplete,
+      }).toEqual({
+        childSendTypes: ['function'],
+        finalValue: 'success',
+        childAfterComplete: undefined,
+      })
     })
 
-    it('state.children should reference invoked child actors (observable)', () => {
+    it('state.children should reference invoked child actors (observable)', function*({ expect }) {
       const { resolve, promise } = Promise.withResolvers<void>()
-      const interval$ = interval(10)
-      const intervalLogic = createObservableLogic<number, undefined>(() => toSubscribable(interval$))
+      const subject = new Subject<number>()
+      const intervalLogic = createObservableLogic<number, undefined>(() => toSubscribable(subject))
 
       const parentMachine = createMachine(
         {
@@ -1879,26 +2059,39 @@ describe('interpreter', () => {
       )
 
       const service = createActor(parentMachine)
+
+      let childAfterComplete: unknown
+      const childPresence: string[] = []
+
       service.subscribe({
         complete: () => {
-          expect(service.getSnapshot().children).not.toHaveProperty(
-            'childActor',
-          )
+          childAfterComplete = service.getSnapshot().children['childActor']
           resolve()
         },
       })
 
       service.subscribe((state) => {
         if (state.matches('active')) {
-          expect(state.children['childActor']).not.toBeUndefined()
+          childPresence.push(
+            state.children['childActor'] === undefined ? 'missing' : 'present',
+          )
         }
       })
 
       service.start()
-      return promise
+      subject.next(1)
+      subject.next(2)
+      subject.next(3)
+
+      yield* Effect.promise(() => promise)
+
+      yield* expect({
+        childPresence: [...new Set(childPresence)],
+        childAfterComplete,
+      }).toEqual({ childPresence: ['present'], childAfterComplete: undefined })
     })
 
-    it.skip('state.children should reference spawned actors', () => {
+    it.skip('state.children should reference spawned actors', function*({ expect }) {
       const childMachine = createMachine({
         initial: 'idle',
         states: {
@@ -1926,11 +2119,15 @@ describe('interpreter', () => {
 
       const actor = createActor(formMachine)
       actor.start()
-      expect(actor.getSnapshot().children).toHaveProperty('child')
+
+      yield* expect(Object.keys(actor.getSnapshot().children)).toEqual([
+        'child',
+      ])
     })
 
     // TODO: need to detect children returned from transition functions
-    it.skip('stopped spawned actors should be cleaned up in parent', () => {
+    it.skip('stopped spawned actors should be cleaned up in parent', function*({ expect }) {
+      const neverResolves = Promise.withResolvers<void>().promise
       const childMachine = createMachine({
         initial: 'idle',
         states: {
@@ -1959,10 +2156,7 @@ describe('interpreter', () => {
             machineChild: enq.spawn(childMachine),
             promiseChild: enq.spawn(
               createAsyncLogic({
-                run: () =>
-                  new Promise(() => {
-                    // ...
-                  }),
+                run: () => neverResolves,
               }),
             ),
             observableChild: enq.spawn(
@@ -1997,59 +2191,76 @@ describe('interpreter', () => {
 
       const service = createActor(parentMachine).start()
 
-      expect(service.getSnapshot().children).toHaveProperty('machineChild')
-      expect(service.getSnapshot().children).toHaveProperty('promiseChild')
-      expect(service.getSnapshot().children).toHaveProperty('observableChild')
+      const childrenBefore = Object.keys(service.getSnapshot().children).sort()
 
       service.send({ type: 'NEXT' })
 
-      expect(service.getSnapshot().children['machineChild']).toBeUndefined()
-      expect(service.getSnapshot().children['promiseChild']).toBeUndefined()
-      expect(service.getSnapshot().children['observableChild']).toBeUndefined()
+      yield* expect({
+        childrenBefore,
+        machineChildAfter: service.getSnapshot().children['machineChild'],
+        promiseChildAfter: service.getSnapshot().children['promiseChild'],
+        observableChildAfter: service.getSnapshot().children['observableChild'],
+      }).toEqual({
+        childrenBefore: ['machineChild', 'observableChild', 'promiseChild'],
+        machineChildAfter: undefined,
+        promiseChildAfter: undefined,
+        observableChildAfter: undefined,
+      })
     })
   })
 
-  it("shouldn't execute actions when reading a snapshot of not started actor", () => {
-    const spy = vi.fn()
+  it("shouldn't execute actions when reading a snapshot of not started actor", function*({ expect }) {
+    const executed: string[] = []
     const actorRef = createActor(
       createMachine({
-        entry: (_, enq) => enq(spy),
+        entry: (_, enq) =>
+          enq(() => {
+            executed.push('entry')
+          }),
       }),
     )
 
     actorRef.getSnapshot()
 
-    expect(spy).not.toHaveBeenCalled()
+    yield* expect(executed).toEqual([])
   })
 
-  it(`should execute entry actions when starting the actor after reading its snapshot first`, () => {
-    const spy = vi.fn()
+  it(`should execute entry actions when starting the actor after reading its snapshot first`, function*({ expect }) {
+    const executed: string[] = []
 
     const actorRef = createActor(
       createMachine({
-        entry: (_, enq) => enq(spy),
+        entry: (_, enq) =>
+          enq(() => {
+            executed.push('entry')
+          }),
       }),
     )
 
     actorRef.getSnapshot()
-    expect(spy).not.toHaveBeenCalled()
+    const executedAfterRead = [...executed]
 
     actorRef.start()
 
-    expect(spy).toHaveBeenCalled()
+    yield* expect({
+      executedAfterRead,
+      executedAfterStart: [...executed],
+    }).toEqual({ executedAfterRead: [], executedAfterStart: ['entry'] })
   })
 
-  it('the first state of an actor should be its initial state', () => {
+  it('the first state of an actor should be its initial state', function*({ expect }) {
     const machine = createMachine({})
     const actor = createActor(machine)
     const initialState = actor.getSnapshot()
 
     actor.start()
 
-    expect(actor.getSnapshot()).toBe(initialState)
+    yield* expect({ sameState: actor.getSnapshot() === initialState }).toEqual({
+      sameState: true,
+    })
   })
 
-  it('should call an onDone callback immediately if the service is already done', () => {
+  it('should call an onDone callback immediately if the service is already done', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     const machine = createMachine({
       initial: 'a',
@@ -2062,105 +2273,135 @@ describe('interpreter', () => {
 
     const service = createActor(machine).start()
 
-    expect(service.getSnapshot().status).toBe('done')
+    const statusAfterStart = service.getSnapshot().status
 
     service.subscribe({
       complete: () => {
         resolve()
       },
     })
-    return promise
+
+    yield* Effect.promise(() => promise)
+
+    yield* expect({ statusAfterStart }).toEqual({ statusAfterStart: 'done' })
   })
 })
 
-it('should throw if an event is received', () => {
+it('should throw if an event is received', function*({ expect }) {
   const machine = createMachine({})
 
   const actor = createActor(machine).start()
 
-  expect(() =>
+  let thrown: unknown
+  try {
     actor.send(
-      // @ts-ignore
+      // @ts-expect-error a string is not a sendable event
       'EVENT',
     )
-  ).toThrow()
+  } catch (error) {
+    thrown = error
+  }
+
+  yield* expect(
+    thrown instanceof Error
+      ? { name: thrown.name, message: thrown.message }
+      : thrown,
+  ).toEqual({
+    name: 'Error',
+    message: 'Only event objects may be sent to actors; use .send({ type: "EVENT" }) instead',
+  })
 })
 
-it('should not process events sent directly to own actor ref before initial entry actions are processed', () => {
-  const actual: string[] = []
-  const machine = createMachine({
-    entry: (_, enq) => {
-      enq(() => actual.push('initial root entry start'))
-      // enq(() =>
-      //   actorRef.send({
-      //     type: 'EV'
-      //   })
-      // );
-      enq.raise({ type: 'EV' })
+it(
+  'should not process events sent directly to own actor ref before initial entry actions are processed',
+  function*({ expect }) {
+    const actual: string[] = []
+    const machine = createMachine({
+      entry: (_, enq) => {
+        enq(() => actual.push('initial root entry start'))
+        // enq(() =>
+        //   actorRef.send({
+        //     type: 'EV'
+        //   })
+        // );
+        enq.raise({ type: 'EV' })
 
-      enq(() => actual.push('initial root entry end'))
-    },
-    on: {
-      // EV: {
-      //   actions: () => {
-      //     actual.push('EV transition');
-      //   }
-      // }
-      EV: (_, enq) => {
-        enq(() => actual.push('EV transition'))
+        enq(() => actual.push('initial root entry end'))
       },
-    },
-    initial: 'a',
-    states: {
-      a: {
-        entry: (_, enq) => {
-          enq(() => actual.push('initial nested entry'))
+      on: {
+        // EV: {
+        //   actions: () => {
+        //     actual.push('EV transition');
+        //   }
+        // }
+        EV: (_, enq) => {
+          enq(() => actual.push('EV transition'))
         },
       },
-    },
-  })
+      initial: 'a',
+      states: {
+        a: {
+          entry: (_, enq) => {
+            enq(() => actual.push('initial nested entry'))
+          },
+        },
+      },
+    })
 
-  const actorRef = createActor(machine)
-  actorRef.start()
+    const actorRef = createActor(machine)
+    actorRef.start()
 
-  expect(actual).toEqual([
-    'initial root entry start',
-    'initial root entry end',
-    'initial nested entry',
-    'EV transition',
-  ])
-})
+    yield* expect(actual).toEqual([
+      'initial root entry start',
+      'initial root entry end',
+      'initial nested entry',
+      'EV transition',
+    ])
+  },
+)
 
-it('should not notify the completion observer for an active logic when it gets subscribed before starting', () => {
-  const spy = vi.fn()
+it(
+  'should not notify the completion observer for an active logic when it gets subscribed before starting',
+  function*({ expect }) {
+    const completions: string[] = []
 
-  const machine = createMachine({})
-  createActor(machine).subscribe({ complete: spy })
+    const machine = createMachine({})
+    createActor(machine).subscribe({
+      complete: () => {
+        completions.push('complete')
+      },
+    })
 
-  expect(spy).not.toHaveBeenCalled()
-})
+    yield* expect(completions).toEqual([])
+  },
+)
 
-it('should notify the error observer for an errored logic when it gets subscribed after it errors', () => {
-  const spy = vi.fn()
+it(
+  'should notify the error observer for an errored logic when it gets subscribed after it errors',
+  function*({ expect }) {
+    const errors: unknown[] = []
 
-  const machine = createMachine({
-    entry: () => {
-      throw new Error('error')
-    },
-  })
-  const actorRef = createActor(machine)
-  actorRef.subscribe({ error: () => {} })
-  actorRef.start()
+    const machine = createMachine({
+      entry: () => {
+        throw new Error('error')
+      },
+    })
+    const actorRef = createActor(machine)
+    actorRef.subscribe({ error: () => {} })
+    actorRef.start()
 
-  actorRef.subscribe({
-    error: spy,
-  })
+    actorRef.subscribe({
+      error: (error) => {
+        errors.push(error)
+      },
+    })
 
-  expect(spy.mock.calls).toMatchInlineSnapshot(`
-    [
-      [
-        [Error: error],
-      ],
-    ]
-  `)
-})
+    yield* expect(
+      errors.map((error) =>
+        error instanceof Error
+          ? { name: error.name, message: error.message }
+          : error
+      ),
+    ).toEqual([{ name: 'Error', message: 'error' }])
+  },
+)

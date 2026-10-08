@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createAsyncLogic, createMachine, initialTransition, transition } from '../src/index.js'
 
 /**
@@ -11,29 +11,29 @@ import { createAsyncLogic, createMachine, initialTransition, transition } from '
  * same system, causing "Actor with registry key '...' already exists".
  */
 describe('initialTransition / transition with invoke registryKey (issue #5454)', () => {
-  it('does not throw when the initial state has an invoke with registryKey', () => {
+  it('does not throw when the initial state has an invoke with registryKey', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
         idle: {
           invoke: {
-            src: createAsyncLogic({ run: async () => 42 }),
+            src: createAsyncLogic({ run: () => Promise.resolve(42) }),
             registryKey: 'myActor',
           },
         },
       },
     })
 
-    expect(() => initialTransition(machine)).not.toThrow()
+    yield* expect(initialTransition(machine)[0].value).toBe('idle')
   })
 
-  it('returns the correct initial snapshot when invoke has registryKey', () => {
+  it('returns the correct initial snapshot when invoke has registryKey', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
         idle: {
           invoke: {
-            src: createAsyncLogic({ run: async () => 42 }),
+            src: createAsyncLogic({ run: () => Promise.resolve(42) }),
             registryKey: 'myActor',
           },
         },
@@ -41,31 +41,31 @@ describe('initialTransition / transition with invoke registryKey (issue #5454)',
     })
 
     const [snapshot, actions] = initialTransition(machine)
-    expect(snapshot.value).toBe('idle')
-    expect(actions).toHaveLength(2) // spawn + deferred start for the invoke
+    yield* expect({ value: snapshot.value, actionCount: actions.length }).toEqual({
+      value: 'idle',
+      actionCount: 2,
+    })
   })
 
-  it('is idempotent: repeated calls do not throw', () => {
+  it('is idempotent: repeated calls do not throw', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
         idle: {
           invoke: {
-            src: createAsyncLogic({ run: async () => 42 }),
+            src: createAsyncLogic({ run: () => Promise.resolve(42) }),
             registryKey: 'myActor',
           },
         },
       },
     })
 
-    expect(() => {
-      initialTransition(machine)
-      initialTransition(machine)
-      initialTransition(machine)
-    }).not.toThrow()
+    initialTransition(machine)
+    initialTransition(machine)
+    yield* expect(initialTransition(machine)[0].value).toBe('idle')
   })
 
-  it('transition() does not throw when the target state has an invoke with registryKey', () => {
+  it('transition() does not throw when the target state has an invoke with registryKey', function*({ expect }) {
     const countMachine = createMachine({})
 
     const machine = createMachine({
@@ -84,22 +84,23 @@ describe('initialTransition / transition with invoke registryKey (issue #5454)',
     })
 
     const [initial] = initialTransition(machine)
+    const [next] = transition(machine, initial, { type: 'START' })
 
-    expect(() => transition(machine, initial, { type: 'START' })).not.toThrow()
+    yield* expect(next.value).toBe('running')
   })
 
-  it('works with multiple invokes each having a distinct registryKey', () => {
+  it('works with multiple invokes each having a distinct registryKey', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
         idle: {
           invoke: [
             {
-              src: createAsyncLogic({ run: async () => 1 }),
+              src: createAsyncLogic({ run: () => Promise.resolve(1) }),
               registryKey: 'actorOne',
             },
             {
-              src: createAsyncLogic({ run: async () => 2 }),
+              src: createAsyncLogic({ run: () => Promise.resolve(2) }),
               registryKey: 'actorTwo',
             },
           ],
@@ -107,8 +108,11 @@ describe('initialTransition / transition with invoke registryKey (issue #5454)',
       },
     })
 
-    expect(() => initialTransition(machine)).not.toThrow()
+    const [firstSnapshot] = initialTransition(machine)
     const [snapshot] = initialTransition(machine)
-    expect(snapshot.value).toBe('idle')
+    yield* expect({ firstValue: firstSnapshot.value, value: snapshot.value }).toEqual({
+      firstValue: 'idle',
+      value: 'idle',
+    })
   })
 })

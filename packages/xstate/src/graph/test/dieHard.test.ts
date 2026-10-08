@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createMachine } from '../../index.js'
 import { getPathsFromEvents, getShortestPaths, getSimplePaths } from '../index.js'
@@ -35,7 +35,6 @@ describe('die hard example', () => {
       this.five = this.five - poured
     }
   }
-  let jugs: Jugs
 
   const dieHardMachine = createMachine({
     schemas: {
@@ -109,47 +108,68 @@ describe('die hard example', () => {
     },
   })
 
-  const actions: Record<string, () => void> = {
+  const newJugs = (): Jugs => {
+    const jugs = new Jugs()
+    jugs.version = Math.random()
+    return jugs
+  }
+
+  const actionsFor = (jugs: Jugs): Record<string, () => void> => ({
     POUR_3_TO_5: () => jugs.transferThree(),
     POUR_5_TO_3: () => jugs.transferFive(),
     EMPTY_3: () => jugs.emptyThree(),
     EMPTY_5: () => jugs.emptyFive(),
     FILL_3: () => jugs.fillThree(),
     FILL_5: () => jugs.fillFive(),
-  }
+  })
 
-  /** Replays a path against the jugs and checks them after every step. */
-  function replay(path: StatePath<any, any>) {
+  function replay(jugs: Jugs, path: StatePath<any, any>) {
+    const actions = actionsFor(jugs)
+    const observed: Array<[number, number]> = []
+    const predicted: Array<[number, number]> = []
+
     for (const step of path.steps) {
       actions[step.event.type]?.()
-      expect(jugs.three).toEqual(step.state.context.three)
-      expect(jugs.five).toEqual(step.state.context.five)
+      observed.push([jugs.three, jugs.five])
+      predicted.push([step.state.context.three, step.state.context.five])
     }
-    expect(path.state.matches('success')).toBe(true)
-    expect(jugs.five).toEqual(4)
+
+    return {
+      observed,
+      predicted,
+      matchesSuccess: path.state.matches('success'),
+      five: jugs.five,
+    }
   }
 
   function describePath(path: StatePath<any, any>): string {
     return path.steps.map((step) => step.event.type).join(' → ')
   }
 
-  beforeEach(() => {
-    jugs = new Jugs()
-    jugs.version = Math.random()
-  })
-
   describe('shortest paths to success', () => {
     const paths = getShortestPaths(dieHardMachine, {
       toState: (state) => state.matches('success'),
     })
 
-    it('should generate the right number of paths', () => {
-      expect(paths.length).toEqual(2)
+    it('should generate the right number of paths', function*({ expect }) {
+      yield* expect(paths.length).toEqual(2)
     })
 
     paths.forEach((path) => {
-      it(`replays ${describePath(path)}`, () => {
-        replay(path)
+      it(`replays ${describePath(path)}`, function*({ expect }) {
+        const { observed, predicted, matchesSuccess, five } = replay(newJugs(), path)
+
+        yield* expect({
+          threeByStep: observed.map(([three]) => three),
+          fiveByStep: observed.map(([, amount]) => amount),
+          matchesSuccess,
+          five,
+        }).toEqual({
+          threeByStep: predicted.map(([three]) => three),
+          fiveByStep: predicted.map(([, amount]) => amount),
+          matchesSuccess: true,
+          five: 4,
+        })
       })
     })
   })
@@ -159,13 +179,25 @@ describe('die hard example', () => {
       toState: (state) => state.matches('success'),
     })
 
-    it('should generate the right number of paths', () => {
-      expect(paths.length).toEqual(14)
+    it('should generate the right number of paths', function*({ expect }) {
+      yield* expect(paths.length).toEqual(14)
     })
 
     paths.forEach((path) => {
-      it(`replays ${describePath(path)}`, () => {
-        replay(path)
+      it(`replays ${describePath(path)}`, function*({ expect }) {
+        const { observed, predicted, matchesSuccess, five } = replay(newJugs(), path)
+
+        yield* expect({
+          threeByStep: observed.map(([three]) => three),
+          fiveByStep: observed.map(([, amount]) => amount),
+          matchesSuccess,
+          five,
+        }).toEqual({
+          threeByStep: predicted.map(([three]) => three),
+          fiveByStep: predicted.map(([, amount]) => amount),
+          matchesSuccess: true,
+          five: 4,
+        })
       })
     })
   })
@@ -184,19 +216,32 @@ describe('die hard example', () => {
       { toState: (state) => state.matches('success') },
     )
 
-    it('replays the path', () => {
+    it('replays the path', function*({ expect }) {
       if (path === undefined) {
         throw new Error('expected a path')
       }
-      replay(path)
+
+      const { observed, predicted, matchesSuccess, five } = replay(newJugs(), path)
+
+      yield* expect({
+        threeByStep: observed.map(([three]) => three),
+        fiveByStep: observed.map(([, amount]) => amount),
+        matchesSuccess,
+        five,
+      }).toEqual({
+        threeByStep: predicted.map(([three]) => three),
+        fiveByStep: predicted.map(([, amount]) => amount),
+        matchesSuccess: true,
+        five: 4,
+      })
     })
 
-    it('should return no paths if the target does not match the last entered state', () => {
+    it('should return no paths if the target does not match the last entered state', function*({ expect }) {
       const paths = getPathsFromEvents(dieHardMachine, [{ type: 'FILL_5' }], {
         toState: (state) => state.matches('success'),
       })
 
-      expect(paths).toHaveLength(0)
+      yield* expect(paths).toEqual([])
     })
   })
 
@@ -205,13 +250,25 @@ describe('die hard example', () => {
       toState: (state) => state.matches('success') && state.context.three === 0,
     })
 
-    it('should generate the right number of paths', () => {
-      expect(paths.length).toEqual(6)
+    it('should generate the right number of paths', function*({ expect }) {
+      yield* expect(paths.length).toEqual(6)
     })
 
     paths.forEach((path) => {
-      it(`replays ${describePath(path)}`, () => {
-        replay(path)
+      it(`replays ${describePath(path)}`, function*({ expect }) {
+        const { observed, predicted, matchesSuccess, five } = replay(newJugs(), path)
+
+        yield* expect({
+          threeByStep: observed.map(([three]) => three),
+          fiveByStep: observed.map(([, amount]) => amount),
+          matchesSuccess,
+          five,
+        }).toEqual({
+          threeByStep: predicted.map(([three]) => three),
+          fiveByStep: predicted.map(([, amount]) => amount),
+          matchesSuccess: true,
+          five: 4,
+        })
       })
     })
   })

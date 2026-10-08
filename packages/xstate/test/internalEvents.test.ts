@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import z from 'zod'
 import {
   type ActorRefFrom,
@@ -11,7 +12,7 @@ import {
 } from '../src/index.js'
 
 describe('internalEvents', () => {
-  it('keeps setup-level internal events out of the public protocol', () => {
+  it('keeps setup-level internal events out of the public protocol', function*({ expect }) {
     const machine = setup({
       schemas: {
         events: { GO: types<{}>() },
@@ -24,7 +25,7 @@ describe('internalEvents', () => {
     const actor = createActor(machine)
     type Sendable = SendableEventFromLogic<typeof machine>
     const publicEvent: Sendable = { type: 'GO' }
-    expect(publicEvent.type).toBe('GO')
+    yield* expect(publicEvent.type).toBe('GO')
     if (false) {
       // @ts-expect-error Internal events are not public.
       const internalEvent: Sendable = { type: 'TICK' }
@@ -35,7 +36,7 @@ describe('internalEvents', () => {
     }
   })
 
-  it('keeps registered child internal events private for both spawn forms', () => {
+  it('keeps registered child internal events private for both spawn forms', function*({ expect }) {
     const child = setup({
       schemas: {
         events: { GO: types<{}>() },
@@ -65,10 +66,10 @@ describe('internalEvents', () => {
         },
       },
     })
-    expect(parent).toBeDefined()
+    yield* expect(parent).toMatchObject({ id: '(machine)' })
   })
 
-  it('supports separately declared internal event schemas', async () => {
+  it('supports separately declared internal event schemas', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -101,31 +102,40 @@ describe('internalEvents', () => {
     }).start()
     actor.send({ type: 'start' })
 
-    expect(actor.getSnapshot().value).toBe('done')
-    expect(
-      await machine.eventSchema['~standard'].validate({
-        type: 'change.value',
-        value: 'ready',
-      }),
-    ).toEqual({
-      value: { type: 'change.value', value: 'ready' },
-    })
-    // the boundary check runs before any host runtime takes ownership of
-    // delivery: the internal event is dead-lettered, not handed to the host
-    actor.system.runtime = { sendEvent: () => {} }
-    actor.send({ type: 'tick', count: 2 } as any)
-    expect(deadLetters).toHaveLength(1)
-    const deadLetter = deadLetters[0]
-    if (deadLetter === undefined) {
-      throw new Error('expected a dead-lettered event')
-    }
-    expect(deadLetter.reason).toBe('internalEvent')
-    expect(deadLetter.error?.message).toMatch(
-      'Internal event "tick" cannot be sent to actor',
+    const valueAfterStart = actor.getSnapshot().value
+    const validated = yield* Effect.promise(() =>
+      Promise.resolve(
+        machine.eventSchema['~standard'].validate({
+          type: 'change.value',
+          value: 'ready',
+        }),
+      )
     )
+    actor.system.runtime = { sendEvent: () => {} }
+    actor.send(
+      { type: 'tick', count: 2 } as unknown as SendableEventFromLogic<
+        typeof machine
+      >,
+    )
+    const deadLetter = deadLetters[0]
+    yield* expect({
+      valueAfterStart,
+      validated,
+      deadLetterCount: deadLetters.length,
+      reason: deadLetter?.reason,
+      message: deadLetter?.error?.message,
+    }).toEqual({
+      valueAfterStart: 'done',
+      validated: {
+        value: { type: 'change.value', value: 'ready' },
+      },
+      deadLetterCount: 1,
+      reason: 'internalEvent',
+      message: 'Internal event "tick" cannot be sent to actor "x:0" from outside.',
+    })
   })
 
-  it('allows raising internal events', () => {
+  it('allows raising internal events', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -152,10 +162,10 @@ describe('internalEvents', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'foo' })
 
-    expect(actor.getSnapshot().value).toBe('done')
+    yield* expect(actor.getSnapshot().value).toBe('done')
   })
 
-  it('rejects sending internal events from outside', () => {
+  it('rejects sending internal events from outside', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -182,36 +192,52 @@ describe('internalEvents', () => {
       onRejectedEvent: (rejection) => rejections.push(rejection),
     }).start()
 
-    actor.send({ type: 'tick' } as any)
+    actor.send({ type: 'tick' } as unknown as SendableEventFromLogic<typeof machine>)
 
-    expect(actor.getSnapshot().value).toBe('idle')
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(rejections).toHaveLength(1)
-    expect(rejections[0]).toMatchObject({
+    const rejection = rejections[0]
+    yield* expect({
+      value: actor.getSnapshot().value,
+      status: actor.getSnapshot().status,
+      rejectionCount: rejections.length,
+      event: rejection?.event,
+      targetId: rejection?.targetId,
+      eventOrigin: rejection?.eventOrigin,
+      reason: rejection?.reason,
+      message: rejection?.error?.message,
+    }).toEqual({
+      value: 'idle',
+      status: 'active',
+      rejectionCount: 1,
       event: { type: 'tick' },
       targetId: actor.id,
       eventOrigin: 'external',
       reason: 'internalEvent',
+      message: 'Internal event "tick" cannot be sent to actor "x:0" from outside.',
     })
-    const rejection = rejections[0]
-    if (rejection === undefined) {
-      throw new Error('expected a rejected event')
-    }
-    expect(rejection.error?.message).toMatch(
-      'Internal event "tick" cannot be sent to actor',
-    )
   })
 
-  it('throws in development for the removed top-level internalEvents key', () => {
-    expect(() =>
+  it('throws in development for the removed top-level internalEvents key', function*({ expect }) {
+    let thrown: unknown
+    try {
       createMachine({
         // @ts-expect-error removed; use `schemas.internalEvents`
         internalEvents: ['tick'],
       })
-    ).toThrow('schemas.internalEvents')
+    } catch (error) {
+      thrown = error
+    }
+    yield* expect(
+      thrown instanceof Error
+        ? { name: thrown.name, message: thrown.message }
+        : thrown,
+    ).toEqual({
+      name: 'Error',
+      message:
+        'The top-level "internalEvents" list was removed. Declare private events under `schemas.internalEvents` instead, e.g. `schemas: { internalEvents: { tick: types<{}>() } }`.',
+    })
   })
 
-  it('rejects sending wildcard-matched internal events from outside', () => {
+  it('rejects sending wildcard-matched internal events from outside', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         internalEvents: {
@@ -239,22 +265,22 @@ describe('internalEvents', () => {
       { type: 'change.value', value: 'x' },
     )
 
-    expect(actor.getSnapshot().value).toBe('idle')
-    expect(rejections).toHaveLength(1)
     const rejection = rejections[0]
-    if (rejection === undefined) {
-      throw new Error('expected a rejected event')
-    }
-    expect(rejection.reason).toBe('internalEvent')
-    expect(rejection.error?.message).toMatch(
-      'Internal event "change.value" cannot be sent to actor',
-    )
+    yield* expect({
+      value: actor.getSnapshot().value,
+      rejectionCount: rejections.length,
+      reason: rejection?.reason,
+      message: rejection?.error?.message,
+    }).toEqual({
+      value: 'idle',
+      rejectionCount: 1,
+      reason: 'internalEvent',
+      message: 'Internal event "change.value" cannot be sent to actor "x:0" from outside.',
+    })
   })
 })
 
-it('an untyped machine keeps its sendable events (type-level)', () => {
-  // Broad TConfig collapses internal-event descriptors to `string`; that
-  // must classify nothing rather than everything (send would become never).
+it('an untyped machine keeps its sendable events (type-level)', function*({ expect }) {
   const machine = createMachine({
     initial: 'a',
     states: { a: { on: { NEXT: { target: 'a' } } } },
@@ -263,5 +289,7 @@ it('an untyped machine keeps its sendable events (type-level)', () => {
   actor.send({ type: 'NEXT' })
   const ref: ActorRefFrom<typeof machine> = actor
   ref.send({ type: 'NEXT' })
+  const value = actor.getSnapshot().value
   actor.stop()
+  yield* expect(value).toEqual('a')
 })

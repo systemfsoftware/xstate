@@ -1,6 +1,6 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { createAsyncLogic, createMachine, types } from '@systemfsoftware/xstate'
-import * as Effect from 'effect/Effect'
-import { describe, expect, it } from 'vitest'
+import { Effect } from 'effect'
 import * as graph from '../../src/engine/index.js'
 import {
   formatTestCoverage,
@@ -9,7 +9,6 @@ import {
   replayTest,
   type TestFixture,
   testPaths,
-  type TestTrace,
 } from '../../src/engine/index.js'
 import { constant, randomAdapter } from './propertyTestAdapter.js'
 
@@ -29,17 +28,23 @@ const lightMachine = createMachine({
   },
 })
 
-async function captureFailure(run: () => Promise<unknown>) {
-  try {
-    await run()
-  } catch (error) {
-    if (error instanceof ModelTestFailure) {
-      return error
-    }
-    throw error
-  }
-  throw new Error('expected a ModelTestFailure')
-}
+const captureFailure = (run: () => Promise<unknown>): Effect.Effect<ModelTestFailure> =>
+  Effect.promise(() =>
+    run().then(
+      () => {
+        throw new Error('expected a ModelTestFailure')
+      },
+      (error: unknown) => {
+        if (error instanceof ModelTestFailure) {
+          return error
+        }
+        throw error
+      },
+    )
+  )
+
+const rejection = <A>(run: () => Promise<A>): Effect.Effect<unknown> =>
+  Effect.promise(() => run().then(() => undefined, (cause: unknown) => cause))
 
 describe('`states` keys with a plain machine', () => {
   const recordStates = () => {
@@ -55,51 +60,71 @@ describe('`states` keys with a plain machine', () => {
     return { seen, states }
   }
 
-  it('runs value, nested value, and `#id` keys in propertyTest()', async () => {
+  it('runs value, nested value, and `#id` keys in propertyTest()', function*({ expect }) {
     const { seen, states } = recordStates()
-    await propertyTest(lightMachine, {
-      adapter: randomAdapter({ seed: 1, numRuns: 10, maxCommands: 4 }),
-      events: { NEXT: constant({}) },
-      states,
-    })
+    yield* Effect.promise(() =>
+      propertyTest(lightMachine, {
+        adapter: randomAdapter({ seed: 1, numRuns: 10, maxCommands: 4 }),
+        events: { NEXT: constant({}) },
+        states,
+      })
+    )
 
-    expect([...seen].sort()).toEqual(
+    yield* expect([...seen].sort()).toEqual(
       ['#stopSign', '*', 'green', 'red', 'red.walk'].sort(),
     )
   })
 
-  it('runs them in testPaths(), top-level and on the session', async () => {
+  it('runs them in testPaths(), top-level and on the session', function*({ expect }) {
     const topLevel = recordStates()
-    await testPaths(lightMachine, { states: topLevel.states })
-    expect(topLevel.seen.has('red.walk')).toBe(true)
-    expect(topLevel.seen.has('#stopSign')).toBe(true)
-
+    yield* Effect.promise(() => testPaths(lightMachine, { states: topLevel.states }))
     const session = recordStates()
-    await testPaths(lightMachine, {
-      sut: { create: () => ({ send: () => {}, states: session.states }) },
+    yield* Effect.promise(() =>
+      testPaths(lightMachine, {
+        sut: { create: () => ({ send: () => {}, states: session.states }) },
+      })
+    )
+
+    yield* expect({
+      topLevelWalk: topLevel.seen.has('red.walk'),
+      topLevelStopSign: topLevel.seen.has('#stopSign'),
+      sessionGreen: session.seen.has('green'),
+      sessionStopSign: session.seen.has('#stopSign'),
+    }).toEqual({
+      topLevelWalk: true,
+      topLevelStopSign: true,
+      sessionGreen: true,
+      sessionStopSign: true,
     })
-    expect(session.seen.has('green')).toBe(true)
-    expect(session.seen.has('#stopSign')).toBe(true)
   })
 
-  it('runs them in replayTest()', async () => {
-    const failure = await captureFailure(() =>
+  it('runs them in replayTest()', function*({ expect }) {
+    let invariantSawRedStop = false
+    const failure = yield* captureFailure(() =>
       propertyTest(lightMachine, {
         adapter: randomAdapter({ seed: 3, numRuns: 20, maxCommands: 5 }),
         events: { NEXT: constant({}) },
         invariant: ({ snapshot }) => {
-          expect(snapshot.matches('red.stop')).toBe(false)
+          if (snapshot.matches('red.stop')) {
+            invariantSawRedStop = true
+            throw new Error('reached red.stop')
+          }
         },
       })
     )
     const { seen, states } = recordStates()
-    await replayTest(lightMachine, failure.fixture!, {
-      states,
-      expect: 'pass',
-    })
+    yield* Effect.promise(() =>
+      replayTest(lightMachine, failure.fixture!, {
+        states,
+        expect: 'pass',
+      })
+    )
 
-    expect(seen.has('red.walk')).toBe(true)
-    expect(seen.has('#stopSign')).toBe(true)
+    yield* expect({
+      invariantSawRedStop,
+      redWalk: seen.has('red.walk'),
+      stopSign: seen.has('#stopSign'),
+    }).toEqual({ invariantSawRedStop: true, redWalk: true, stopSign: true })
   })
 })
 
@@ -114,20 +139,36 @@ describe('testPaths() follows the planned path', () => {
     },
   })
 
-  it('offers only the timer that is due first', async () => {
+  it('offers only the timer that is due first', function*({ expect }) {
+    const observed: unknown[] = []
     for (const mode of ['pure', 'executed'] as const) {
-      const { coverage, results } = await testPaths(raceMachine, { mode })
-
-      expect(results.every(({ passed }) => passed)).toBe(true)
-      expect(results.map(({ path }) => path.state.value)).not.toContain('y')
-      expect(coverage.transitions.uncovered).toEqual([
-        '["transition","race.s","xstate.after",1]',
-      ])
+      const { coverage, results } = yield* Effect.promise(() => testPaths(raceMachine, { mode }))
+      observed.push({
+        mode,
+        allPassed: results.every(({ passed }) => passed),
+        containsY: results.map(({ path }) => path.state.value).includes('y'),
+        uncovered: coverage.transitions.uncovered,
+      })
     }
+
+    yield* expect(observed).toEqual([
+      {
+        mode: 'pure',
+        allPassed: true,
+        containsY: false,
+        uncovered: ['["transition","race.s","xstate.after",1]'],
+      },
+      {
+        mode: 'executed',
+        allPassed: true,
+        containsY: false,
+        uncovered: ['["transition","race.s","xstate.after",1]'],
+      },
+    ])
   })
 
-  it('fails a path the run departs from', async () => {
-    const failure = await captureFailure(() =>
+  it('fails a path the run departs from', function*({ expect }) {
+    const failure = yield* captureFailure(() =>
       testPaths(raceMachine, {
         mode: 'executed',
         fromEvents: [
@@ -136,15 +177,14 @@ describe('testPaths() follows the planned path', () => {
       })
     )
 
-    expect(failure.summary).toBe(
+    yield* expect(failure.summary).toBe(
       'Path 1 (xstate.after) failed: path diverged at step 1: expected {"value":"y","context":{}}, got {"value":"x","context":{}}',
     )
   })
 
-  it('fails instead of skipping an event that is no longer applicable', async () => {
-    const failure = await captureFailure(() =>
+  it('fails instead of skipping an event that is no longer applicable', function*({ expect }) {
+    const failure = yield* captureFailure(() =>
       testPaths(lightMachine, {
-        // The path below was planned without this `when`; the run applies it.
         events: { NEXT: { generate: () => ({}), when: () => false } },
         paths: [
           {
@@ -165,12 +205,12 @@ describe('testPaths() follows the planned path', () => {
       })
     )
 
-    expect(failure.summary).toMatch(
+    yield* expect(failure.summary).toMatch(
       /^Path 1 \(NEXT\) failed: path diverged at step 1: NEXT could not be sent/,
     )
   })
 
-  it('counts time spent in enclosing states towards nested timers', async () => {
+  it('counts time spent in enclosing states towards nested timers', function*({ expect }) {
     const nestedMachine = createMachine({
       id: 'nested',
       initial: 'p',
@@ -188,25 +228,28 @@ describe('testPaths() follows the planned path', () => {
       },
     })
     const advances: number[][] = []
-    const { coverage, results } = await testPaths(nestedMachine, {
-      mode: 'executed',
-      collect: (trace) => {
-        advances.push(
-          trace.commands.flatMap((command) => command.type === 'advance' ? [command.milliseconds] : []),
-        )
-      },
-    })
+    const { coverage, results } = yield* Effect.promise(() =>
+      testPaths(nestedMachine, {
+        mode: 'executed',
+        collect: (trace) => {
+          advances.push(
+            trace.commands.flatMap((command) => command.type === 'advance' ? [command.milliseconds] : []),
+          )
+        },
+      })
+    )
 
-    expect(results.every(({ passed }) => passed)).toBe(true)
-    // `p.b` is entered at t=100, so `p`'s 200ms timer is due 100ms later,
-    // before `b`'s 150ms one: `c` is never reached.
-    expect(results.map(({ path }) => path.state.value)).not.toContainEqual({
-      p: 'c',
+    yield* expect({
+      allPassed: results.every(({ passed }) => passed),
+      pathValues: results.map(({ path }) => path.state.value),
+      advanceSteps: advances,
+      uncovered: coverage.transitions.uncovered,
+    }).toEqual({
+      allPassed: true,
+      pathValues: expect.not.arrayContaining([{ p: 'c' }]),
+      advanceSteps: expect.arrayContaining([[100, 100]]),
+      uncovered: ['["transition","nested.p.b","xstate.after",0]'],
     })
-    expect(advances).toContainEqual([100, 100])
-    expect(coverage.transitions.uncovered).toEqual([
-      '["transition","nested.p.b","xstate.after",0]',
-    ])
   })
 })
 
@@ -231,23 +274,27 @@ describe('testPaths() with invoke sources', () => {
       },
     })
 
-  it('needs no implementation for a source named in `outcomes`', async () => {
+  it('needs no implementation for a source named in `outcomes`', function*({ expect }) {
     const outcomes = {
       fetcher: () => ({ ok: true as const, output: 1 }),
     }
+    const passed: boolean[] = []
     for (const mode of ['pure', 'executed'] as const) {
-      const { results } = await testPaths(fetchMachine(), {
-        mode,
-        events: { FETCH: () => ({}) },
-        outcomes,
-      })
-      expect(results.every(({ passed }) => passed)).toBe(true)
+      const { results } = yield* Effect.promise(() =>
+        testPaths(fetchMachine(), {
+          mode,
+          events: { FETCH: () => ({}) },
+          outcomes,
+        })
+      )
+      passed.push(results.every(({ passed }) => passed))
     }
+
+    yield* expect(passed).toEqual([true, true])
   })
 
-  it('records stubbed sources in the fixture, resolved or not', async () => {
-    // The real service resolves at once; the stubbed run stays in `loading`.
-    const machine = fetchMachine(createAsyncLogic({ run: async () => 'real' }))
+  it('records stubbed sources in the fixture, resolved or not', function*({ expect }) {
+    const machine = fetchMachine(createAsyncLogic({ run: () => Promise.resolve('real') }))
     const createSut = () => {
       let sent = false
       return {
@@ -260,28 +307,33 @@ describe('testPaths() with invoke sources', () => {
         projectModel: (snapshot: { value: unknown }) => snapshot.value,
       }
     }
-    const failure = await captureFailure(() =>
+    const failure = yield* captureFailure(() =>
       testPaths(machine, {
         mode: 'executed',
         events: { FETCH: () => ({}) },
         sut: createSut(),
       })
     )
-
-    expect(failure.fixture?.stubs).toEqual(['fetcher'])
     const fixture = JSON.parse(JSON.stringify(failure.fixture)) as TestFixture
-    await expect(
-      replayTest(machine, fixture, { sut: createSut() }),
-    ).rejects.toBeInstanceOf(ModelTestFailure)
+    const replayOutcome = yield* rejection(() => replayTest(machine, fixture, { sut: createSut() }))
+
+    yield* expect({
+      stubs: failure.fixture?.stubs,
+      replayOutcome,
+    }).toEqual({ stubs: ['fetcher'], replayOutcome: expect.any(ModelTestFailure) })
   })
 
-  it('records synthesized errors as portable data', async () => {
-    const failure = await captureFailure(() =>
+  it('records synthesized errors as portable data', function*({ expect }) {
+    let invariantSawFailure = false
+    const failure = yield* captureFailure(() =>
       testPaths(fetchMachine(), {
         events: { FETCH: () => ({}) },
         outcomes: { fetcher: () => ({ ok: true as const, output: 1 }) },
         invariant: ({ snapshot }) => {
-          expect(snapshot.value).not.toBe('failure')
+          if (snapshot.value === 'failure') {
+            invariantSawFailure = true
+            throw new Error('reached failure')
+          }
         },
       })
     )
@@ -291,20 +343,26 @@ describe('testPaths() with invoke sources', () => {
         entry.command.event.type === 'xstate.error.actor',
     )!.command as unknown as { event: { error: unknown } }
 
-    expect(errorEvent.event.error).toEqual({
-      xstate$$error: true,
-      name: 'Error',
-      message: 'generated failure',
+    yield* expect({
+      error: errorEvent.event.error,
+      invariantSawFailure,
+    }).toEqual({
+      error: { xstate$$error: true, name: 'Error', message: 'generated failure' },
+      invariantSawFailure: true,
     })
+
     const fixture = JSON.parse(JSON.stringify(failure.fixture)) as TestFixture
-    const failureAgain = await captureFailure(() =>
-      // Pure mode never runs the service, but the machine must name one.
+    let replayedSawFailure = false
+    const failureAgain = yield* captureFailure(() =>
       replayTest(
-        fetchMachine(createAsyncLogic({ run: async () => 1 })),
+        fetchMachine(createAsyncLogic({ run: () => Promise.resolve(1) })),
         fixture,
         {
           invariant: ({ snapshot }) => {
-            expect(snapshot.value).not.toBe('failure')
+            if (snapshot.value === 'failure') {
+              replayedSawFailure = true
+              throw new Error('reached failure')
+            }
           },
         },
       )
@@ -312,13 +370,17 @@ describe('testPaths() with invoke sources', () => {
     const replayed = failureAgain.trace.steps.at(-1)!.event as unknown as {
       error: unknown
     }
-    expect(replayed.error).toBeInstanceOf(Error)
-    expect((replayed.error as Error).message).toBe('generated failure')
+
+    yield* expect({
+      error: replayed.error,
+      message: replayed.error instanceof Error ? replayed.error.message : undefined,
+      replayedSawFailure,
+    }).toEqual({ error: expect.any(Error), message: 'generated failure', replayedSawFailure: true })
   })
 })
 
 describe('testPaths() traversal bound', () => {
-  it('names `limit` and `serializeState` when the context is unbounded', async () => {
+  it('names `limit` and `serializeState` when the context is unbounded', function*({ expect }) {
     const counterMachine = createMachine({
       schemas: { context: types<{ count: number }>() },
       context: { count: 0 },
@@ -327,16 +389,25 @@ describe('testPaths() traversal bound', () => {
       },
     })
 
-    await expect(testPaths(counterMachine, { limit: 500 })).rejects.toThrow(
-      /exceeded `limit` \(500 traversal steps\).*`serializeState`/,
-    )
-    await expect(testPaths(counterMachine)).rejects.toThrow(
-      /exceeded `limit` \(10000 traversal steps\)/,
-    )
-    const { results } = await testPaths(counterMachine, {
-      stopWhen: (snapshot) => snapshot.context.count >= 3,
+    const limited = yield* rejection(() => testPaths(counterMachine, { limit: 500 }))
+
+    yield* expect({ message: limited instanceof Error ? limited.message : undefined }).toEqual({
+      message: expect.stringMatching(/exceeded `limit` \(500 traversal steps\).*`serializeState`/),
     })
-    expect(results).toHaveLength(1)
+
+    const unbounded = yield* rejection(() => testPaths(counterMachine))
+
+    yield* expect({ message: unbounded instanceof Error ? unbounded.message : undefined }).toEqual({
+      message: expect.stringMatching(/exceeded `limit` \(10000 traversal steps\)/),
+    })
+
+    const { results } = yield* Effect.promise(() =>
+      testPaths(counterMachine, {
+        stopWhen: (snapshot) => snapshot.context.count >= 3,
+      })
+    )
+
+    yield* expect(results.length).toEqual(1)
   })
 })
 
@@ -358,71 +429,96 @@ describe('executed-mode settling', () => {
       },
     })
 
-  const runOnce = async (delay: number) => {
-    const traces: TestTrace<any, any>[] = []
-    const { coverage } = await propertyTest(tickMachine(delay), {
-      adapter: randomAdapter({ seed: 5, numRuns: 1, maxCommands: 1 }),
-      mode: 'executed',
-      events: { START: constant({}) },
-      collect: (trace) => {
-        traces.push(trace)
-      },
-    })
-    const trace = traces[0]
-    if (trace === undefined) {
-      throw new Error('expected a collected trace')
-    }
-    return { coverage, trace }
+  interface TickObservation {
+    readonly finalValue: unknown
+    readonly timelineKinds: readonly unknown[]
+    readonly pendingActors: number | undefined
   }
 
-  it('settles a `setTimeout(0)` service within the step that started it', async () => {
-    const first = await runOnce(0)
-    const second = await runOnce(0)
+  const runOnce = (delay: number) =>
+    Effect.promise(() => {
+      const observations: TickObservation[] = []
+      return propertyTest(tickMachine(delay), {
+        adapter: randomAdapter({ seed: 5, numRuns: 1, maxCommands: 1 }),
+        mode: 'executed',
+        events: { START: constant({}) },
+        collect: (trace) => {
+          const entry = trace.timeline.find((candidate) => candidate.kind === 'event')
+          observations.push({
+            finalValue: trace.finalSnapshot.value,
+            timelineKinds: trace.timeline.map((traceEntry) => traceEntry.kind),
+            pendingActors: entry !== undefined && 'pendingActors' in entry
+              ? entry.pendingActors.length
+              : undefined,
+          })
+        },
+      }).then(({ coverage }) => {
+        const observation = observations[0]
+        if (observation === undefined) {
+          throw new Error('expected a collected trace')
+        }
+        return { coverage, observation }
+      })
+    })
 
-    for (const { coverage, trace } of [first, second]) {
-      expect(trace.finalSnapshot.value).toBe('done')
-      expect(coverage.exploration.pendingActorSteps).toBe(0)
-    }
-    expect(second.trace.timeline.map((entry) => entry.kind)).toEqual(
-      first.trace.timeline.map((entry) => entry.kind),
-    )
+  it('settles a `setTimeout(0)` service within the step that started it', function*({ expect }) {
+    const first = yield* runOnce(0)
+    const second = yield* runOnce(0)
+
+    yield* expect({
+      firstFinal: first.observation.finalValue,
+      firstPendingSteps: first.coverage.exploration.pendingActorSteps,
+      secondFinal: second.observation.finalValue,
+      secondPendingSteps: second.coverage.exploration.pendingActorSteps,
+      firstTimelineKinds: first.observation.timelineKinds,
+    }).toEqual({
+      firstFinal: 'done',
+      firstPendingSteps: 0,
+      secondFinal: 'done',
+      secondPendingSteps: 0,
+      firstTimelineKinds: second.observation.timelineKinds,
+    })
   })
 
-  it('reports a service still in flight when the step settles', async () => {
-    const { coverage, trace } = await runOnce(200)
-    const entry = trace.timeline.find(
-      (candidate) => candidate.kind === 'event',
-    )
+  it('reports a service still in flight when the step settles', function*({ expect }) {
+    const { coverage, observation } = yield* runOnce(200)
 
-    expect(trace.finalSnapshot.value).toBe('running')
-    expect(coverage.exploration.pendingActorSteps).toBe(1)
-    expect(
-      entry !== undefined && 'pendingActors' in entry
-        ? entry.pendingActors
-        : undefined,
-    ).toHaveLength(1)
+    yield* expect({
+      final: observation.finalValue,
+      pendingActorSteps: coverage.exploration.pendingActorSteps,
+      pendingActors: observation.pendingActors,
+    }).toEqual({ final: 'running', pendingActorSteps: 1, pendingActors: 1 })
   })
 })
 
 describe('testPaths() coverage report', () => {
-  it('reports that every path ran, without truncation or placeholders', async () => {
-    const { coverage } = await testPaths(lightMachine)
+  it('reports that every path ran, without truncation or placeholders', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() => testPaths(lightMachine))
     const report = formatTestCoverage(coverage)
 
-    expect(coverage.exploration.stoppedBecause).toBe('paths')
-    expect(coverage.exploration.truncated).toBe(false)
-    expect(report).toContain('stopped because: paths')
-    expect(report).not.toContain('truncated')
-    expect(report).not.toContain('(runtime')
-    expect(report).toContain(
-      'states: 4/4 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-    )
+    yield* expect({
+      stoppedBecause: coverage.exploration.stoppedBecause,
+      truncated: coverage.exploration.truncated,
+      mentionsStoppedBecause: report.includes('stopped because: paths'),
+      mentionsTruncated: report.includes('truncated'),
+      mentionsRuntime: report.includes('(runtime'),
+      mentionsStatesSummary: report.includes(
+        'states: 4/4 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+      ),
+    }).toEqual({
+      stoppedBecause: 'paths',
+      truncated: false,
+      mentionsStoppedBecause: true,
+      mentionsTruncated: false,
+      mentionsRuntime: false,
+      mentionsStatesSummary: true,
+    })
   })
 })
 
 describe('failure messages', () => {
-  it('lead with the path, then the fixture line, then the trace', async () => {
-    const failure = await captureFailure(() =>
+  it('lead with the path, then the fixture line, then the trace', function*({ expect }) {
+    const failure = yield* captureFailure(() =>
       testPaths(lightMachine, {
         states: {
           'red.walk': () => {
@@ -432,17 +528,17 @@ describe('failure messages', () => {
       })
     )
 
-    expect(failure.message).toMatchInlineSnapshot(`
-      "Path 1 (NEXT → NEXT → NEXT) failed: state assertion failed after 2 steps: no walking
-      Fixture: failure.fixture (replayTest)
+    yield* expect(failure.message).toEqual(
+      `Path 1 (NEXT → NEXT → NEXT) failed: state assertion failed after 2 steps: no walking
+Fixture: failure.fixture (replayTest)
 
-      start {"value":"green","context":{}}
-      1. generator NEXT -> {"value":"yellow","context":{}}
-      2. generator NEXT -> {"value":{"red":"walk"},"context":{}}"
-    `)
+start {"value":"green","context":{}}
+1. generator NEXT -> {"value":"yellow","context":{}}
+2. generator NEXT -> {"value":{"red":"walk"},"context":{}}`,
+    )
   })
 
-  it('label timers and outcomes, and honor `formatSnapshot`', async () => {
+  it('label timers and outcomes, and honor `formatSnapshot`', function*({ expect }) {
     const machine = createMachine({
       id: 'order',
       schemas: { events: { PAY: types<{}>() } },
@@ -456,7 +552,7 @@ describe('failure messages', () => {
         archived: {},
       },
     })
-    const failure = await captureFailure(() =>
+    const failure = yield* captureFailure(() =>
       testPaths(machine, {
         mode: 'executed',
         events: { PAY: () => ({}) },
@@ -470,56 +566,60 @@ describe('failure messages', () => {
       })
     )
 
-    expect(failure.message).toMatchInlineSnapshot(`
-      "Path 1 (PAY → xstate.done.actor → xstate.after) failed: state assertion failed after 3 steps: archived too early
-      Fixture: failure.fixture (replayTest)
+    yield* expect(failure.message).toEqual(
+      `Path 1 (PAY → xstate.done.actor → xstate.after) failed: state assertion failed after 3 steps: archived too early
+Fixture: failure.fixture (replayTest)
 
-      start "idle"
-      1. generator PAY -> "paying"
-      2. outcome charge {"ok":true,"output":"ch_1"} -> "paid"
-         ↳ outcome xstate.done.actor {"output":"ch_1","actorId":"0.order.paying"} -> "paid"
-      3. timer advance 1000ms -> "archived"
-         ↳ timer xstate.after.1000.order.paid -> "archived""
-    `)
+start "idle"
+1. generator PAY -> "paying"
+2. outcome charge {"ok":true,"output":"ch_1"} -> "paid"
+   ↳ outcome xstate.done.actor {"output":"ch_1","actorId":"0.order.paying"} -> "paid"
+3. timer advance 1000ms -> "archived"
+   ↳ timer xstate.after.1000.order.paid -> "archived"`,
+    )
   })
 })
 
 describe('engine exports', () => {
-  it('does not export internal helpers', () => {
-    for (
-      const name of [
-        'fnv1a',
-        'createSeededRng',
-        'assertNotTestParam',
-        'PropertyOutcomeRegistry',
-      ]
-    ) {
-      expect(name in graph).toBe(false)
-    }
+  it('does not export internal helpers', function*({ expect }) {
+    const internalHelpers = [
+      'fnv1a',
+      'createSeededRng',
+      'assertNotTestParam',
+      'PropertyOutcomeRegistry',
+    ]
+
+    yield* expect(internalHelpers.map((name) => name in graph)).toEqual([false, false, false, false])
   })
 })
 
 describe('pre-2.0 option shape', () => {
-  it('accepts `(rng) => payload` generators with top-level `states` and no `sut`', async () => {
+  it('accepts `(rng) => payload` generators with top-level `states` and no `sut`', function*({ expect }) {
     const seen: string[] = []
-    await testPaths(lightMachine, {
-      events: { NEXT: () => ({}) },
-      states: {
-        yellow: () => {
-          seen.push('yellow')
+    yield* Effect.promise(() =>
+      testPaths(lightMachine, {
+        events: { NEXT: () => ({}) },
+        states: {
+          yellow: () => {
+            seen.push('yellow')
+          },
         },
-      },
-    })
+      })
+    )
 
-    expect(seen).toContain('yellow')
+    yield* expect(seen).toContain('yellow')
   })
 
-  it('still explains an executor passed as a generator', async () => {
-    await expect(
+  it('still explains an executor passed as a generator', function*({ expect }) {
+    const error = yield* rejection(() =>
       testPaths(lightMachine, {
-        events: { NEXT: (async () => {}) as never },
+        events: { NEXT: (() => {}) as never },
         states: { yellow: () => {} },
-      }),
-    ).rejects.toThrow(/pre-2\.0 event executor/)
+      })
+    )
+
+    yield* expect({ message: error instanceof Error ? error.message : undefined }).toEqual({
+      message: expect.stringMatching(/pre-2\.0 event executor/),
+    })
   })
 })

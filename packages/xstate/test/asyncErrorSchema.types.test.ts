@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createActor, createAsyncLogic, type ErrorFrom, setup, TimeoutError } from '../src/index.js'
 
@@ -9,17 +9,17 @@ const withError = createAsyncLogic({
     output: z.object({ name: z.string() }),
     error: z.object({ code: z.string() }),
   },
-  run: async () => ({ name: 'David' }),
+  run: () => Promise.resolve({ name: 'David' }),
 })
 
 const withoutError = createAsyncLogic({
   schemas: { output: z.object({ name: z.string() }) },
-  run: async () => ({ name: 'David' }),
+  run: () => Promise.resolve({ name: 'David' }),
 })
 
 describe('async logic `schemas.error`', () => {
-  it('types `event.error` in the invoking `onError`', () => {
-    setup({ actors: { withError } }).createMachine({
+  it('types `event.error` in the invoking `onError`', function*({ expect }) {
+    const machine = setup({ actors: { withError } }).createMachine({
       invoke: {
         src: 'withError',
         onError: ({ event }) => {
@@ -38,10 +38,10 @@ describe('async logic `schemas.error`', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('types the error snapshot field', () => {
+  it('types the error snapshot field', function*({ expect }) {
     expectType<{ code: string }>({} as ErrorFrom<typeof withError>)
 
     const snapshot = createActor(withError).getSnapshot()
@@ -55,13 +55,13 @@ describe('async logic `schemas.error`', () => {
       other.error.code
     }
 
-    expect(true).toBe(true)
+    yield* expect(snapshot.status).toBe('active')
   })
 
-  it('accepts error-only and input + error schemas', () => {
+  it('accepts error-only and input + error schemas', function*({ expect }) {
     const errorOnly = createAsyncLogic({
       schemas: { error: z.object({ code: z.string() }) },
-      run: async () => 42,
+      run: () => Promise.resolve(42),
     })
     expectType<{ code: string }>({} as ErrorFrom<typeof errorOnly>)
 
@@ -70,18 +70,18 @@ describe('async logic `schemas.error`', () => {
         input: z.object({ id: z.string() }),
         error: z.object({ code: z.string() }),
       },
-      run: async ({ input }) => input.id,
+      run: ({ input }) => Promise.resolve(input.id),
     })
     expectType<{ code: string }>({} as ErrorFrom<typeof inputAndError>)
 
-    expect(true).toBe(true)
+    yield* expect(createActor(errorOnly).getSnapshot().status).toBe('active')
   })
 
-  it('includes `TimeoutError` when a `timeout` is configured', () => {
+  it('includes `TimeoutError` when a `timeout` is configured', function*({ expect }) {
     const withTimeout = createAsyncLogic({
       schemas: { error: z.object({ code: z.string() }) },
       timeout: '30s',
-      run: async () => 42,
+      run: () => Promise.resolve(42),
     })
     expectType<{ code: string } | TimeoutError>(
       {} as ErrorFrom<typeof withTimeout>,
@@ -93,10 +93,10 @@ describe('async logic `schemas.error`', () => {
         error: z.object({ code: z.string() }),
       },
       timeout: 1000,
-      run: async () => ({ name: 'David' }),
+      run: () => Promise.resolve({ name: 'David' }),
     })
 
-    setup({ actors: { withTimeout, withTimeoutAndOutput } }).createMachine({
+    const machine = setup({ actors: { withTimeout, withTimeoutAndOutput } }).createMachine({
       invoke: [
         {
           src: 'withTimeout',
@@ -121,6 +121,6 @@ describe('async logic `schemas.error`', () => {
       ],
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.id).toEqual('(machine)')
   })
 })

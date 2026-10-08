@@ -1,13 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createMachine } from '../../index.js'
 import { joinPaths } from '../graph.js'
 import { getShortestPaths } from '../shortestPaths.js'
 
-describe('getShortestPaths', () => {
-  it('finds the shortest paths to a state without continuing traversal from that state', () => {
+describe('getShortestPaths', (it) => {
+  it('finds the shortest paths to a state without continuing traversal from that state', function*({ expect }) {
     const m = createMachine({
-      // types: {} as { context: { count: number } },
       schemas: {
         context: z.object({
           count: z.number(),
@@ -32,8 +31,6 @@ describe('getShortestPaths', () => {
           },
         },
         d: {
-          // If we reach this state, this will cause an infinite loop
-          // if the stop condition does not stop the algorithm
           on: {
             NEXT: ({ context }) => ({
               context: {
@@ -50,19 +47,25 @@ describe('getShortestPaths', () => {
       toState: (state) => state.matches('c'),
     })
 
-    expect(p).toHaveLength(1)
-    const [firstPath] = p
-    if (firstPath === undefined) {
-      throw new Error('expected a shortest path')
-    }
-    expect(firstPath.state.matches('c')).toBeTruthy()
+    yield* expect(
+      p.map((path) => ({
+        eventTypes: path.steps.map((step) => step.event.type),
+        weight: path.weight,
+        context: path.state.context,
+        matchesC: path.state.matches('c'),
+      })),
+    ).toEqual([
+      {
+        eventTypes: ['@xstate.init', 'NEXT', 'NEXT'],
+        weight: 2,
+        context: { count: 0 },
+        matchesC: true,
+      },
+    ])
   })
 
-  it('finds the shortest paths from a state to another state', () => {
+  it('finds the shortest paths from a state to another state', function*({ expect }) {
     const m = createMachine({
-      // types: {} as {
-      //   context: { count: number };
-      // },
       schemas: {
         context: z.object({
           count: z.number(),
@@ -105,22 +108,14 @@ describe('getShortestPaths', () => {
       })
     })
 
-    expect(paths).toHaveLength(1)
-    const [firstJoinedPath] = paths
-    if (firstJoinedPath === undefined) {
-      throw new Error('expected a joined path')
-    }
-    expect(firstJoinedPath.steps.map((s) => s.event.type)).toMatchInlineSnapshot(`
-      [
-        "@xstate.init",
-        "TO_B",
-        "NEXT_B_TO_X",
-        "NEXT_X_TO_Y",
-      ]
-    `)
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([
+      ['@xstate.init', 'TO_B', 'NEXT_B_TO_X', 'NEXT_X_TO_Y'],
+    ])
   })
 
-  it('handles event cases', () => {
+  it('handles event cases', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -164,10 +159,21 @@ describe('getShortestPaths', () => {
         path.state.context.todos.includes('two'),
     )
 
-    expect(pathWithTwoTodos).toBeDefined()
+    yield* expect(
+      pathWithTwoTodos.map((path) => path.state.context.todos.join('|')).sort(),
+    ).toEqual([
+      'one|one|two',
+      'one|two',
+      'one|two|one',
+      'one|two|two',
+      'two|one',
+      'two|one|one',
+      'two|one|two',
+      'two|two|one',
+    ])
   })
 
-  it('should work for machines with delays', () => {
+  it('should work for machines with delays', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -182,9 +188,10 @@ describe('getShortestPaths', () => {
 
     const shortestPaths = getShortestPaths(machine)
 
-    expect(shortestPaths.map((p) => p.steps.map((s) => s.event.type))).toEqual([
-      ['@xstate.init'],
-      ['@xstate.init', 'xstate.after'],
-    ])
+    yield* expect(shortestPaths.map((p) => p.steps.map((s) => s.event.type)))
+      .toEqual([
+        ['@xstate.init'],
+        ['@xstate.init', 'xstate.after'],
+      ])
   })
 })

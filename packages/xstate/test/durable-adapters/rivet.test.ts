@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { createDurable, type DurableExecutionAdapter } from '../../src/durable/index.js'
-import { createLogic, createMachine, setup as setupXState } from '../../src/index.js'
+import { type ActorSystemRuntime, createLogic, createMachine, setup as setupXState } from '../../src/index.js'
 import type { AnyActorLogic, EventFromLogic } from '../../src/types.js'
 
 interface RivetWorkflowContext {
@@ -8,6 +9,26 @@ interface RivetWorkflowContext {
   queue: {
     next(name: string, options: { names: readonly string[] }): Promise<unknown>
   }
+}
+
+interface QueueNextCall {
+  readonly name: string
+  readonly options: { readonly names: readonly string[] }
+}
+
+const messageEvent = <TEvent>(message: unknown): TEvent => {
+  if (
+    typeof message !== 'object' || message === null || !('body' in message)
+  ) {
+    throw new Error('The host queue resolved a value without a body payload')
+  }
+  const { body } = message
+  if (typeof body !== 'object' || body === null || !('event' in body)) {
+    throw new Error(
+      'The host queue resolved a value without a body.event payload',
+    )
+  }
+  return body.event as TEvent
 }
 
 function createRivetPoc<TLogic extends AnyActorLogic>(
@@ -19,8 +40,10 @@ function createRivetPoc<TLogic extends AnyActorLogic>(
   },
 ) {
   return createDurable(logic, {
-    async executeAction(action, metadata, runtime) {
-      await options.context.step(metadata.id, async () => action.exec(runtime))
+    executeAction(action, metadata, runtime) {
+      return options.context.step(metadata.id, () => action.exec(runtime)).then(
+        () => {},
+      )
     },
     runtime(metadata, effect) {
       const runtime = options.runtime?.(metadata, effect) ?? {}
@@ -31,28 +54,28 @@ function createRivetPoc<TLogic extends AnyActorLogic>(
         return runtime
       }
 
-      // This bounded-workflow PoC only supports root completion.
       return {
         ...runtime,
-        async terminateActor() {
-          await options.context.step(metadata.id, async () => {})
+        terminateActor() {
+          return options.context.step(metadata.id, () => undefined).then(
+            () => {},
+          )
         },
       }
     },
-    async waitForEvent(metadata) {
-      const message = await options.context.queue.next(metadata.id, {
+    waitForEvent(metadata) {
+      return options.context.queue.next(metadata.id, {
         names: [options.queue],
-      })
-      return (message as { body: { event: EventFromLogic<TLogic> } }).body
-        .event
+      }).then((message) => messageEvent<EventFromLogic<TLogic>>(message))
     },
   })
 }
 
 describe('Rivet durable execution PoC', () => {
-  it('runs actions as workflow steps and receives queue events', async () => {
+  it('runs actions as workflow steps and receives queue events', function*({ expect }) {
     const calls: number[] = []
     const stepNames: string[] = []
+    const queueNextCalls: QueueNextCall[] = []
     const messages = [{ body: { event: { type: 'FINISH' } } }]
     const machine = setupXState({
       actions: {
@@ -76,32 +99,37 @@ describe('Rivet durable execution PoC', () => {
         done: { type: 'final' },
       },
     })
-    const context = {
-      async step(name: string, run: () => unknown | Promise<unknown>) {
+    const context: RivetWorkflowContext = {
+      step(name: string, run: () => unknown | Promise<unknown>) {
         stepNames.push(name)
-        return run()
+        return Promise.resolve(run())
       },
       queue: {
-        async next(name: string, options: { names: readonly string[] }) {
-          expect(name).toBe('event:0')
-          expect(options).toEqual({ names: ['machine-events'] })
-          return messages.shift()
+        next(name: string, options: { names: readonly string[] }) {
+          queueNextCalls.push({ name, options })
+          return Promise.resolve(messages.shift())
         },
       },
     }
 
-    await expect(
+    const output = yield* Effect.promise(() =>
       createRivetPoc(machine, {
         context,
         queue: 'machine-events',
-      }).run(undefined),
-    ).resolves.toBe('complete')
+      }).run(undefined)
+    )
 
-    expect(calls).toEqual([1, 2])
-    expect(stepNames).toEqual(['0:0', '1:0', '1:1'])
+    yield* expect({ output, calls, stepNames, queueNextCalls }).toEqual({
+      output: 'complete',
+      calls: [1, 2],
+      stepNames: ['0:0', '1:0', '1:1'],
+      queueNextCalls: [
+        { name: 'event:0', options: { names: ['machine-events'] } },
+      ],
+    })
   })
 
-  it('exposes built-in effects to host runtime mappings', async () => {
+  it('exposes built-in effects to host runtime mappings', function*({ expect }) {
     const effects: unknown[] = []
     const machine = createMachine({
       initial: 'waiting',
@@ -112,29 +140,34 @@ describe('Rivet durable execution PoC', () => {
     })
     const durable = createRivetPoc(machine, {
       context: {
-        async step(_name: string, run: () => unknown | Promise<unknown>) {
-          return run()
+        step(_name: string, run: () => unknown | Promise<unknown>) {
+          return Promise.resolve(run())
         },
-        queue: { next: vi.fn() },
+        queue: { next: () => Promise.resolve(undefined) },
       },
       queue: 'machine-events',
       runtime: (_metadata, effect) => {
         effects.push(effect)
-        return { scheduleTimer: vi.fn() }
+        return { scheduleTimer: () => {} }
       },
     })
     const [, initialEffects] = durable.initialTransition(undefined)
 
-    await durable.executeEffects(initialEffects)
+    yield* Effect.promise(() => durable.executeEffects(initialEffects))
 
-    expect(effects).toEqual([
+    yield* expect(effects).toEqual([
       expect.objectContaining({ type: '@xstate.raise', delay: 10 }),
     ])
   })
 
-  it('forwards the host runtime to custom effects', async () => {
-    const runtime = { sendEvent: vi.fn() }
-    let providedRuntime: unknown
+  it('forwards the host runtime to custom effects', function*({ expect }) {
+    const sendEventCalls: unknown[][] = []
+    const runtime = {
+      sendEvent: (...args: unknown[]) => {
+        sendEventCalls.push(args)
+      },
+    }
+    let providedRuntime: Partial<ActorSystemRuntime> | undefined
     const logic = createLogic({
       context: undefined,
       run: ({ event }, enq) => {
@@ -147,23 +180,27 @@ describe('Rivet durable execution PoC', () => {
     })
     const durable = createRivetPoc(logic, {
       context: {
-        async step(_name: string, run: () => unknown | Promise<unknown>) {
-          return run()
+        step(_name: string, run: () => unknown | Promise<unknown>) {
+          return Promise.resolve(run())
         },
-        queue: { next: vi.fn() },
+        queue: { next: () => Promise.resolve(undefined) },
       },
       queue: 'machine-events',
       runtime: () => runtime,
     })
     const [, effects] = durable.initialTransition(undefined)
 
-    await durable.executeEffects(effects)
+    yield* Effect.promise(() => durable.executeEffects(effects))
 
     const target = { address: 'elsewhere' } as never
     const event = { type: 'X' }
-    await (
-      providedRuntime as { sendEvent(...args: unknown[]): PromiseLike<void> }
-    ).sendEvent(undefined, target, event)
-    expect(runtime.sendEvent).toHaveBeenCalledWith(undefined, target, event)
+    const effectRuntime = providedRuntime
+    if (effectRuntime === undefined) {
+      throw new Error('The custom effect received no runtime')
+    }
+    yield* Effect.promise(() => Promise.resolve(effectRuntime.sendEvent!(undefined, target, event)))
+    yield* expect(sendEventCalls).toEqual([
+      [undefined, target, event],
+    ])
   })
 })

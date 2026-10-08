@@ -1,12 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect, Exit } from 'effect'
 import { createDurable } from '../src/durable/index.js'
-import { createAsyncLogic, setup } from '../src/index.js'
+import { type AnyEventObject, createAsyncLogic, setup } from '../src/index.js'
 
 const fraudCheck = createAsyncLogic({
   id: 'fraudCheck',
-  run: async (_, enq) => {
-    return enq.step('score', async () => 0.2)
-  },
+  run: (_, enq) => enq.step('score', () => 0.2),
 })
 
 const machine = setup({ actors: { fraudCheck } }).createMachine({
@@ -20,22 +19,26 @@ const machine = setup({ actors: { fraudCheck } }).createMachine({
   },
 })
 
-/**
- * Takes the root events a settled batch retained: `waitForEvent()` hands them
- * out until it defers to the adapter, whose host-driven stub throws.
- */
-async function takeRootEvents(execution: {
-  waitForEvent(): Promise<unknown>
-}): Promise<any[]> {
-  const events: any[] = []
-  for (;;) {
-    try {
-      events.push(await execution.waitForEvent())
-    } catch {
-      return events
+const isEventObject = (value: unknown): value is AnyEventObject =>
+  typeof value === 'object' && value !== null && 'type' in value &&
+  typeof value.type === 'string'
+
+const takeRootEvents = (
+  execution: { waitForEvent(): Promise<unknown> },
+): Effect.Effect<AnyEventObject[]> =>
+  Effect.gen(function*() {
+    const next = yield* Effect.exit(
+      Effect.promise(() => execution.waitForEvent()),
+    )
+    if (Exit.isFailure(next)) {
+      return []
     }
-  }
-}
+    if (!isEventObject(next.value)) {
+      throw new Error('expected the durable execution to yield an event object')
+    }
+    const rest = yield* takeRootEvents(execution)
+    return [next.value, ...rest]
+  })
 
 function createHost(steps: Map<string, unknown>, executionId?: string) {
   return createDurable(machine, {
@@ -44,14 +47,15 @@ function createHost(steps: Map<string, unknown>, executionId?: string) {
     startActor: (actor) => {
       actor.start()
     },
-    runStep: async (actor, key, exec) => {
+    runStep: (actor, key, exec) => {
       const id = `${actor.address}:${key}`
       if (steps.has(id)) {
-        return steps.get(id)
+        return Promise.resolve(steps.get(id))
       }
-      const output = await exec()
-      steps.set(id, output)
-      return output
+      return Promise.resolve(exec()).then((output) => {
+        steps.set(id, output)
+        return output
+      })
     },
     waitForEvent: () => {
       throw new Error('host-driven loop')
@@ -60,63 +64,65 @@ function createHost(steps: Map<string, unknown>, executionId?: string) {
 }
 
 describe('deterministic execution identity', () => {
-  it('a replay re-creates the same session ids', async () => {
+  it('a replay re-creates the same session ids', function*({ expect }) {
     const steps = new Map<string, unknown>()
     const first = createHost(steps, 'exec-1')
     const [s1, e1] = first.initialTransition()
-    await first.executeEffects(e1)
-    const events1 = await takeRootEvents(first)
+    yield* Effect.promise(() => first.executeEffects(e1))
+    const events1 = yield* takeRootEvents(first)
 
     const second = createHost(steps, 'exec-1')
     const [s2, e2] = second.initialTransition()
-    await second.executeEffects(e2)
-    const events2 = await takeRootEvents(second)
+    yield* Effect.promise(() => second.executeEffects(e2))
+    const events2 = yield* takeRootEvents(second)
 
-    expect(events1).toEqual(events2)
-    const sessionId = (events1[0] as { sessionId?: string }).sessionId
-    expect(sessionId).toMatch(/^exec-1:/)
+    yield* expect({
+      first: events1,
+      replay: events2,
+      sessionId: events1[0]?.['sessionId'],
+    }).toEqual({
+      first: events2,
+      replay: events1,
+      sessionId: expect.stringMatching(/^exec-1:/),
+    })
     void s1
     void s2
   })
 
-  it('a journaled completion event still matches the child a replay re-creates', async () => {
+  it('a journaled completion event still matches the child a replay re-creates', function*({ expect }) {
     const steps = new Map<string, unknown>()
 
-    // Run 1: the invoked fraud check completes; its completion reaches the
-    // root and a journaling host records the event verbatim.
     const first = createHost(steps, 'exec-1')
     const [snapshot1, effects1] = first.initialTransition()
-    await first.executeEffects(effects1)
-    const [journaled] = await takeRootEvents(first)
-    expect(journaled.type).toMatch(/^xstate\.done\.actor/)
+    yield* Effect.promise(() => first.executeEffects(effects1))
+    const [journaled] = yield* takeRootEvents(first)
+    yield* expect(journaled?.type).toMatch(/^xstate\.done\.actor/)
 
-    // Crash. Replay from the beginning in a "fresh process": same journal,
-    // same executionId. The replayed step returns its memoized result, and
-    // the recorded completion event — carrying run 1's sessionId — must
-    // match the child the replay just re-created.
     const second = createHost(steps, 'exec-1')
     const [snapshot2, effects2] = second.initialTransition()
-    await second.executeEffects(effects2)
-    const [replayed] = second.transition(snapshot2 as never, journaled)
-    expect((replayed as { value?: unknown }).value).toBe('approved')
+    yield* Effect.promise(() => second.executeEffects(effects2))
+    const [replayed] = second.transition(snapshot2 as never, journaled as never)
+    yield* expect('value' in replayed ? replayed.value : undefined).toBe(
+      'approved',
+    )
     void snapshot1
   })
 
-  it('without an executionId, journaled completions go stale across replays', async () => {
+  it('without an executionId, journaled completions go stale across replays', function*({ expect }) {
     const steps = new Map<string, unknown>()
     const first = createHost(steps)
     const [, effects1] = first.initialTransition()
-    await first.executeEffects(effects1)
-    const [journaled] = await takeRootEvents(first)
+    yield* Effect.promise(() => first.executeEffects(effects1))
+    const [journaled] = yield* takeRootEvents(first)
 
     const second = createHost(steps)
     const [snapshot2, effects2] = second.initialTransition()
-    await second.executeEffects(effects2)
-    const [replayed] = second.transition(snapshot2 as never, journaled)
-    // The recorded sessionId embeds run 1's random system id, so the
-    // completion is dropped as stale — the documented reason to pin
-    // executionId on journaling hosts.
-    expect((replayed as { value?: unknown }).value).toBe('verifying')
+    yield* Effect.promise(() => second.executeEffects(effects2))
+    const [replayed] = second.transition(snapshot2 as never, journaled as never)
+
+    yield* expect('value' in replayed ? replayed.value : undefined).toBe(
+      'verifying',
+    )
   })
 })
 
@@ -125,8 +131,7 @@ describe('runLogic: the async actor as the durable unit', () => {
     actors: {
       score: createAsyncLogic({
         id: 'score',
-        // A normal promise — no step vocabulary.
-        run: async ({ input }: { input: { total: number } }) => input.total > 1000 ? 0.9 : 0.1,
+        run: ({ input }: { input: { total: number } }) => Promise.resolve(input.total > 1000 ? 0.9 : 0.1),
       }),
     },
   }).createMachine({
@@ -148,9 +153,8 @@ describe('runLogic: the async actor as the durable unit', () => {
     },
   })
 
-  it('a journaling host wraps the body once and replays the result', async () => {
+  it('a journaling host wraps the body once and replays the result', function*({ expect }) {
     const journal = new Map<string, unknown>()
-    let executions = 0
     const host = (executionId: string) =>
       createDurable(plainMachine, {
         executionId,
@@ -158,14 +162,14 @@ describe('runLogic: the async actor as the durable unit', () => {
         startActor: (actor) => {
           actor.start()
         },
-        runLogic: async (actor, exec) => {
+        runLogic: (actor, exec) => {
           if (journal.has(actor.address)) {
-            return journal.get(actor.address)
+            return Promise.resolve(journal.get(actor.address))
           }
-          executions++
-          const output = await exec()
-          journal.set(actor.address, output)
-          return output
+          return Promise.resolve(exec()).then((output) => {
+            journal.set(actor.address, output)
+            return output
+          })
         },
         waitForEvent: () => {
           throw new Error('host-driven loop')
@@ -174,26 +178,34 @@ describe('runLogic: the async actor as the durable unit', () => {
 
     const first = host('exec-1')
     const [, e1] = first.initialTransition({ total: 1500 })
-    await first.executeEffects(e1)
-    const [done1] = await takeRootEvents(first)
-    expect(done1.type).toMatch(/^xstate\.done\.actor/)
-    expect(executions).toBe(1)
+    yield* Effect.promise(() => first.executeEffects(e1))
+    const [done1] = yield* takeRootEvents(first)
 
-    // Crash → replay: the body does not re-run, and the journaled
-    // completion still matches the replayed child.
+    yield* expect({
+      doneType: done1?.type,
+      executions: journal.size,
+    }).toEqual({
+      doneType: expect.stringMatching(/^xstate\.done\.actor/),
+      executions: 1,
+    })
+
     const second = host('exec-1')
     const [s2, e2] = second.initialTransition({ total: 1500 })
-    await second.executeEffects(e2)
-    expect(executions).toBe(1)
-    const [replayed] = second.transition(s2 as never, done1)
-    expect((replayed as { value?: unknown }).value).toBe('approved')
+    yield* Effect.promise(() => second.executeEffects(e2))
+    const [replayed] = second.transition(s2 as never, done1 as never)
+
+    yield* expect({
+      executions: journal.size,
+      value: 'value' in replayed ? replayed.value : undefined,
+    }).toEqual({
+      executions: 1,
+      value: 'approved',
+    })
   })
 
-  it('a remote-executor host ignores the closure and re-runs from (src, input)', async () => {
-    // The Temporal shape: the "activity worker" reconstructs the work from
-    // the actor's serializable identity alone — no closure crosses over.
+  it('a remote-executor host ignores the closure and re-runs from (src, input)', function*({ expect }) {
     const workerSide = {
-      score: async (input: { total: number }) => input.total > 1000 ? 0.9 : 0.1,
+      score: (input: { total: number }) => Promise.resolve(input.total > 1000 ? 0.9 : 0.1),
     }
     const shipped: Array<{ src: unknown; input: unknown }> = []
     const durable = createDurable(plainMachine, {
@@ -202,10 +214,13 @@ describe('runLogic: the async actor as the durable unit', () => {
       startActor: (actor) => {
         actor.start()
       },
-      runLogic: async (actor) => {
-        const input = (actor.getSnapshot() as { input?: unknown }).input
+      runLogic: (actor) => {
+        const snapshot = actor.getSnapshot()
+        const input = typeof snapshot === 'object' && snapshot !== null &&
+            'input' in snapshot
+          ? snapshot.input
+          : undefined
         shipped.push({ src: actor.src, input })
-        expect(() => JSON.stringify({ src: actor.src, input })).not.toThrow()
         return workerSide[actor.src as keyof typeof workerSide](
           input as { total: number },
         )
@@ -216,10 +231,18 @@ describe('runLogic: the async actor as the durable unit', () => {
     })
 
     const [snapshot, effects] = durable.initialTransition({ total: 1500 })
-    await durable.executeEffects(effects)
-    const [done] = await takeRootEvents(durable)
-    expect(shipped).toEqual([{ src: 'score', input: { total: 1500 } }])
-    const [next] = durable.transition(snapshot as never, done)
-    expect((next as { value?: unknown }).value).toBe('approved')
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    const [done] = yield* takeRootEvents(durable)
+    const [next] = durable.transition(snapshot as never, done as never)
+
+    yield* expect({
+      shipped,
+      serialized: shipped.map(({ src, input }) => JSON.stringify({ src, input })),
+      value: 'value' in next ? next.value : undefined,
+    }).toEqual({
+      shipped: [{ src: 'score', input: { total: 1500 } }],
+      serialized: ['{"src":"score","input":{"total":1500}}'],
+      value: 'approved',
+    })
   })
 })

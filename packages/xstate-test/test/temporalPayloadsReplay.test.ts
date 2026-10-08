@@ -1,10 +1,20 @@
-import { createMachine, types } from '@systemfsoftware/xstate'
+import { it } from '@systemfsoftware/vitest'
+import { createMachine, type EventObject, type Snapshot, type SnapshotFrom, types } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import * as DateTime from 'effect/DateTime'
 import * as fc from 'fast-check'
-import { describe, expect, it } from 'vitest'
+import { describe } from 'vitest'
+import type { TestAdapterRequest, TestAdapterResult } from '../src/engine/index.js'
 import { defaultEquivalent } from '../src/engine/propertyTest.js'
-import { extractReplayPath, fastCheckAdapter, ModelTestFailure, propertyTest, replayTest } from '../src/index.js'
-import type { TestAdapter } from '../src/index.js'
+import {
+  extractReplayPath,
+  fastCheckAdapter,
+  ModelTestFailure,
+  propertyTest,
+  ReplayNotReproducedError,
+  replayTest,
+} from '../src/index.js'
+import type { TestAdapter, TestFixture } from '../src/index.js'
 
 const counterMachine = createMachine({
   id: 'p0-counter',
@@ -18,62 +28,91 @@ const counterMachine = createMachine({
   },
 })
 
-/**
- * Drives the runner directly so the number of executed commands (and the
- * number of rejected precondition checks) is exact.
- */
-function scriptedAdapter(
-  script: (runner: any, caseId: string) => Promise<void>,
-): TestAdapter {
-  return {
-    run: async (request: any) => {
-      const runner = request.createRunner()
-      const caseId = request.events[0]?.caseId
-      try {
-        await runner.start()
-        await script(runner, caseId)
-        await runner.finish()
+type ScriptStep = 'check' | 'run'
+
+type ReplayStart = {
+  snapshot: SnapshotFrom<typeof counterMachine>
+  serializeSnapshot: () => string
+}
+
+const scriptedAdapter = (steps: readonly ScriptStep[]): TestAdapter => ({
+  run: <TSnapshot extends Snapshot<unknown>, TEvent extends EventObject>(
+    request: TestAdapterRequest<TSnapshot, TEvent>,
+  ): Promise<TestAdapterResult> => {
+    const firstEvent = request.events[0]
+    if (firstEvent === undefined) {
+      throw new Error('expected an event generator in the adapter request')
+    }
+    const runner = request.createRunner()
+    const event = request.createEvent('INC', {})
+    return Effect.runPromise(
+      Effect.gen(function*() {
+        yield* Effect.promise(() => runner.start())
+        for (const step of steps) {
+          if (step === 'check') {
+            runner.canRun(event, firstEvent.caseId)
+          } else {
+            yield* Effect.promise(() => runner.run(event, firstEvent.caseId))
+          }
+        }
+        yield* Effect.sync(() => runner.finish())
         return {
           runs: 1,
           exploration: { configuredRuns: 1, maximumSequenceLength: null },
         }
-      } finally {
-        await runner.dispose()
-      }
-    },
-  } as TestAdapter
+      }).pipe(Effect.ensuring(Effect.promise(() => runner.dispose()))),
+    )
+  },
+})
+
+const rejectionOf = <A>(run: () => Promise<A>): Effect.Effect<unknown> =>
+  Effect.promise(() => run().then(() => undefined, (error: unknown) => error))
+
+const rejectionMessage = (run: () => Promise<unknown>): Promise<string> =>
+  Promise.resolve()
+    .then(() => run())
+    .then(
+      () => 'no error was thrown',
+      (error: unknown) => error instanceof Error ? error.message : String(error),
+    )
+
+const returned = (call: () => unknown): boolean => {
+  try {
+    call()
+    return true
+  } catch {
+    return false
+  }
 }
 
-describe('temporal operators (STA-6400)', () => {
-  it('does not fail a bounded `eventually` whose `within` bound was never reached', async () => {
-    const result = await propertyTest(counterMachine, {
-      adapter: scriptedAdapter(async (runner, caseId) => {
-        runner.canRun({ type: 'INC' }, caseId)
-        await runner.run({ type: 'INC' }, caseId)
-      }),
-      events: { INC: fc.constant({}) },
-      temporal: [
-        {
-          type: 'eventually',
-          id: 'reach-ten',
-          // the run only produces 2 stable steps, so step 10 is never reached
-          within: 10,
-          predicate: ({ snapshot }) => snapshot.context.count === 10,
-        },
-      ],
-      invariant: () => {},
-    })
+const fixtureOf = (error: unknown): TestFixture | undefined =>
+  error instanceof ModelTestFailure ? error.fixture : undefined
 
-    expect(result.coverage.temporalChecks).toBeGreaterThan(0)
+describe('temporal operators (STA-6400)', () => {
+  it('does not fail a bounded `eventually` whose `within` bound was never reached', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        adapter: scriptedAdapter(['check', 'run']),
+        events: { INC: fc.constant({}) },
+        temporal: [
+          {
+            type: 'eventually',
+            id: 'reach-ten',
+            within: 10,
+            predicate: ({ snapshot }) => snapshot.context.count === 10,
+          },
+        ],
+        invariant: () => {},
+      })
+    )
+
+    yield* expect(result.coverage.temporalChecks).toBeGreaterThan(0)
   })
 
-  it('does not fail a bounded `until` whose `within` bound was never reached', async () => {
-    await expect(
+  it('does not fail a bounded `until` whose `within` bound was never reached', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
       propertyTest(counterMachine, {
-        adapter: scriptedAdapter(async (runner, caseId) => {
-          runner.canRun({ type: 'INC' }, caseId)
-          await runner.run({ type: 'INC' }, caseId)
-        }),
+        adapter: scriptedAdapter(['check', 'run']),
         events: { INC: fc.constant({}) },
         temporal: [
           {
@@ -85,18 +124,19 @@ describe('temporal operators (STA-6400)', () => {
           },
         ],
         invariant: () => {},
-      }),
-    ).resolves.toBeDefined()
+      })
+    )
+
+    yield* expect(result.coverage.temporal).toMatchObject({
+      inconclusive: ['never-closes'],
+      failed: [],
+    })
   })
 
-  it('still fails an unbounded `eventually` that the run never satisfied', async () => {
-    let failure!: ModelTestFailure
-    try {
-      await propertyTest(counterMachine, {
-        adapter: scriptedAdapter(async (runner, caseId) => {
-          runner.canRun({ type: 'INC' }, caseId)
-          await runner.run({ type: 'INC' }, caseId)
-        }),
+  it('still fails an unbounded `eventually` that the run never satisfied', function*({ expect }) {
+    const failure = yield* rejectionOf(() =>
+      propertyTest(counterMachine, {
+        adapter: scriptedAdapter(['check', 'run']),
         events: { INC: fc.constant({}) },
         temporal: [
           {
@@ -107,29 +147,29 @@ describe('temporal operators (STA-6400)', () => {
         ],
         invariant: () => {},
       })
-    } catch (error) {
-      failure = error as ModelTestFailure
-    }
+    )
 
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    expect(failure.fixture?.temporalFailure).toMatchObject({
+    const temporalFailure = failure instanceof ModelTestFailure
+      ? failure.fixture?.temporalFailure
+      : undefined
+
+    yield* expect({
+      isModelTestFailure: failure instanceof ModelTestFailure,
+      type: temporalFailure?.type,
+      id: temporalFailure?.id,
+      within: temporalFailure?.within,
+    }).toEqual({
+      isModelTestFailure: true,
       type: 'eventually',
       id: 'reach-ten-unbounded',
+      within: undefined,
     })
-    // unbounded temporal failures carry no `within`
-    expect(failure.fixture?.temporalFailure?.within).toBeUndefined()
   })
 
-  it('fails `always` on the first stable step where the predicate does not hold', async () => {
-    let failure!: ModelTestFailure
-    try {
-      await propertyTest(counterMachine, {
-        adapter: scriptedAdapter(async (runner, caseId) => {
-          runner.canRun({ type: 'INC' }, caseId)
-          await runner.run({ type: 'INC' }, caseId)
-          runner.canRun({ type: 'INC' }, caseId)
-          await runner.run({ type: 'INC' }, caseId)
-        }),
+  it('fails `always` on the first stable step where the predicate does not hold', function*({ expect }) {
+    const failure = yield* rejectionOf(() =>
+      propertyTest(counterMachine, {
+        adapter: scriptedAdapter(['check', 'run', 'check', 'run']),
         events: { INC: fc.constant({}) },
         temporal: [
           {
@@ -140,25 +180,29 @@ describe('temporal operators (STA-6400)', () => {
         ],
         invariant: () => {},
       })
-    } catch (error) {
-      failure = error as ModelTestFailure
-    }
+    )
 
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    expect(failure.fixture?.temporalFailure).toMatchObject({
+    const temporalFailure = failure instanceof ModelTestFailure
+      ? failure.fixture?.temporalFailure
+      : undefined
+
+    yield* expect({
+      isModelTestFailure: failure instanceof ModelTestFailure,
+      type: temporalFailure?.type,
+      id: temporalFailure?.id,
+      within: temporalFailure?.within,
+    }).toEqual({
+      isModelTestFailure: true,
       type: 'always',
       id: 'below-two',
+      within: undefined,
     })
-    expect(failure.fixture?.temporalFailure?.within).toBeUndefined()
   })
 
-  it('passes `always` when the predicate holds on every stable step', async () => {
-    await expect(
+  it('passes `always` when the predicate holds on every stable step', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
       propertyTest(counterMachine, {
-        adapter: scriptedAdapter(async (runner, caseId) => {
-          runner.canRun({ type: 'INC' }, caseId)
-          await runner.run({ type: 'INC' }, caseId)
-        }),
+        adapter: scriptedAdapter(['check', 'run']),
         events: { INC: fc.constant({}) },
         temporal: [
           {
@@ -168,18 +212,19 @@ describe('temporal operators (STA-6400)', () => {
           },
         ],
         invariant: () => {},
-      }),
-    ).resolves.toBeDefined()
+      })
+    )
+
+    yield* expect(result.coverage.temporal).toMatchObject({
+      satisfied: ['non-negative'],
+      failed: [],
+    })
   })
 
-  it('fails `never` on the first stable step where the predicate holds', async () => {
-    let failure!: ModelTestFailure
-    try {
-      await propertyTest(counterMachine, {
-        adapter: scriptedAdapter(async (runner, caseId) => {
-          runner.canRun({ type: 'INC' }, caseId)
-          await runner.run({ type: 'INC' }, caseId)
-        }),
+  it('fails `never` on the first stable step where the predicate holds', function*({ expect }) {
+    const failure = yield* rejectionOf(() =>
+      propertyTest(counterMachine, {
+        adapter: scriptedAdapter(['check', 'run']),
         events: { INC: fc.constant({}) },
         temporal: [
           {
@@ -190,24 +235,29 @@ describe('temporal operators (STA-6400)', () => {
         ],
         invariant: () => {},
       })
-    } catch (error) {
-      failure = error as ModelTestFailure
-    }
+    )
 
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    expect(failure.fixture?.temporalFailure).toMatchObject({
+    const temporalFailure = failure instanceof ModelTestFailure
+      ? failure.fixture?.temporalFailure
+      : undefined
+
+    yield* expect({
+      isModelTestFailure: failure instanceof ModelTestFailure,
+      type: temporalFailure?.type,
+      id: temporalFailure?.id,
+      within: temporalFailure?.within,
+    }).toEqual({
+      isModelTestFailure: true,
       type: 'never',
       id: 'never-one',
+      within: undefined,
     })
   })
 
-  it('passes `never` when the predicate never holds', async () => {
-    await expect(
+  it('passes `never` when the predicate never holds', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
       propertyTest(counterMachine, {
-        adapter: scriptedAdapter(async (runner, caseId) => {
-          runner.canRun({ type: 'INC' }, caseId)
-          await runner.run({ type: 'INC' }, caseId)
-        }),
+        adapter: scriptedAdapter(['check', 'run']),
         events: { INC: fc.constant({}) },
         temporal: [
           {
@@ -217,159 +267,213 @@ describe('temporal operators (STA-6400)', () => {
           },
         ],
         invariant: () => {},
-      }),
-    ).resolves.toBeDefined()
+      })
+    )
+
+    yield* expect(result.coverage.temporal).toMatchObject({
+      satisfied: ['never-negative'],
+      failed: [],
+    })
   })
 })
 
 describe('non-object event payloads (STA-6402)', () => {
-  it('throws a descriptive error for a non-object generated payload', async () => {
-    await expect(
-      propertyTest(counterMachine, {
-        seed: 1,
-        numRuns: 1,
-        maxCommands: 2,
-        // `fc.integer()` produces a number, not an event payload object
-        events: { INC: fc.integer({ min: 1, max: 3 }) as any },
-        invariant: () => {},
-      }),
-    ).rejects.toThrow(/non-object payload/)
+  it('throws a descriptive error for a non-object generated payload', function*({ expect }) {
+    const message = yield* Effect.promise(() =>
+      rejectionMessage(() =>
+        propertyTest(counterMachine, {
+          seed: 1,
+          numRuns: 1,
+          maxCommands: 2,
+          events: { INC: { generate: fc.integer({ min: 1, max: 3 }) } },
+          invariant: () => {},
+        })
+      )
+    )
+
+    yield* expect({ message }).toEqual({
+      message: expect.stringMatching(
+        /^Property event case \["event-case","INC","default"\] generated a non-object payload \([1-3]\)\. Event payloads must be plain objects; use a `resolve` function to map generated values onto an event payload\.$/,
+      ),
+    })
   })
 
-  it('names the event case and points at `resolve`', async () => {
-    let message = ''
-    try {
-      await propertyTest(counterMachine, {
-        seed: 2,
-        numRuns: 1,
-        maxCommands: 2,
-        events: { INC: fc.constant(7) as any },
-        invariant: () => {},
-      })
-    } catch (error) {
-      message = (error as Error).message
-    }
+  it('names the event case and points at `resolve`', function*({ expect }) {
+    const message = yield* Effect.promise(() =>
+      rejectionMessage(() =>
+        propertyTest(counterMachine, {
+          seed: 2,
+          numRuns: 1,
+          maxCommands: 2,
+          events: { INC: { generate: fc.constant(7) } },
+          invariant: () => {},
+        })
+      )
+    )
 
-    expect(message).toContain('INC')
-    expect(message).toContain('7')
-    expect(message).toContain('`resolve`')
+    yield* expect({
+      message,
+      namesTheEventType: message.includes('INC'),
+      namesTheDrawnValue: message.includes('7'),
+      pointsAtResolve: message.includes('`resolve`'),
+    }).toEqual({
+      message:
+        'Property event case ["event-case","INC","default"] generated a non-object payload (7). Event payloads must be plain objects; use a `resolve` function to map generated values onto an event payload.',
+      namesTheEventType: true,
+      namesTheDrawnValue: true,
+      pointsAtResolve: true,
+    })
   })
 
-  it('throws when `resolve` itself returns a non-object payload', async () => {
-    await expect(
-      propertyTest(counterMachine, {
-        seed: 3,
-        numRuns: 1,
-        maxCommands: 2,
-        events: {
-          INC: {
-            generate: fc.record({ value: fc.integer({ min: 1, max: 3 }) }),
-            resolve: ({ generated }: any) => generated.value,
-          } as any,
-        },
-        invariant: () => {},
-      }),
-    ).rejects.toThrow(/non-object payload/)
-  })
-
-  it('throws when an adapter calls `createEvent` with a non-object payload', async () => {
-    await expect(
-      propertyTest(counterMachine, {
-        adapter: {
-          run: async (request: any) => {
-            request.createEvent('INC', 42)
-            return {
-              runs: 1,
-              exploration: { configuredRuns: 1, maximumSequenceLength: null },
-            }
+  it('throws when `resolve` itself returns a non-object payload', function*({ expect }) {
+    const message = yield* Effect.promise(() =>
+      rejectionMessage(() =>
+        propertyTest(counterMachine, {
+          seed: 3,
+          numRuns: 1,
+          maxCommands: 2,
+          events: {
+            INC: {
+              generate: fc.record({ value: fc.integer({ min: 1, max: 3 }) }),
+              resolve: ({ generated }) =>
+                typeof generated === 'object' &&
+                  generated !== null &&
+                  'value' in generated &&
+                  typeof generated.value === 'number'
+                  ? generated.value
+                  : undefined,
+            },
           },
-        } as TestAdapter,
-        events: { INC: fc.constant({}) },
-        invariant: () => {},
-      }),
-    ).rejects.toThrow(/Property event "INC" generated a non-object payload/)
+          invariant: () => {},
+        })
+      )
+    )
+
+    yield* expect({ message }).toEqual({
+      message: expect.stringMatching(
+        /^Property event case \["event-case","INC","default"\] generated a non-object payload \([1-3]\)\. Event payloads must be plain objects; use a `resolve` function to map generated values onto an event payload\.$/,
+      ),
+    })
   })
 
-  it('accepts an array-free plain object payload', async () => {
-    await expect(
+  it('throws when an adapter calls `createEvent` with a non-object payload', function*({ expect }) {
+    const message = yield* Effect.promise(() =>
+      rejectionMessage(() =>
+        propertyTest(counterMachine, {
+          adapter: {
+            run: (request) =>
+              Effect.runPromise(
+                Effect.sync(() => {
+                  request.createEvent('INC', 42)
+                  return {
+                    runs: 1,
+                    exploration: {
+                      configuredRuns: 1,
+                      maximumSequenceLength: null,
+                    },
+                  }
+                }),
+              ),
+          },
+          events: { INC: fc.constant({}) },
+          invariant: () => {},
+        })
+      )
+    )
+
+    yield* expect({ message }).toEqual({
+      message:
+        'Property event "INC" generated a non-object payload (42). Event payloads must be plain objects; use a `resolve` function to map generated values onto an event payload.',
+    })
+  })
+
+  it('accepts an array-free plain object payload', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
       propertyTest(counterMachine, {
         seed: 4,
         numRuns: 5,
         maxCommands: 3,
         events: { INC: fc.record({}) },
         invariant: () => {},
-      }),
-    ).resolves.toBeDefined()
+      })
+    )
+
+    yield* expect(result.coverage.runs).toBe(5)
   })
 
-  it('rejects an array payload', async () => {
-    await expect(
-      propertyTest(counterMachine, {
-        seed: 5,
-        numRuns: 1,
-        maxCommands: 2,
-        events: { INC: fc.constant([1, 2]) as any },
-        invariant: () => {},
-      }),
-    ).rejects.toThrow(/non-object payload/)
+  it('rejects an array payload', function*({ expect }) {
+    const message = yield* Effect.promise(() =>
+      rejectionMessage(() =>
+        propertyTest(counterMachine, {
+          seed: 5,
+          numRuns: 1,
+          maxCommands: 2,
+          events: { INC: { generate: fc.constant([1, 2]) } },
+          invariant: () => {},
+        })
+      )
+    )
+
+    yield* expect({ message }).toEqual({
+      message: expect.stringMatching(
+        /^Property event case \["event-case","INC","default"\] generated a non-object payload \(1,2\)\. Event payloads must be plain objects; use a `resolve` function to map generated values onto an event payload\.$/,
+      ),
+    })
   })
 })
 
 describe('exploration metrics (STA-6403)', () => {
-  it('counts executed commands only, not rejected precondition checks', async () => {
-    const result = await propertyTest(counterMachine, {
-      adapter: scriptedAdapter(async (runner, caseId) => {
-        // six precondition checks, two executions
-        runner.canRun({ type: 'INC' }, caseId)
-        runner.canRun({ type: 'INC' }, caseId)
-        runner.canRun({ type: 'INC' }, caseId)
-        await runner.run({ type: 'INC' }, caseId)
-        runner.canRun({ type: 'INC' }, caseId)
-        runner.canRun({ type: 'INC' }, caseId)
-        runner.canRun({ type: 'INC' }, caseId)
-        await runner.run({ type: 'INC' }, caseId)
-      }),
-      events: { INC: fc.constant({}) },
-      invariant: () => {},
-    })
+  it('counts executed commands only, not rejected precondition checks', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        adapter: scriptedAdapter([
+          'check',
+          'check',
+          'check',
+          'run',
+          'check',
+          'check',
+          'check',
+          'run',
+        ]),
+        events: { INC: fc.constant({}) },
+        invariant: () => {},
+      })
+    )
 
-    expect(result.coverage.exploration.maximumObservedSequenceLength).toBe(2)
+    yield* expect(result.coverage.exploration.maximumObservedSequenceLength).toBe(2)
   })
 
-  it('reports `attemptedRuns` on the exploration output', async () => {
-    const result = await propertyTest(counterMachine, {
-      seed: 7,
-      numRuns: 5,
-      maxCommands: 3,
-      events: { INC: fc.record({}) },
-      invariant: () => {},
-    })
-
-    expect(result.coverage.exploration.attemptedRuns).toBe(
-      result.coverage.runs,
+  it('reports `attemptedRuns` on the exploration output', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 7,
+        numRuns: 5,
+        maxCommands: 3,
+        events: { INC: fc.record({}) },
+        invariant: () => {},
+      })
     )
-    expect(result.coverage.exploration.attemptedRuns).toBeGreaterThan(0)
-    expect(
-      result.coverage.exploration.frontiers.reduce(
+
+    yield* expect({
+      runs: result.coverage.runs,
+      attemptedRuns: result.coverage.exploration.attemptedRuns,
+      frontierAttemptedRuns: result.coverage.exploration.frontiers.reduce(
         (total, frontier) => total + frontier.attemptedRuns,
         0,
       ),
-    ).toBe(result.coverage.exploration.attemptedRuns)
+    }).toEqual({ runs: 5, attemptedRuns: 5, frontierAttemptedRuns: 5 })
   })
 })
 
 describe('replay (STA-6407)', () => {
-  it('never masks the underlying failure with a fixture-construction error', async () => {
-    let failure!: ModelTestFailure
-    try {
-      await propertyTest(counterMachine, {
-        adapter: scriptedAdapter(async (runner, caseId) => {
-          runner.canRun({ type: 'INC' }, caseId)
-          await runner.run({ type: 'INC' }, caseId)
-        }),
+  it('never masks the underlying failure with a fixture-construction error', function*({ expect }) {
+    const failure = yield* rejectionOf(() =>
+      propertyTest(counterMachine, {
+        adapter: scriptedAdapter(['check', 'run']),
         events: { INC: fc.constant({}) },
         start: {
-          snapshot: counterMachine.getInitialSnapshot(undefined as any) as any,
+          snapshot: counterMachine.getInitialSnapshot(),
           serializeSnapshot: () => {
             throw new Error('serializeSnapshot exploded')
           },
@@ -380,31 +484,42 @@ describe('replay (STA-6407)', () => {
           }
         },
       })
-    } catch (error) {
-      failure = error as ModelTestFailure
-    }
+    )
 
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    // the real cause survives; only the fixture is dropped
-    expect((failure.cause as Error).message).toBe('count must stay at zero')
-    expect(failure.fixture).toBeUndefined()
+    const cause = failure instanceof ModelTestFailure ? failure.cause : undefined
+
+    yield* expect({
+      isModelTestFailure: failure instanceof ModelTestFailure,
+      causeMessage: cause instanceof Error ? cause.message : undefined,
+      fixture: failure instanceof ModelTestFailure ? failure.fixture : 'not a ModelTestFailure',
+    }).toEqual({
+      isModelTestFailure: true,
+      causeMessage: 'count must stay at zero',
+      fixture: undefined,
+    })
   })
 
-  it('throws a plain error when a `start.serializeSnapshot` function is missing', async () => {
-    await expect(
-      propertyTest(counterMachine, {
-        seed: 8,
-        numRuns: 1,
-        events: { INC: fc.record({}) },
-        start: {
-          snapshot: counterMachine.getInitialSnapshot(undefined as any) as any,
-        } as any,
-        invariant: () => {},
-      }),
-    ).rejects.toThrow('start.serializeSnapshot')
+  it('throws a plain error when a `start.serializeSnapshot` function is missing', function*({ expect }) {
+    const message = yield* Effect.promise(() =>
+      rejectionMessage(() =>
+        propertyTest(counterMachine, {
+          seed: 8,
+          numRuns: 1,
+          events: { INC: fc.record({}) },
+          start: {
+            snapshot: counterMachine.getInitialSnapshot(),
+          } as unknown as ReplayStart,
+          invariant: () => {},
+        })
+      )
+    )
+
+    yield* expect({ message }).toEqual({
+      message: 'Property tests starting from a snapshot require a `start.serializeSnapshot` function',
+    })
   })
 
-  it('reproduces a reference-oracle divergence when `reference` is passed through', async () => {
+  it('reproduces a reference-oracle divergence when `reference` is passed through', function*({ expect }) {
     const machine = createMachine({
       id: 'p0-reference',
       schemas: {
@@ -422,19 +537,17 @@ describe('replay (STA-6407)', () => {
       create: () => {
         let count = 0
         return {
-          transition: (event: any) => {
-            // deliberately wrong
+          transition: (event: { value: number }) => {
             count += event.value + 1
           },
           read: () => count,
         }
       },
-      projectModel: (snapshot: any) => snapshot.context.count,
+      projectModel: (snapshot: { context: { count: number } }) => snapshot.context.count,
     }
 
-    let failure!: ModelTestFailure
-    try {
-      await propertyTest(machine, {
+    const failure = yield* rejectionOf(() =>
+      propertyTest(machine, {
         seed: 9,
         numRuns: 20,
         maxCommands: 4,
@@ -442,27 +555,53 @@ describe('replay (STA-6407)', () => {
         reference,
         invariant: () => {},
       })
-    } catch (error) {
-      failure = error as ModelTestFailure
+    )
+
+    const fixture = fixtureOf(failure)
+
+    yield* expect({
+      isModelTestFailure: failure instanceof ModelTestFailure,
+      fixture,
+    }).toMatchObject({
+      isModelTestFailure: true,
+      fixture: { formatVersion: 2, machine: { id: 'p0-reference' } },
+    })
+
+    if (fixture === undefined) {
+      throw new Error('expected the campaign to fail with a replay fixture')
     }
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    expect(failure.fixture).toBeDefined()
 
-    // without the reference, the run is clean and replay reports non-reproduction
-    await expect(
-      replayTest(machine, failure.fixture!, { invariant: () => {} }),
-    ).rejects.toThrow(/did not reproduce the recorded failure/)
+    const notReproduced = yield* rejectionOf(() => replayTest(machine, fixture, { invariant: () => {} }))
 
-    // with the reference passed through, the divergence reproduces
-    const replayFailure = await replayTest(machine, failure.fixture!, {
-      invariant: () => {},
-      reference,
-    }).catch((error) => error)
-    expect(replayFailure).toBeInstanceOf(ModelTestFailure)
-    expect(replayFailure.cause).toMatchObject({ referenceMatches: false })
+    yield* expect({
+      isReplayNotReproducedError: notReproduced instanceof ReplayNotReproducedError,
+      step: notReproduced instanceof ReplayNotReproducedError ? notReproduced.step : undefined,
+      fixtureStep: fixture.failedAt,
+      message: notReproduced instanceof Error ? notReproduced.message : undefined,
+    }).toEqual({
+      isReplayNotReproducedError: true,
+      step: fixture.failedAt,
+      fixtureStep: fixture.failedAt,
+      message: `Property replay did not reproduce the recorded failure at step ${fixture.failedAt}`,
+    })
+
+    const replayFailure = yield* rejectionOf(() =>
+      replayTest(machine, fixture, {
+        invariant: () => {},
+        reference,
+      })
+    )
+
+    yield* expect({
+      isModelTestFailure: replayFailure instanceof ModelTestFailure,
+      cause: replayFailure instanceof ModelTestFailure ? replayFailure.cause : undefined,
+    }).toMatchObject({
+      isModelTestFailure: true,
+      cause: { referenceMatches: false },
+    })
   })
 
-  it('reproduces an SUT divergence when `sut` is passed through', async () => {
+  it('reproduces an SUT divergence when `sut` is passed through', function*({ expect }) {
     const machine = createMachine({
       id: 'p0-sut',
       schemas: {
@@ -480,19 +619,17 @@ describe('replay (STA-6407)', () => {
       create: () => {
         let count = 0
         return {
-          send: (event: any) => {
-            // deliberately wrong
+          send: (event: { value: number }) => {
             count += event.value * 2
           },
           read: () => count,
         }
       },
-      projectModel: (snapshot: any) => snapshot.context.count,
+      projectModel: (snapshot: { context: { count: number } }) => snapshot.context.count,
     }
 
-    let failure!: ModelTestFailure
-    try {
-      await propertyTest(machine, {
+    const failure = yield* rejectionOf(() =>
+      propertyTest(machine, {
         seed: 10,
         numRuns: 20,
         maxCommands: 4,
@@ -500,95 +637,135 @@ describe('replay (STA-6407)', () => {
         sut,
         invariant: () => {},
       })
-    } catch (error) {
-      failure = error as ModelTestFailure
-    }
-    expect(failure).toBeInstanceOf(ModelTestFailure)
+    )
 
-    const replayFailure = await replayTest(machine, failure.fixture!, {
-      invariant: () => {},
-      sut,
-    }).catch((error) => error)
-    expect(replayFailure).toBeInstanceOf(ModelTestFailure)
-    expect(replayFailure.cause).toMatchObject({ sutMatches: false })
+    const fixture = fixtureOf(failure)
+
+    yield* expect({
+      isModelTestFailure: failure instanceof ModelTestFailure,
+      fixture,
+    }).toMatchObject({
+      isModelTestFailure: true,
+      fixture: { formatVersion: 2, machine: { id: 'p0-sut' } },
+    })
+
+    if (fixture === undefined) {
+      throw new Error('expected the campaign to fail with a replay fixture')
+    }
+
+    const replayFailure = yield* rejectionOf(() =>
+      replayTest(machine, fixture, {
+        invariant: () => {},
+        sut,
+      })
+    )
+
+    yield* expect({
+      isModelTestFailure: replayFailure instanceof ModelTestFailure,
+      cause: replayFailure instanceof ModelTestFailure ? replayFailure.cause : undefined,
+    }).toMatchObject({
+      isModelTestFailure: true,
+      cause: { sutMatches: false },
+    })
   })
 })
 
 describe('defaultEquivalent (STA-6407)', () => {
-  it('compares structurally, ignoring key order', () => {
-    expect(defaultEquivalent({ a: 1, b: 2 }, { b: 2, a: 1 })).toBe(true)
-    expect(defaultEquivalent({ a: 1 }, { a: 1, b: undefined })).toBe(false)
-    expect(defaultEquivalent([1, [2, 3]], [1, [2, 3]])).toBe(true)
-    expect(defaultEquivalent([1, 2], [2, 1])).toBe(false)
+  it('compares structurally, ignoring key order', function*({ expect }) {
+    yield* expect({
+      reorderedKeys: defaultEquivalent({ a: 1, b: 2 }, { b: 2, a: 1 }),
+      extraUndefinedKey: defaultEquivalent({ a: 1 }, { a: 1, b: undefined }),
+      nestedArrays: defaultEquivalent([1, [2, 3]], [1, [2, 3]]),
+      reorderedArray: defaultEquivalent([1, 2], [2, 1]),
+    }).toEqual({
+      reorderedKeys: true,
+      extraUndefinedKey: false,
+      nestedArrays: true,
+      reorderedArray: false,
+    })
   })
 
-  it('is cycle-safe', () => {
-    const left: any = { name: 'node' }
+  it('is cycle-safe', function*({ expect }) {
+    const left: { name: string; self?: unknown } = { name: 'node' }
     left.self = left
-    const right: any = { name: 'node' }
+    const right: { name: string; self?: unknown } = { name: 'node' }
     right.self = right
-    expect(defaultEquivalent(left, right)).toBe(true)
 
-    const other: any = { name: 'other' }
+    const other: { name: string; self?: unknown } = { name: 'other' }
     other.self = other
-    expect(defaultEquivalent(left, other)).toBe(false)
+
+    yield* expect({
+      sameShapeCycles: defaultEquivalent(left, right),
+      differentNames: defaultEquivalent(left, other),
+    }).toEqual({ sameShapeCycles: true, differentNames: false })
   })
 
-  it('handles values `JSON.stringify` cannot distinguish', () => {
-    // `JSON.stringify` turns all of these into `null` or drops them
-    expect(defaultEquivalent(NaN, NaN)).toBe(true)
-    expect(defaultEquivalent(undefined, null)).toBe(false)
-    expect(
-      defaultEquivalent(
+  it('handles values `JSON.stringify` cannot distinguish', function*({ expect }) {
+    yield* expect({
+      nan: defaultEquivalent(NaN, NaN),
+      undefinedVersusNull: defaultEquivalent(undefined, null),
+      equalDates: defaultEquivalent(
         DateTime.toDate(DateTime.makeUnsafe(0)),
         DateTime.toDate(DateTime.makeUnsafe(0)),
       ),
-    ).toBe(true)
-    expect(
-      defaultEquivalent(
+      differentDates: defaultEquivalent(
         DateTime.toDate(DateTime.makeUnsafe(0)),
         DateTime.toDate(DateTime.makeUnsafe(1)),
       ),
-    ).toBe(false)
-    expect(defaultEquivalent(new Set([1, 2]), new Set([2, 1]))).toBe(true)
-    expect(defaultEquivalent(new Map([['a', 1]]), new Map([['a', 1]]))).toBe(
-      true,
-    )
-    expect(defaultEquivalent(new Map([['a', 1]]), new Map([['a', 2]]))).toBe(
-      false,
-    )
+      reorderedSet: defaultEquivalent(new Set([1, 2]), new Set([2, 1])),
+      equalMaps: defaultEquivalent(new Map([['a', 1]]), new Map([['a', 1]])),
+      differentMapValues: defaultEquivalent(
+        new Map([['a', 1]]),
+        new Map([['a', 2]]),
+      ),
+    }).toEqual({
+      nan: true,
+      undefinedVersusNull: false,
+      equalDates: true,
+      differentDates: false,
+      reorderedSet: true,
+      equalMaps: true,
+      differentMapValues: false,
+    })
   })
 })
 
 describe('extractReplayPath (STA-6407)', () => {
-  it('prefers the `metadataForReplay()` accessor', () => {
+  it('prefers the `metadataForReplay()` accessor', function*({ expect }) {
     const counterexample = {
       metadataForReplay: () => 'replayPath="AAAAA:H"',
       toString: () => 'cmd1,cmd2 /*replayPath="WRONG"*/',
     }
-    expect(extractReplayPath(counterexample)).toBe('AAAAA:H')
+
+    yield* expect(extractReplayPath(counterexample)).toBe('AAAAA:H')
   })
 
-  it('falls back to parsing `toString()`', () => {
+  it('falls back to parsing `toString()`', function*({ expect }) {
     const counterexample = {
       toString: () => 'INC(),INC() /*replayPath="BBBB:C"*/',
     }
-    expect(extractReplayPath(counterexample)).toBe('BBBB:C')
+
+    yield* expect(extractReplayPath(counterexample)).toBe('BBBB:C')
   })
 
-  it('returns undefined when no replay path is present', () => {
-    expect(extractReplayPath(undefined)).toBeUndefined()
-    expect(extractReplayPath(null)).toBeUndefined()
-    expect(
-      extractReplayPath({ toString: () => 'INC(),INC()' }),
-    ).toBeUndefined()
-    expect(
-      extractReplayPath({ metadataForReplay: () => '', toString: () => '' }),
-    ).toBeUndefined()
+  it('returns undefined when no replay path is present', function*({ expect }) {
+    yield* expect({
+      undefinedArgument: extractReplayPath(undefined),
+      nullArgument: extractReplayPath(null),
+      noMetadata: extractReplayPath({ toString: () => 'INC(),INC()' }),
+      emptyMetadata: extractReplayPath({
+        metadataForReplay: () => '',
+        toString: () => '',
+      }),
+    }).toEqual({
+      undefinedArgument: undefined,
+      nullArgument: undefined,
+      noMetadata: undefined,
+      emptyMetadata: undefined,
+    })
   })
 
-  it('matches the shape fast-check actually produces', () => {
-    // pinned against the real `fc.commands` counterexample shape
+  it('matches the shape fast-check actually produces', function*({ expect }) {
     const arbitrary = fc.commands<{ ran: boolean }, undefined>([
       fc.constant({
         check: () => true,
@@ -607,94 +784,106 @@ describe('extractReplayPath (STA-6407)', () => {
       { seed: 12, numRuns: 50 },
     )
 
-    expect(result.failed).toBe(true)
     const replayPath = extractReplayPath(result.counterexample?.[0])
-    expect(replayPath).toBeTypeOf('string')
-    expect(replayPath).not.toBe('')
-    if (replayPath === undefined) {
-      throw new Error('expected an extracted replay path')
-    }
-    // the extracted path round-trips into `fc.commands`
-    expect(() =>
-      fc.commands([fc.constant({ check: () => true, run: () => {} })], {
-        replayPath,
-      })
-    ).not.toThrow()
+    const replayPathIsString = typeof replayPath === 'string'
+
+    yield* expect({
+      failed: result.failed,
+      replayPathIsString,
+      replayPathIsNonEmpty: replayPathIsString && replayPath.length > 0,
+      roundTrips: returned(() =>
+        fc.commands(
+          [fc.constant({ check: () => true, run: () => {} })],
+          replayPath === undefined ? {} : {
+            replayPath,
+          },
+        )
+      ),
+    }).toEqual({
+      failed: true,
+      replayPathIsString: true,
+      replayPathIsNonEmpty: true,
+      roundTrips: true,
+    })
   })
 })
 
 describe('temporal coverage (STA-6400)', () => {
-  it('reports a bounded `eventually` whose `within` bound was never reached as inconclusive', async () => {
-    const result = await propertyTest(counterMachine, {
-      adapter: scriptedAdapter(async (runner, caseId) => {
-        runner.canRun({ type: 'INC' }, caseId)
-        await runner.run({ type: 'INC' }, caseId)
-      }),
-      events: { INC: fc.constant({}) },
-      temporal: [
-        {
-          type: 'eventually',
-          id: 'reach-fifty',
-          within: 50,
-          predicate: ({ snapshot }) => snapshot.context.count === 50,
-        },
-      ],
-      invariant: () => {},
-    })
+  it('reports a bounded `eventually` whose `within` bound was never reached as inconclusive', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        adapter: scriptedAdapter(['check', 'run']),
+        events: { INC: fc.constant({}) },
+        temporal: [
+          {
+            type: 'eventually',
+            id: 'reach-fifty',
+            within: 50,
+            predicate: ({ snapshot }) => snapshot.context.count === 50,
+          },
+        ],
+        invariant: () => {},
+      })
+    )
 
-    expect(result.coverage.temporal.inconclusive).toContain('reach-fifty')
-    expect(result.coverage.temporal.satisfied).not.toContain('reach-fifty')
-    expect(result.coverage.temporal.failed).toEqual([])
+    yield* expect({
+      inconclusive: result.coverage.temporal.inconclusive,
+      satisfied: result.coverage.temporal.satisfied,
+      failed: result.coverage.temporal.failed,
+    }).toEqual({ inconclusive: ['reach-fifty'], satisfied: [], failed: [] })
   })
 
-  it('reports a satisfied `eventually` as satisfied', async () => {
-    const result = await propertyTest(counterMachine, {
-      adapter: scriptedAdapter(async (runner, caseId) => {
-        runner.canRun({ type: 'INC' }, caseId)
-        await runner.run({ type: 'INC' }, caseId)
-      }),
-      events: { INC: fc.constant({}) },
-      temporal: [
-        {
-          type: 'eventually',
-          id: 'reach-one',
-          within: 50,
-          predicate: ({ snapshot }) => snapshot.context.count === 1,
-        },
-      ],
-      invariant: () => {},
-    })
+  it('reports a satisfied `eventually` as satisfied', function*({ expect }) {
+    const result = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        adapter: scriptedAdapter(['check', 'run']),
+        events: { INC: fc.constant({}) },
+        temporal: [
+          {
+            type: 'eventually',
+            id: 'reach-one',
+            within: 50,
+            predicate: ({ snapshot }) => snapshot.context.count === 1,
+          },
+        ],
+        invariant: () => {},
+      })
+    )
 
-    expect(result.coverage.temporal.satisfied).toEqual(['reach-one'])
-    expect(result.coverage.temporal.inconclusive).toEqual([])
-    expect(result.coverage.temporal.failed).toEqual([])
+    yield* expect({
+      satisfied: result.coverage.temporal.satisfied,
+      inconclusive: result.coverage.temporal.inconclusive,
+      failed: result.coverage.temporal.failed,
+    }).toEqual({ satisfied: ['reach-one'], inconclusive: [], failed: [] })
   })
 })
 
 describe('event descriptors', () => {
-  it('accepts a descriptor that only sets `generate`', async () => {
-    // `fc.constant({})` is an object with a `generate` *method*, so the
-    // descriptor form must be detected by `generate` not being a function.
-    const { coverage } = await propertyTest(counterMachine, {
-      seed: 21,
-      numRuns: 10,
-      maxCommands: 4,
-      events: { INC: { generate: fc.constant({}) } },
-      invariant: () => {},
-    })
+  it('accepts a descriptor that only sets `generate`', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 21,
+        numRuns: 10,
+        maxCommands: 4,
+        events: { INC: { generate: fc.constant({}) } },
+        invariant: () => {},
+      })
+    )
 
-    expect(coverage.generatedSteps).toBeGreaterThan(0)
+    yield* expect(coverage.generatedSteps).toBeGreaterThan(0)
   })
 
-  it('still treats a bare arbitrary as a generator', async () => {
-    const { coverage } = await propertyTest(counterMachine, {
-      seed: 21,
-      numRuns: 10,
-      maxCommands: 4,
-      events: { INC: fc.constant({}) },
-      invariant: () => {},
-    })
+  it('still treats a bare arbitrary as a generator', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 21,
+        numRuns: 10,
+        maxCommands: 4,
+        events: { INC: fc.constant({}) },
+        invariant: () => {},
+      })
+    )
 
-    expect(coverage.generatedSteps).toBeGreaterThan(0)
+    yield* expect(coverage.generatedSteps).toBeGreaterThan(0)
   })
 })

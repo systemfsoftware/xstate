@@ -1,4 +1,5 @@
-import { describe, expect, expectTypeOf, it, vi } from 'vitest'
+import { describe, expectTypeOf, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import {
   type ActorRefFromLogic,
   createActor,
@@ -20,7 +21,7 @@ const userLogic = createAsyncLogic({
 const registered = createAsyncLogic({ run: async () => 42 })
 
 describe('setup.createInvoke', () => {
-  it('runs an inline async source with schemas and narrowed state scope', async () => {
+  it('runs an inline async source with schemas and narrowed state scope', function*({ expect }) {
     const s = setup({
       schemas: { context: types<{ id: number | undefined; name: string }>() },
       states: {
@@ -33,7 +34,10 @@ describe('setup.createInvoke', () => {
         },
       },
     })
-    const source = vi.fn()
+    const sourceCalls: Array<{ id: number; label: string }> = []
+    const source = (input: { id: number; label: string }) => {
+      sourceCalls.push(input)
+    }
     const machine = s.createMachine({
       context: { id: 7, name: '' },
       initial: 'parent',
@@ -76,15 +80,22 @@ describe('setup.createInvoke', () => {
       },
     })
     initialTransition(machine)
-    expect(source).not.toHaveBeenCalled()
+    const callsBeforeStart = sourceCalls.length
     const actor = createActor(machine).start()
-    await waitFor(actor, (snapshot) => snapshot.matches({ parent: 'ready' }))
-    expect(source).toHaveBeenCalledExactlyOnceWith({ id: 7, label: 'David' })
-    expect(actor.getSnapshot().context.name).toBe('David')
+    yield* Effect.promise(() => waitFor(actor, (snapshot) => snapshot.matches({ parent: 'ready' })))
+    yield* expect({
+      callsBeforeStart,
+      calls: sourceCalls,
+      name: actor.getSnapshot().context.name,
+    }).toEqual({
+      callsBeforeStart: 0,
+      calls: [{ id: 7, label: 'David' }],
+      name: 'David',
+    })
     actor.stop()
   })
 
-  it('infers async return values independently alongside logic and named sources', async () => {
+  it('infers async return values independently alongside logic and named sources', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{ name: string; enabled: boolean; total: number }>(),
@@ -127,23 +138,32 @@ describe('setup.createInvoke', () => {
       ],
     })
     const actor = createActor(machine).start()
-    await waitFor(
-      actor,
-      (snapshot) =>
-        snapshot.context.name === 'David' &&
-        snapshot.context.enabled &&
-        snapshot.context.total === 42,
+    yield* Effect.promise(() =>
+      waitFor(
+        actor,
+        (snapshot) =>
+          snapshot.context.name === 'David' &&
+          snapshot.context.enabled &&
+          snapshot.context.total === 42,
+      )
     )
+    yield* expect(actor.getSnapshot().context).toEqual({
+      name: 'David',
+      enabled: true,
+      total: 42,
+    })
     actor.stop()
   })
 
-  it('cancels inline async sources on state exit and handles invocation timeouts', async () => {
+  it('cancels inline async sources on state exit and handles invocation timeouts', function*({ expect }) {
     const s = setup({ schemas: { events: { cancel: types<{}>() } } })
     let signal: AbortSignal | undefined
-    const source = vi.fn((args: { signal: AbortSignal }) => {
+    const sourceCalls: Array<{ signal: AbortSignal }> = []
+    const source = (args: { signal: AbortSignal }) => {
+      sourceCalls.push(args)
       signal = args.signal
       return new Promise<void>(() => {})
-    })
+    }
     const machine = s.createMachine({
       initial: 'loading',
       states: {
@@ -155,11 +175,15 @@ describe('setup.createInvoke', () => {
       },
     })
     initialTransition(machine)
-    expect(source).not.toHaveBeenCalled()
+    const callsBeforeStart = sourceCalls.length
     const actor = createActor(machine).start()
-    expect(source).toHaveBeenCalledTimes(1)
+    const callsAfterStart = sourceCalls.length
     actor.send({ type: 'cancel' })
-    expect(signal?.aborted).toBe(true)
+    yield* expect({
+      callsBeforeStart,
+      callsAfterStart,
+      aborted: signal?.aborted,
+    }).toEqual({ callsBeforeStart: 0, callsAfterStart: 1, aborted: true })
     actor.stop()
 
     const timeoutMachine = s.createMachine({
@@ -179,14 +203,17 @@ describe('setup.createInvoke', () => {
       },
     })
     const timeoutActor = createActor(timeoutMachine).start()
-    await waitFor(timeoutActor, (snapshot) => snapshot.matches('done'))
-    expect(signal?.aborted).toBe(true)
+    yield* Effect.promise(() => waitFor(timeoutActor, (snapshot) => snapshot.matches('done')))
+    yield* expect({ aborted: signal?.aborted }).toEqual({ aborted: true })
     timeoutActor.stop()
   })
 
-  it('preserves inline async errors and snapshot callbacks', async () => {
+  it('preserves inline async errors and snapshot callbacks', function*({ expect }) {
     const s = setup({ schemas: { context: types<{ code: number }>() } })
-    const snapshots = vi.fn()
+    const snapshotStatuses: string[] = []
+    const snapshots = (status: string) => {
+      snapshotStatuses.push(status)
+    }
     const machine = s.createMachine({
       context: { code: 0 },
       initial: 'loading',
@@ -218,13 +245,15 @@ describe('setup.createInvoke', () => {
       },
     })
     const actor = createActor(machine).start()
-    await waitFor(actor, (snapshot) => snapshot.matches('failed'))
-    expect(actor.getSnapshot().context.code).toBe(409)
-    expect(snapshots).toHaveBeenCalledWith('active')
+    yield* Effect.promise(() => waitFor(actor, (snapshot) => snapshot.matches('failed')))
+    yield* expect({
+      code: actor.getSnapshot().context.code,
+      snapshots: snapshotStatuses,
+    }).toEqual({ code: 409, snapshots: ['active'] })
     actor.stop()
   })
 
-  it('infers nested state context, state input and actor output alongside named actors', async () => {
+  it('infers nested state context, state input and actor output alongside named actors', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{
@@ -299,16 +328,21 @@ describe('setup.createInvoke', () => {
       },
     })
     const actor = createActor(machine).start()
-    await new Promise<void>((resolve) => {
-      actor.subscribe((snapshot) => {
-        if (snapshot.matches({ parent: 'ready' })) resolve()
+    yield* Effect.promise(() =>
+      new Promise<void>((resolve) => {
+        actor.subscribe((snapshot) => {
+          if (snapshot.matches({ parent: 'ready' })) resolve()
+        })
       })
+    )
+    yield* expect(actor.getSnapshot().context.user).toEqual({
+      id: 7,
+      name: 'David',
     })
-    expect(actor.getSnapshot().context.user).toEqual({ id: 7, name: 'David' })
     actor.stop()
   })
 
-  it('checks static and mapped actor input without widening from onDone', () => {
+  it('checks static and mapped actor input without widening from onDone', function*({ expect }) {
     const s = setup({ schemas: { context: types<{ id: number }>() } })
     if (false) {
       // @ts-expect-error id must be numeric
@@ -335,11 +369,17 @@ describe('setup.createInvoke', () => {
         },
       })
     }
+
+    const invoke = s.createInvoke({
+      src: userLogic,
+      input: { id: 7, label: 'David' },
+    })
+    yield* expect(invoke.src).toBe(userLogic)
   })
 
-  it('infers independently from actor factories inline in an invoke array', () => {
+  it('infers independently from actor factories inline in an invoke array', function*({ expect }) {
     const s = setup({ actors: { registered } })
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'parent',
       states: {
         parent: {
@@ -381,9 +421,12 @@ describe('setup.createInvoke', () => {
         },
       },
     })
+    yield* expect(initialTransition(machine)[0].value).toEqual({
+      parent: 'loading',
+    })
   })
 
-  it('retains ancestor refinements in descendants without setup contracts', () => {
+  it('retains ancestor refinements in descendants without setup contracts', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{ id: number | undefined }>(),
@@ -392,7 +435,7 @@ describe('setup.createInvoke', () => {
         parent: { schemas: { context: types<{ id: number }>() } },
       },
     })
-    s.createMachine({
+    const machine = s.createMachine({
       context: { id: 7 },
       initial: 'parent',
       states: {
@@ -416,9 +459,12 @@ describe('setup.createInvoke', () => {
         },
       },
     })
+    yield* expect(initialTransition(machine)[0].value).toEqual({
+      parent: 'loading',
+    })
   })
 
-  it('checks state targets, target input and target context inside helper callbacks', () => {
+  it('checks state targets, target input and target context inside helper callbacks', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{ user: { id: number; name: string } | undefined }>(),
@@ -433,7 +479,7 @@ describe('setup.createInvoke', () => {
         },
       },
     })
-    s.createMachine({
+    const machine = s.createMachine({
       context: { user: undefined },
       initial: 'loading',
       states: {
@@ -503,9 +549,11 @@ describe('setup.createInvoke', () => {
         },
       })
     }
+
+    yield* expect(initialTransition(machine)[0].value).toEqual('loading')
   })
 
-  it('checks target arrays and system registry contracts', () => {
+  it('checks target arrays and system registry contracts', function*({ expect }) {
     const s = setup({
       schemas: { context: types<{ x: number }>() },
       states: {
@@ -513,7 +561,7 @@ describe('setup.createInvoke', () => {
         ready: { schemas: { input: types<{ name: string }>() } },
       },
     })
-    s.createMachine({
+    const machine = s.createMachine({
       context: { x: 1 },
       initial: 'loading',
       states: {
@@ -591,9 +639,11 @@ describe('setup.createInvoke', () => {
         }),
       })
     }
+
+    yield* expect(initialTransition(machine)[0].value).toEqual('loading')
   })
 
-  it('types errors, snapshots and context mappers from the source logic', () => {
+  it('types errors, snapshots and context mappers from the source logic', function*({ expect }) {
     const logic = createAsyncLogic({
       schemas: { error: types<{ code: number }>() },
       run: async () => ({ name: 'David' }),
@@ -603,7 +653,7 @@ describe('setup.createInvoke', () => {
       actions: { log: (name: string) => {} },
       actors: { registered },
     })
-    s.createMachine({
+    const machine = s.createMachine({
       context: { name: '' },
       invoke: s.createInvoke({
         src: logic,
@@ -637,21 +687,21 @@ describe('setup.createInvoke', () => {
         },
       }),
     })
+    yield* expect(initialTransition(machine)[0].status).toEqual('active')
   })
 
-  it('preserves explicit child ids and logic compatibility', () => {
+  it('preserves explicit child ids and logic compatibility', function*({ expect }) {
     const s = setup({
       schemas: {
         children: { user: types<ActorRefFromLogic<typeof userLogic>>() },
       },
     })
-    s.createMachine({
-      invoke: s.createInvoke({
-        id: 'user',
-        src: userLogic,
-        input: { id: 7, label: 'David' },
-      }),
+    const invoke = s.createInvoke({
+      id: 'user',
+      src: userLogic,
+      input: { id: 7, label: 'David' },
     })
+    s.createMachine({ invoke })
     if (false) {
       // @ts-expect-error declared children require an id
       s.createInvoke({ src: userLogic, input: { id: 7, label: 'David' } })
@@ -667,9 +717,11 @@ describe('setup.createInvoke', () => {
         src: registered,
       })
     }
+
+    yield* expect(invoke.src).toBe(userLogic)
   })
 
-  it('starts machine-declared children under their ids with static and mapped input', async () => {
+  it('starts machine-declared children under their ids with static and mapped input', function*({ expect }) {
     const s = setup({ schemas: { context: types<{ id: number }>() } })
     const optionalLogic = createAsyncLogic({
       schemas: { input: types<{ label: string } | undefined>() },
@@ -717,29 +769,29 @@ describe('setup.createInvoke', () => {
     })
     const actor = createActor(machine).start()
     const children = actor.getSnapshot().children
-    expect(Object.keys(children).sort()).toEqual([
-      'mappedUser',
-      'optional',
-      'staticUser',
-    ])
-    await Promise.all([
-      waitFor(children.staticUser!, (snapshot) => snapshot.status === 'done'),
-      waitFor(children.mappedUser!, (snapshot) => snapshot.status === 'done'),
-      waitFor(children.optional!, (snapshot) => snapshot.status === 'done'),
-    ])
-    expect(children.staticUser!.getSnapshot().output).toEqual({
-      id: 1,
-      name: 'static',
+    const childKeys = Object.keys(children).sort()
+    yield* Effect.promise(() =>
+      Promise.all([
+        waitFor(children.staticUser!, (snapshot) => snapshot.status === 'done'),
+        waitFor(children.mappedUser!, (snapshot) => snapshot.status === 'done'),
+        waitFor(children.optional!, (snapshot) => snapshot.status === 'done'),
+      ])
+    )
+    yield* expect({
+      childKeys,
+      staticUser: children.staticUser!.getSnapshot().output,
+      mappedUser: children.mappedUser!.getSnapshot().output,
+      optional: children.optional!.getSnapshot().output,
+    }).toEqual({
+      childKeys: ['mappedUser', 'optional', 'staticUser'],
+      staticUser: { id: 1, name: 'static' },
+      mappedUser: { id: 7, name: 'mapped' },
+      optional: 'default',
     })
-    expect(children.mappedUser!.getSnapshot().output).toEqual({
-      id: 7,
-      name: 'mapped',
-    })
-    expect(children.optional!.getSnapshot().output).toBe('default')
     actor.stop()
   })
 
-  it('falls back to setup context when hoisted and preserves extended sources', () => {
+  it('falls back to setup context when hoisted and preserves extended sources', function*({ expect }) {
     const s = setup({
       schemas: { context: types<{ id: number | undefined }>() },
     }).extend({
@@ -758,10 +810,10 @@ describe('setup.createInvoke', () => {
         return {}
       },
     })
-    expect(invoke.src).toBe(userLogic)
+    yield* expect(invoke.src).toBe(userLogic)
   })
 
-  it('keeps state scope when extracting a state config by path', () => {
+  it('keeps state scope when extracting a state config by path', function*({ expect }) {
     const s = setup({
       schemas: { context: types<{ id: number | undefined }>() },
       states: {
@@ -788,14 +840,15 @@ describe('setup.createInvoke', () => {
         },
       }),
     })
-    s.createMachine({
+    const machine = s.createMachine({
       context: { id: 7 },
       initial: { target: 'loading', input: { label: 'David' } },
       states: { loading, ready: {} },
     })
+    yield* expect(initialTransition(machine)[0].value).toEqual('loading')
   })
 
-  it('infers machine-level input in root invocations', () => {
+  it('infers machine-level input in root invocations', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{ id: number }>(),
@@ -812,15 +865,25 @@ describe('setup.createInvoke', () => {
         },
       }),
     })
+    const probe = s.createMachine({
+      context: { id: 7 },
+      initial: 'a',
+      states: { a: {} },
+    })
+    yield* expect(
+      initialTransition(probe, { label: 'David' })[0].value,
+    ).toEqual('a')
   })
 
-  it('starts async work only when the actor runs and cancels it on state exit', () => {
+  it('starts async work only when the actor runs and cancels it on state exit', function*({ expect }) {
     const s = setup({ schemas: { events: { cancel: types<{}>() } } })
     let signal: AbortSignal | undefined
-    const run = vi.fn((args: { signal: AbortSignal }) => {
+    const runCalls: Array<{ signal: AbortSignal }> = []
+    const run = (args: { signal: AbortSignal }) => {
+      runCalls.push(args)
       signal = args.signal
       return new Promise<void>(() => {})
-    })
+    }
     const machine = s.createMachine({
       initial: 'loading',
       states: {
@@ -832,11 +895,15 @@ describe('setup.createInvoke', () => {
       },
     })
     initialTransition(machine)
-    expect(run).not.toHaveBeenCalled()
+    const callsBeforeStart = runCalls.length
     const actor = createActor(machine).start()
-    expect(run).toHaveBeenCalledTimes(1)
+    const callsAfterStart = runCalls.length
     actor.send({ type: 'cancel' })
-    expect(signal?.aborted).toBe(true)
+    yield* expect({
+      callsBeforeStart,
+      callsAfterStart,
+      aborted: signal?.aborted,
+    }).toEqual({ callsBeforeStart: 0, callsAfterStart: 1, aborted: true })
     actor.stop()
   })
 })

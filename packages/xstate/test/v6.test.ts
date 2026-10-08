@@ -1,9 +1,9 @@
-import { expect, it } from 'vitest'
+import { it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { initialTransition, transition } from '../src/index.js'
 import { createMachine } from '../src/index.js'
 
-it('should work with fn targets', () => {
+it('should work with fn targets', function*({ expect }) {
   const machine = createMachine({
     initial: 'active',
     states: {
@@ -20,16 +20,16 @@ it('should work with fn targets', () => {
 
   const [nextState] = transition(machine, initialState, { type: 'toggle' })
 
-  expect(nextState.value).toEqual('inactive')
+  yield* expect(nextState.value).toEqual('inactive')
 })
 
-it('should work with fn actions', () => {
+it('should work with fn actions', function*({ expect }) {
   const machine = createMachine({
     initial: 'active',
     states: {
       active: {
         on: {
-          toggle: (_, enq) => {
+          toggle: (_args, enq) => {
             enq.emit({ type: 'something' })
           },
         },
@@ -42,20 +42,22 @@ it('should work with fn actions', () => {
 
   const [, actions] = transition(machine, initialState, { type: 'toggle' })
 
-  expect(actions).toContainEqual(
-    expect.objectContaining({
-      type: 'something',
-    }),
+  yield* expect(actions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: 'something',
+      }),
+    ]),
   )
 })
 
-it('should work with both fn actions and target', () => {
+it('should work with both fn actions and target', function*({ expect }) {
   const machine = createMachine({
     initial: 'active',
     states: {
       active: {
         on: {
-          toggle: (_, enq) => {
+          toggle: (_args, enq) => {
             enq.emit({ type: 'something' })
 
             return {
@@ -74,16 +76,20 @@ it('should work with both fn actions and target', () => {
     type: 'toggle',
   })
 
-  expect(actions).toContainEqual(
-    expect.objectContaining({
-      type: 'something',
-    }),
-  )
-
-  expect(nextState.value).toEqual('inactive')
+  yield* expect({
+    actions,
+    value: nextState.value,
+  }).toEqual({
+    actions: expect.arrayContaining([
+      expect.objectContaining({
+        type: 'something',
+      }),
+    ]),
+    value: 'inactive',
+  })
 })
 
-it('should work with conditions', () => {
+it('should work with conditions', function*({ expect }) {
   const machine = createMachine({
     schemas: {
       context: z.object({
@@ -125,20 +131,6 @@ it('should work with conditions', () => {
     type: 'toggle',
   })
 
-  expect(actions).toContainEqual(
-    expect.objectContaining({
-      type: 'something',
-    }),
-  )
-
-  expect(actions).toContainEqual(
-    expect.objectContaining({
-      type: 'invalid',
-    }),
-  )
-
-  expect(nextState.value).toEqual('active')
-
   const [nextState2] = transition(machine, nextState, {
     type: 'increment',
   })
@@ -147,11 +139,28 @@ it('should work with conditions', () => {
     type: 'toggle',
   })
 
-  expect(nextState3.value).toEqual('inactive')
-
-  expect(actions3).toContainEqual(
-    expect.objectContaining({
-      type: 'something',
-    }),
-  )
+  yield* expect({
+    atActive: { actions, value: nextState.value },
+    atInactive: { actions: actions3, value: nextState3.value },
+  }).toEqual({
+    atActive: {
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          type: 'something',
+        }),
+        expect.objectContaining({
+          type: 'invalid',
+        }),
+      ]),
+      value: 'active',
+    },
+    atInactive: {
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          type: 'something',
+        }),
+      ]),
+      value: 'inactive',
+    },
+  })
 })

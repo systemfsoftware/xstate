@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
 import { createActor, createMachine } from '../src/index.js'
 
@@ -53,8 +53,8 @@ const lightMachine = createMachine({
 
 describe('machine', () => {
   describe('machine.states', () => {
-    it('should properly register machine states', () => {
-      expect(Object.keys(lightMachine.states)).toEqual([
+    it('should properly register machine states', function*({ expect }) {
+      yield* expect(Object.keys(lightMachine.states)).toEqual([
         'green',
         'yellow',
         'red',
@@ -63,8 +63,8 @@ describe('machine', () => {
   })
 
   describe('machine.events', () => {
-    it('should return the set of events accepted by machine', () => {
-      expect(lightMachine.events).toEqual([
+    it('should return the set of events accepted by machine', function*({ expect }) {
+      yield* expect(lightMachine.events).toEqual([
         'TIMER',
         'POWER_OUTAGE',
         'PED_COUNTDOWN',
@@ -73,7 +73,7 @@ describe('machine', () => {
   })
 
   describe('machine.config', () => {
-    it('state node config should reference original machine config', () => {
+    it('state node config should reference original machine config', function*({ expect }) {
       const machine = createMachine({
         initial: 'one',
         states: {
@@ -96,8 +96,6 @@ describe('machine', () => {
         throw new Error('expected a one config')
       }
 
-      expect(oneState.config).toBe(oneConfig)
-
       const deepState = oneState.states['deep']
       if (deepState === undefined) {
         throw new Error('expected a deep state')
@@ -108,18 +106,27 @@ describe('machine', () => {
         throw new Error('expected a deep config')
       }
 
-      expect(deepState.config).toBe(deepConfig)
+      const oneConfigIsSame = Object.is(oneState.config, oneConfig)
+      const deepConfigIsSame = Object.is(deepState.config, deepConfig)
 
       deepState.config.meta = 'testing meta'
 
-      expect(deepConfig.meta).toEqual('testing meta')
+      yield* expect({
+        oneConfigIsSame,
+        deepConfigIsSame,
+        deepConfigMeta: deepConfig.meta,
+      }).toEqual({
+        oneConfigIsSame: true,
+        deepConfigIsSame: true,
+        deepConfigMeta: 'testing meta',
+      })
     })
   })
 
   describe('machine.provide', () => {
     // https://github.com/davidkpiano/xstate/issues/674
-    it('should throw if initial state is missing in a compound state', () => {
-      expect(() => {
+    it('should throw if initial state is missing in a compound state', function*({ expect }) {
+      yield* expect(() => {
         createMachine({
           initial: 'first',
           states: {
@@ -131,38 +138,47 @@ describe('machine', () => {
             },
           },
         })
-      }).toThrow()
+      }).toThrow(
+        'No initial state specified for compound state node "#(machine).first". Try adding { initial: "second" } to the state config.',
+      )
     })
 
-    it('machines defined without context should have a default empty object for context', () => {
-      expect(createActor(createMachine({})).getSnapshot().context).toEqual({})
+    it('machines defined without context should have a default empty object for context', function*({
+      expect,
+    }) {
+      yield* expect(createActor(createMachine({})).getSnapshot().context).toEqual({})
     })
 
-    it('should lazily create context for all interpreter instances created from the same machine template created by `provide`', () => {
-      const machine = createMachine({
-        schemas: {
-          context: z.object({
-            foo: z.object({
-              prop: z.string(),
+    it(
+      'should lazily create context for all interpreter instances created from the same machine template created by `provide`',
+      function*({
+        expect,
+      }) {
+        const machine = createMachine({
+          schemas: {
+            context: z.object({
+              foo: z.object({
+                prop: z.string(),
+              }),
             }),
+          },
+          context: () => ({
+            foo: { prop: 'baz' },
           }),
-        },
-        context: () => ({
-          foo: { prop: 'baz' },
-        }),
-      })
+        })
 
-      const copiedMachine = machine.provide({})
+        const copiedMachine = machine.provide({})
 
-      const a = createActor(copiedMachine).start()
-      const b = createActor(copiedMachine).start()
+        const a = createActor(copiedMachine).start()
+        const b = createActor(copiedMachine).start()
 
-      expect(a.getSnapshot().context.foo).not.toBe(b.getSnapshot().context.foo)
-    })
+        yield* expect(a.getSnapshot().context.foo).not.toBe(b.getSnapshot().context.foo)
+      },
+    )
   })
 
   describe('machine function context', () => {
-    it('context from a function should be lazily evaluated', () => {
+    it('context from a function should be lazily evaluated', function*({ expect }) {
       const config = {
         initial: 'active',
         context: () => ({
@@ -178,14 +194,18 @@ describe('machine', () => {
       const initialState1 = createActor(testMachine1).getSnapshot()
       const initialState2 = createActor(testMachine2).getSnapshot()
 
-      expect(initialState1.context).not.toBe(initialState2.context)
-
-      expect(initialState1.context).toEqual({
-        foo: { bar: 'baz' },
-      })
-
-      expect(initialState2.context).toEqual({
-        foo: { bar: 'baz' },
+      yield* expect({
+        derivedContextsAreDistinct: initialState1.context !== initialState2.context,
+        firstContext: initialState1.context,
+        secondContext: initialState2.context,
+      }).toEqual({
+        derivedContextsAreDistinct: true,
+        firstContext: {
+          foo: { bar: 'baz' },
+        },
+        secondContext: {
+          foo: { bar: 'baz' },
+        },
       })
     })
   })
@@ -230,15 +250,15 @@ describe('machine', () => {
       },
     })
 
-    it('should resolve the state value', () => {
+    it('should resolve the state value', function*({ expect }) {
       const resolvedState = resolveMachine.resolveState({ value: 'foo' })
 
-      expect(resolvedState.value).toEqual({
+      yield* expect(resolvedState.value).toEqual({
         foo: { one: { a: 'aa', b: 'bb' } },
       })
     })
 
-    it('should resolve `status: done`', () => {
+    it('should resolve `status: done`', function*({ expect }) {
       const machine = createMachine({
         initial: 'foo',
         states: {
@@ -253,12 +273,12 @@ describe('machine', () => {
 
       const resolvedState = machine.resolveState({ value: 'bar' })
 
-      expect(resolvedState.status).toBe('done')
+      yield* expect(resolvedState.status).toBe('done')
     })
   })
 
   describe('initial state', () => {
-    it('should follow always transition', () => {
+    it('should follow always transition', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -269,34 +289,34 @@ describe('machine', () => {
         },
       })
 
-      expect(createActor(machine).getSnapshot().value).toBe('b')
+      yield* expect(createActor(machine).getSnapshot().value).toBe('b')
     })
   })
 
   describe('versioning', () => {
-    it('should allow a version to be specified', () => {
+    it('should allow a version to be specified', function*({ expect }) {
       const versionMachine = createMachine({
         id: 'version',
         version: '1.0.4',
         states: {},
       })
 
-      expect(versionMachine.version).toEqual('1.0.4')
+      yield* expect(versionMachine.version).toEqual('1.0.4')
     })
   })
 
   describe('id', () => {
-    it('should represent the ID', () => {
+    it('should represent the ID', function*({ expect }) {
       const idMachine = createMachine({
         id: 'some-id',
         initial: 'idle',
         states: { idle: {} },
       })
 
-      expect(idMachine.id).toEqual('some-id')
+      yield* expect(idMachine.id).toEqual('some-id')
     })
 
-    it('should represent the ID (state node)', () => {
+    it('should represent the ID (state node)', function*({ expect }) {
       const idMachine = createMachine({
         id: 'some-id',
         initial: 'idle',
@@ -311,10 +331,12 @@ describe('machine', () => {
       if (idleState === undefined) {
         throw new Error('expected an idle state')
       }
-      expect(idleState.id).toEqual('idle')
+      yield* expect(idleState.id).toEqual('idle')
     })
 
-    it('should use the key as the ID if no ID is provided (state node)', () => {
+    it('should use the key as the ID if no ID is provided (state node)', function*({
+      expect,
+    }) {
       const noStateNodeIDMachine = createMachine({
         id: 'some-id',
         initial: 'idle',
@@ -325,14 +347,13 @@ describe('machine', () => {
       if (idleState === undefined) {
         throw new Error('expected an idle state')
       }
-      expect(idleState.id).toEqual('some-id.idle')
+      yield* expect(idleState.id).toEqual('some-id.idle')
     })
   })
 
   describe('combinatorial machines', () => {
-    it('should support combinatorial machines (single-state)', () => {
+    it('should support combinatorial machines (single-state)', function*({ expect }) {
       const testMachine = createMachine({
-        // types: {} as { context: { value: number } },
         schemas: {
           context: z.object({ value: z.number() }),
         },
@@ -347,33 +368,36 @@ describe('machine', () => {
       })
 
       const actorRef = createActor(testMachine)
-      expect(actorRef.getSnapshot().value).toEqual({})
+      const initialValue = actorRef.getSnapshot().value
 
       actorRef.start()
       actorRef.send({ type: 'INC' })
 
-      expect(actorRef.getSnapshot().context.value).toEqual(43)
+      yield* expect({
+        initialValue,
+        contextValue: actorRef.getSnapshot().context.value,
+      }).toEqual({ initialValue: {}, contextValue: 43 })
     })
   })
 
-  it('should pass through schemas', () => {
+  it('should pass through schemas', function*({ expect }) {
+    const contextSchema = z.object({ count: z.number() })
     const machine = createMachine({
       schemas: {
-        context: z.object({ count: z.number() }),
+        context: contextSchema,
       },
       context: () => ({ count: 42 }),
     })
 
-    expect(machine.schemas).toEqual(
-      expect.objectContaining({
-        context: expect.anything(),
-      }),
-    )
+    yield* expect({
+      keys: Object.keys(machine.schemas ?? {}),
+      contextIsDeclaredSchema: Object.is(machine.schemas?.context, contextSchema),
+    }).toEqual({ keys: ['context'], contextIsDeclaredSchema: true })
   })
 })
 
 describe('StateNode', () => {
-  it('should list transitions', () => {
+  it('should list transitions', function*({ expect }) {
     const greenNode = lightMachine.states['green']
     if (greenNode === undefined) {
       throw new Error('expected a green state node')
@@ -381,7 +405,7 @@ describe('StateNode', () => {
 
     const transitions = greenNode.transitions
 
-    expect([...transitions.keys()]).toEqual([
+    yield* expect([...transitions.keys()]).toEqual([
       'TIMER',
       'POWER_OUTAGE',
       'FORBIDDEN_EVENT',
@@ -390,7 +414,7 @@ describe('StateNode', () => {
 })
 
 describe('typestates', () => {
-  it('testing', () => {
+  it('testing', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -424,6 +448,6 @@ describe('typestates', () => {
       },
     })
 
-    machine.states
+    yield* expect(Object.keys(machine.states)).toEqual(['active', 'inactive'])
   })
 })

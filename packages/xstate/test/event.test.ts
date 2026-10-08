@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import { type AnyActorRef, createActor, createMachine } from '../src/index.js'
 
 describe('events', () => {
-  it('should be able to respond to sender by sending self', async () => {
+  it.live('should be able to respond to sender by sending self', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
+    let senderDefined = false
     const authServerMachine = createMachine({
       // types: {
       //   events: {} as { type: 'CODE'; sender: AnyActorRef }
@@ -20,7 +22,7 @@ describe('events', () => {
         waitingForCode: {
           on: {
             CODE: ({ event }, enq) => {
-              expect(event.sender).toBeDefined()
+              senderDefined = event.sender !== undefined
 
               enq(() => {
                 setTimeout(() => {
@@ -67,12 +69,14 @@ describe('events', () => {
 
     service.send({ type: 'AUTH' })
 
-    return promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect({ senderDefined }).toEqual({ senderDefined: true })
   })
 })
 
 describe('nested transitions', () => {
-  it('only take the transition of the most inner matching event', () => {
+  it('only take the transition of the most inner matching event', function*({ expect }) {
     interface SignInContext {
       email: string
       password: string
@@ -144,7 +148,9 @@ describe('nested transitions', () => {
     actorRef.send({ type: 'changePassword', password })
 
     const snapshot = actorRef.getSnapshot()
-    expect(snapshot.value).toEqual({ passwordField: 'hidden' })
-    expect(snapshot.context).toEqual({ password, email: '' })
+    yield* expect({ value: snapshot.value, context: snapshot.context }).toEqual({
+      value: { passwordField: 'hidden' },
+      context: { password, email: '' },
+    })
   })
 })

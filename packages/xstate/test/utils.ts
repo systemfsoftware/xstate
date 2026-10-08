@@ -1,9 +1,9 @@
+import { it } from '@systemfsoftware/vitest'
 import type { Observable } from 'rxjs'
-import { expect, it } from 'vitest'
 import {
   type AnyMachineSnapshot,
   type AnyStateMachine,
-  matchesState,
+  pathToStateValue,
   type StateValue,
   transition,
 } from '../src/index.js'
@@ -67,18 +67,19 @@ export function testAll(
             toState,
           )
         } on ${eventTypes}`,
-        () => {
+        function*({ expect }) {
           const resultState = testMultiTransition(machine, fromState, eventTypes)
 
           if (toState === undefined) {
-            // undefined means that the state didn't transition
-            expect(resultState.value).toEqual(
+            yield* expect(resultState.value).toEqual(
               resolveSerializedStateValue(machine, fromState).value,
             )
           } else if (typeof toState === 'string') {
-            expect(matchesState(toState, resultState.value)).toBeTruthy()
+            yield* expect(resultState.value).toEqual(
+              pathToStateValue(toState.split('.')),
+            )
           } else {
-            expect(resultState.value).toEqual(toState)
+            yield* expect(resultState.value).toEqual(toState)
           }
         },
       )

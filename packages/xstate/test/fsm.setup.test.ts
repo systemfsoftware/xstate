@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { setup, types } from '../src/fsm/index.js'
 
 type User = { id: string }
@@ -6,7 +6,9 @@ type LoadingContext = { status: 'loading' }
 type LoadedContext = { status: 'loaded'; user: User }
 
 describe('xstate/fsm setup', () => {
-  it('uses schemas for typed events and correlated state snapshots', () => {
+  it('uses schemas for typed events and correlated state snapshots', function*({
+    expect,
+  }) {
     const app = setup({
       schemas: {
         context: types<LoadingContext | LoadedContext>(),
@@ -58,41 +60,18 @@ describe('xstate/fsm setup', () => {
       },
     })
 
-    expect(machine.initialState).toEqual({
-      status: 'active',
-      value: 'loading',
-      context: { status: 'loading' },
-    })
-
-    expect(
-      machine.transition(machine.initialState, { type: 'retry' })[0],
-    ).toEqual({
-      status: 'active',
-      value: 'loading',
-      context: { status: 'loading' },
-    })
-
-    expect(
-      machine.transition(machine.initialState, { type: 'load' })[0],
-    ).toEqual({
-      status: 'active',
-      value: 'loaded',
-      context: { status: 'loaded', user: { id: 'static' } },
-    })
+    const initial = machine.initialState
+    const retry = machine.transition(machine.initialState, { type: 'retry' })[0]
+    const load = machine.transition(machine.initialState, { type: 'load' })[0]
 
     const [next] = machine.transition(machine.initialState, {
       type: 'resolve',
       user: { id: '1' },
     })
 
-    expect(next).toEqual({
-      status: 'active',
-      value: 'loaded',
-      context: { status: 'loaded', user: { id: '1' } },
-    })
-
+    let loadedUserId: string | undefined
     if (next.value === 'loaded') {
-      expect(next.context.user.id).toBe('1')
+      loadedUserId = next.context.user.id
       // @ts-expect-error loaded state context has no loading-only shape
       next.context.status satisfies 'loading'
     }
@@ -101,9 +80,35 @@ describe('xstate/fsm setup', () => {
     machine.transition(machine.initialState, { type: 'unknown' })
     // @ts-expect-error event payload must match its schema
     machine.transition(machine.initialState, { type: 'resolve', user: 1 })
+
+    yield* expect({ initial, retry, load, next, loadedUserId }).toEqual({
+      initial: {
+        status: 'active',
+        value: 'loading',
+        context: { status: 'loading' },
+      },
+      retry: {
+        status: 'active',
+        value: 'loading',
+        context: { status: 'loading' },
+      },
+      load: {
+        status: 'active',
+        value: 'loaded',
+        context: { status: 'loaded', user: { id: 'static' } },
+      },
+      next: {
+        status: 'active',
+        value: 'loaded',
+        context: { status: 'loaded', user: { id: '1' } },
+      },
+      loadedUserId: '1',
+    })
   })
 
-  it('requires context when entering a state with a different schema', () => {
+  it('requires context when entering a state with a different schema', function*({
+    expect,
+  }) {
     const app = setup({
       states: {
         loading: { schemas: { context: types<LoadingContext>() } },
@@ -112,7 +117,7 @@ describe('xstate/fsm setup', () => {
     })
 
     // @ts-expect-error a declared context schema makes initial context required
-    app.createFSM({
+    const missingContext = app.createFSM({
       initial: 'loading',
       states: { loading: {}, loaded: {} },
     })
@@ -161,9 +166,19 @@ describe('xstate/fsm setup', () => {
         loaded: {},
       },
     })
+
+    yield* expect(missingContext.initialState).toEqual({
+      status: 'active',
+      value: 'loading',
+      context: {},
+      output: undefined,
+      error: undefined,
+    })
   })
 
-  it('combines root context with a partial state context schema', () => {
+  it('combines root context with a partial state context schema', function*({
+    expect,
+  }) {
     const app = setup({
       schemas: {
         context: types<{ requestId: string; draft?: string }>(),
@@ -213,7 +228,7 @@ describe('xstate/fsm setup', () => {
       next.context.draft satisfies string
     }
 
-    expect(next).toEqual({
+    yield* expect(next).toEqual({
       status: 'active',
       value: 'reviewing',
       context: { requestId: 'req-1', draft: 'Ready' },

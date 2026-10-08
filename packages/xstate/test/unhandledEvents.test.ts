@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
 import {
   createActor,
   createMachine,
@@ -22,47 +22,48 @@ const machine = createMachine({
   },
 })
 
-let warn: ReturnType<typeof vi.spyOn>
-beforeEach(() => {
-  warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-})
-afterEach(() => {
-  warn.mockRestore()
-})
-
-describe('unhandled events', () => {
-  it('transition() returns the same snapshot reference and no effects for an unhandled event', () => {
+describe('unhandled events', (it) => {
+  it('transition() returns the same snapshot reference and no effects for an unhandled event', function*({ expect }) {
     const [snapshot] = initialTransition(machine)
     const result = transition(machine, snapshot, { type: 'UNKNOWN' } as any)
 
-    expect(result[0]).toBe(snapshot)
-    expect(result[1]).toEqual([])
-    expect(isUnhandled(snapshot, result)).toBe(true)
+    yield* expect({
+      sameSnapshot: result[0] === snapshot,
+      effects: result[1],
+      unhandled: isUnhandled(snapshot, result),
+    }).toEqual({ sameSnapshot: true, effects: [], unhandled: true })
   })
 
-  it('transition() returns a new snapshot object for a handled event that changes nothing', () => {
+  it('transition() returns a new snapshot object for a handled event that changes nothing', function*({ expect }) {
     const [snapshot] = initialTransition(machine)
     const result = transition(machine, snapshot, { type: 'NOOP' })
 
-    expect(result[0]).not.toBe(snapshot)
-    expect(result[0].value).toBe('a')
-    expect(isUnhandled(snapshot, result)).toBe(false)
+    yield* expect({
+      sameSnapshot: result[0] === snapshot,
+      value: result[0].value,
+      unhandled: isUnhandled(snapshot, result),
+    }).toEqual({ sameSnapshot: false, value: 'a', unhandled: false })
   })
 
-  it('calls onUnhandledEvent with the event and unchanged snapshot', () => {
-    const onUnhandledEvent = vi.fn()
+  it('calls onUnhandledEvent with the event and unchanged snapshot', function*({ expect }) {
+    const calls: Array<[unknown, unknown]> = []
+    const onUnhandledEvent = (event: unknown, snapshot: unknown) => {
+      calls.push([event, snapshot])
+    }
     const actor = createActor(machine, { onUnhandledEvent }).start()
     const snapshot = actor.getSnapshot()
     actor.send({ type: 'UNKNOWN' } as any)
 
-    expect(onUnhandledEvent).toHaveBeenCalledExactlyOnceWith(
-      { type: 'UNKNOWN' },
-      snapshot,
-    )
-    expect(actor.getSnapshot()).toBe(snapshot)
+    yield* expect({
+      calls,
+      snapshotUnchanged: actor.getSnapshot() === snapshot,
+    }).toEqual({
+      calls: [[{ type: 'UNKNOWN' }, snapshot]],
+      snapshotUnchanged: true,
+    })
   })
 
-  it('shows an unhandled event in the inspection stream as a transition with the same snapshot', () => {
+  it('shows an unhandled event in the inspection stream as a transition with the same snapshot', function*({ expect }) {
     const events: InspectionEvent[] = []
     const actor = createActor(machine, {
       inspect: (ev) => {
@@ -76,31 +77,38 @@ describe('unhandled events', () => {
       (ev): ev is Extract<InspectionEvent, { type: '@xstate.transition' }> =>
         ev.type === '@xstate.transition' && ev.event.type === 'UNKNOWN',
     )
-    expect(transitions).toHaveLength(1)
     const firstTransition = transitions[0]
-    if (firstTransition === undefined) {
-      throw new Error('expected a transition event')
-    }
-    expect(firstTransition.snapshot).toBe(before)
-    expect(events.some((ev) => (ev.type as string).includes('unhandled'))).toBe(
-      false,
-    )
+
+    yield* expect({
+      count: transitions.length,
+      snapshotIsBefore: firstTransition?.snapshot === before,
+      hasUnhandledNamedEvent: events.some((ev) => (ev.type as string).includes('unhandled')),
+    }).toEqual({
+      count: 1,
+      snapshotIsBefore: true,
+      hasUnhandledNamedEvent: false,
+    })
   })
 
-  it('warns once per event type per actor in development', () => {
-    const actor = createActor(machine).start()
+  it('warns once per event type per actor in development', function*({ expect }) {
+    const written: string[] = []
+    const actor = createActor(machine, {
+      warn: (message) => written.push(message),
+    }).start()
     actor.send({ type: 'UNKNOWN' } as any)
     actor.send({ type: 'UNKNOWN' } as any)
 
-    expect(warn.mock.calls).toEqual([
-      [
-        `Actor ${actor.id} received event "UNKNOWN" in state "a" with no matching transition`,
-      ],
+    yield* expect(written).toEqual([
+      `Actor ${actor.id} received event "UNKNOWN" in state "a" with no matching transition`,
     ])
   })
 
-  it('does not report handled, wildcard-matched or internal xstate.* events', () => {
-    const onUnhandledEvent = vi.fn()
+  it('does not report handled, wildcard-matched or internal xstate.* events', function*({ expect }) {
+    const calls: Array<[unknown, unknown]> = []
+    const written: string[] = []
+    const onUnhandledEvent = (event: unknown, snapshot: unknown) => {
+      calls.push([event, snapshot])
+    }
     const actor = createActor(
       createMachine({
         initial: 'a',
@@ -113,13 +121,15 @@ describe('unhandled events', () => {
           },
         },
       }),
-      { onUnhandledEvent },
+      { onUnhandledEvent, warn: (message) => written.push(message) },
     ).start()
     actor.send({ type: 'NOOP' })
     actor.send({ type: 'wild.card' } as any)
     actor.send({ type: 'xstate.snapshot.actor' } as any)
 
-    expect(onUnhandledEvent).not.toHaveBeenCalled()
-    expect(warn).not.toHaveBeenCalled()
+    yield* expect({ calls, warnings: written }).toEqual({
+      calls: [],
+      warnings: [],
+    })
   })
 })

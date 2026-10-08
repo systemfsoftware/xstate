@@ -1,16 +1,21 @@
-import { createMachine, SimulatedClock, types } from '@systemfsoftware/xstate'
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { createMachine, type EventFromLogic, SimulatedClock, type SnapshotFrom, types } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import { runParallelPropertyCommands } from '../../src/engine/propertyLinearizability.js'
 import {
   ModelTestFailure,
   propertyTest,
   replayTest,
+  type TestActorOutcome,
   type TestAdapter,
+  type TestEventGenerators,
   type TestFixture,
-  type TestTrace,
 } from '../../src/engine/propertyTest.js'
 import { generateTestSuite, replayTestSuite } from '../../src/engine/suite.js'
-import { constant, integer, oneOf, randomAdapter } from './propertyTestAdapter.js'
+import { constant, integer, oneOf, randomAdapter, type RandomGeneratorKind } from './propertyTestAdapter.js'
+
+const rejection = (run: () => Promise<unknown>): Effect.Effect<unknown> =>
+  Effect.promise(() => run().then(() => undefined, (cause: unknown) => cause))
 
 function fetchMachine() {
   return createMachine({
@@ -26,7 +31,6 @@ function fetchMachine() {
           onError: { target: 'failure' },
         },
       },
-      // Both terminal states loop back so one run resolves several actors.
       success: { on: { FETCH: { target: 'loading' } } },
       failure: { on: { FETCH: { target: 'loading' } } },
     },
@@ -44,128 +48,151 @@ const toggleMachine = createMachine({
 })
 
 describe('executed replay seeding', () => {
-  it('replays outcome commands without double-providing the seeded outcomes', async () => {
+  it('replays outcome commands without double-providing the seeded outcomes', function*({ expect }) {
     const machine = fetchMachine()
-    const suite = await generateTestSuite(machine, {
-      adapter: randomAdapter({ seed: 9, numRuns: 20, maxCommands: 10 }),
-      mode: 'executed',
-      outcomes: {
-        fetcher: oneOf<any>(
-          { ok: true, output: 1 },
-          { ok: false, error: 'nope' },
-        ),
-      },
-      events: { FETCH: constant({}) },
-      invariant: () => {},
-    })
+    const suite = yield* Effect.promise(() =>
+      generateTestSuite(machine, {
+        adapter: randomAdapter({ seed: 9, numRuns: 20, maxCommands: 10 }),
+        mode: 'executed',
+        outcomes: {
+          fetcher: oneOf<TestActorOutcome>(
+            { ok: true, output: 1 },
+            { ok: false, error: 'nope' },
+          ),
+        },
+        events: { FETCH: constant({}) },
+        invariant: () => {},
+      })
+    )
 
     const withOutcomes = suite.fixtures.filter(
       (fixture) =>
         fixture.timeline.filter((entry) => entry.command.type === 'outcome')
           .length > 1,
     )
-    expect(withOutcomes.length).toBeGreaterThan(0)
-
+    const replayedOutcomes: unknown[] = []
     for (const fixture of withOutcomes) {
-      const trace = await replayTest(machine, fixture, {
-        invariant: () => {},
-        expect: 'pass',
-      })
-      // Each recorded outcome is resolved exactly once, in the recorded order:
-      // pre-seeding a source the timeline also replays would duplicate them.
-      expect(trace.outcomes).toEqual(fixture.outcomes)
+      const trace = yield* Effect.promise(() =>
+        replayTest(machine, fixture, {
+          invariant: () => {},
+          expect: 'pass',
+        })
+      )
+      replayedOutcomes.push(trace.outcomes)
     }
+
+    yield* expect({
+      fixturesFound: withOutcomes.length > 0,
+      replayedOutcomes,
+    }).toEqual({
+      fixturesFound: true,
+      replayedOutcomes: withOutcomes.map((fixture) => fixture.outcomes),
+    })
   })
 
-  it('rejects an executed fixture replayed in pure mode', async () => {
+  it('rejects an executed fixture replayed in pure mode', function*({ expect }) {
     const machine = fetchMachine()
-    const failure = (await propertyTest(machine, {
-      adapter: randomAdapter({ seed: 5, numRuns: 20, maxCommands: 6 }),
-      mode: 'executed',
-      outcomes: { fetcher: constant({ ok: true, output: 1 } as any) },
-      events: { FETCH: constant({}) },
-      invariant: ({ snapshot }) => {
-        if ((snapshot as any).value === 'success') {
-          throw new Error('reached success')
-        }
-      },
-    }).catch((cause) => cause)) as ModelTestFailure
+    const failure = (yield* rejection(() =>
+      propertyTest(machine, {
+        adapter: randomAdapter({ seed: 5, numRuns: 20, maxCommands: 6 }),
+        mode: 'executed',
+        outcomes: { fetcher: constant({ ok: true, output: 1 }) },
+        events: { FETCH: constant({}) },
+        invariant: ({ snapshot }) => {
+          if (snapshot.value === 'success') {
+            throw new Error('reached success')
+          }
+        },
+      })
+    )) as ModelTestFailure
 
     const fixture = failure.fixture as TestFixture
-    await expect(
+    const replayError = yield* rejection(() =>
       replayTest(machine, fixture, {
         mode: 'pure',
         invariant: () => {},
-      }),
-    ).rejects.toThrow("pass mode: 'executed'")
+      })
+    )
+
+    yield* expect({ message: replayError instanceof Error ? replayError.message : undefined }).toEqual({
+      message: expect.stringContaining("pass mode: 'executed'"),
+    })
   })
 })
 
 describe('property suites', () => {
-  it('carries the mode and outcomes of an executed campaign into its fixtures', async () => {
+  it('carries the mode and outcomes of an executed campaign into its fixtures', function*({ expect }) {
     const machine = fetchMachine()
-    const suite = await generateTestSuite(machine, {
-      adapter: randomAdapter({ seed: 2, numRuns: 6, maxCommands: 4 }),
-      mode: 'executed',
-      outcomes: { fetcher: constant({ ok: true, output: 1 } as any) },
-      events: { FETCH: constant({}) },
-      invariant: () => {},
-    })
-
-    expect(suite.fixtures.length).toBeGreaterThan(0)
-    expect(suite.fixtures.every((fixture) => fixture.mode === 'executed')).toBe(
-      true,
+    const suite = yield* Effect.promise(() =>
+      generateTestSuite(machine, {
+        adapter: randomAdapter({ seed: 2, numRuns: 6, maxCommands: 4 }),
+        mode: 'executed',
+        outcomes: { fetcher: constant({ ok: true, output: 1 }) },
+        events: { FETCH: constant({}) },
+        invariant: () => {},
+      })
     )
-    // Replaying without an explicit mode must use the fixture's own mode.
-    const result = await replayTestSuite(machine, suite, {
-      invariant: () => {},
+    const result = yield* Effect.promise(() => replayTestSuite(machine, suite, { invariant: () => {} }))
+
+    yield* expect({
+      fixturesFound: suite.fixtures.length > 0,
+      everyFixtureExecuted: suite.fixtures.every((fixture) => fixture.mode === 'executed'),
+      failed: result.failed,
+      passed: result.passed,
+    }).toEqual({
+      fixturesFound: true,
+      everyFixtureExecuted: true,
+      failed: [],
+      passed: suite.fixtures.length,
     })
-    expect(result.failed).toEqual([])
-    expect(result.passed).toBe(suite.fixtures.length)
   })
 
-  it('titles outcome commands', async () => {
+  it('titles outcome commands', function*({ expect }) {
     const machine = fetchMachine()
-    const suite = await generateTestSuite(machine, {
-      adapter: randomAdapter({ seed: 2, numRuns: 6, maxCommands: 4 }),
-      mode: 'executed',
-      outcomes: { fetcher: constant({ ok: true, output: 1 } as any) },
-      events: { FETCH: constant({}) },
-      invariant: () => {},
-    })
-    const { formatTestSuiteFixtureTitle } = await import('../../src/engine/suite.js')
-    const titles = suite.fixtures.map((fixture, index) => formatTestSuiteFixtureTitle(fixture, index))
-    expect(titles.some((title) => title.includes('@outcome(fetcher)'))).toBe(
-      true,
+    const suite = yield* Effect.promise(() =>
+      generateTestSuite(machine, {
+        adapter: randomAdapter({ seed: 2, numRuns: 6, maxCommands: 4 }),
+        mode: 'executed',
+        outcomes: { fetcher: constant({ ok: true, output: 1 }) },
+        events: { FETCH: constant({}) },
+        invariant: () => {},
+      })
     )
+    const { formatTestSuiteFixtureTitle } = yield* Effect.promise(() => import('../../src/engine/suite.js'))
+    const titles = suite.fixtures.map((fixture, index) => formatTestSuiteFixtureTitle(fixture, index))
+
+    yield* expect({ titles }).toEqual({
+      titles: expect.arrayContaining([expect.stringContaining('@outcome(fetcher)')]),
+    })
   })
 })
 
 describe('end-of-run temporal failures', () => {
-  it('reports the run that failed at finish() as not passed', async () => {
+  it('reports the run that failed at finish() as not passed', function*({ expect }) {
     const collected: boolean[] = []
-    const error = await propertyTest(toggleMachine, {
-      adapter: randomAdapter({ seed: 1, numRuns: 1, maxCommands: 2 }),
-      events: { TOGGLE: constant({}) },
-      invariant: () => {},
-      temporal: [
-        {
-          type: 'eventually',
-          id: 'never-holds',
-          predicate: () => false,
+    const error = yield* rejection(() =>
+      propertyTest(toggleMachine, {
+        adapter: randomAdapter({ seed: 1, numRuns: 1, maxCommands: 2 }),
+        events: { TOGGLE: constant({}) },
+        invariant: () => {},
+        temporal: [
+          {
+            type: 'eventually',
+            id: 'never-holds',
+            predicate: () => false,
+          },
+        ],
+        collect: (_trace, info) => {
+          collected.push(info.passed)
         },
-      ],
-      collect: (_trace: TestTrace<any, any>, info) => {
-        collected.push(info.passed)
-      },
-    }).catch((cause) => cause)
+      })
+    )
 
-    expect(error).toBeInstanceOf(ModelTestFailure)
-    expect(collected).toEqual([false])
+    yield* expect({ error, collected }).toEqual({ error: expect.any(ModelTestFailure), collected: [false] })
   })
 
-  it('does not record an end-of-run temporal failure in a suite', async () => {
-    await expect(
+  it('does not record an end-of-run temporal failure in a suite', function*({ expect }) {
+    const error = yield* rejection(() =>
       generateTestSuite(toggleMachine, {
         adapter: randomAdapter({ seed: 1, numRuns: 1, maxCommands: 2 }),
         events: { TOGGLE: constant({}) },
@@ -173,48 +200,54 @@ describe('end-of-run temporal failures', () => {
         temporal: [
           { type: 'eventually', id: 'never-holds', predicate: () => false },
         ],
-      }),
-    ).rejects.toBeInstanceOf(ModelTestFailure)
+      })
+    )
+
+    yield* expect({ error }).toEqual({ error: expect.any(ModelTestFailure) })
   })
 })
 
 describe('pure-mode advance', () => {
-  it('records a runtime entry when no SUT owns a clock', async () => {
-    const { coverage } = await propertyTest(toggleMachine, {
-      adapter: randomAdapter({ seed: 4, numRuns: 3, maxCommands: 6 }),
-      events: { TOGGLE: constant({}) },
-      commands: { advance: integer(1, 10) },
-      invariant: () => {},
-    })
-    expect(coverage.clockAdvances).toBeGreaterThan(0)
+  it('records a runtime entry when no SUT owns a clock', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(toggleMachine, {
+        adapter: randomAdapter({ seed: 4, numRuns: 3, maxCommands: 6 }),
+        events: { TOGGLE: constant({}) },
+        commands: { advance: integer(1, 10) },
+        invariant: () => {},
+      })
+    )
+
+    yield* expect(coverage.clockAdvances).toBeGreaterThan(0)
   })
 })
 
 describe('batch exploration', () => {
-  it('stops when the adapter makes no progress', async () => {
+  it('stops when the adapter makes no progress', function*({ expect }) {
     const stalled: TestAdapter = {
-      run: async () => ({
-        runs: 0,
-        exploration: { configuredRuns: 1, maximumSequenceLength: 1 },
-      }),
+      run: () =>
+        Promise.resolve({
+          runs: 0,
+          exploration: { configuredRuns: 1, maximumSequenceLength: 1 },
+        }),
     }
-    const { coverage } = await propertyTest(toggleMachine, {
-      adapter: stalled,
-      events: { TOGGLE: constant({}) },
-      invariant: () => {},
-      until: { runs: 50 },
-      maxRuns: 100,
-      batchRuns: 5,
-    })
-    expect(coverage.exploration.truncationReasons).toContain(
-      'adapter made no progress',
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(toggleMachine, {
+        adapter: stalled,
+        events: { TOGGLE: constant({}) },
+        invariant: () => {},
+        until: { runs: 50 },
+        maxRuns: 100,
+        batchRuns: 5,
+      })
     )
+
+    yield* expect(coverage.exploration.truncationReasons).toContain('adapter made no progress')
   })
 })
 
 describe('linearizability', () => {
-  it('does not prune states that share a projection', async () => {
-    // `count` is the projection; `parity` distinguishes otherwise equal states.
+  it('does not prune states that share a projection', function*({ expect }) {
     const machine = createMachine({
       id: 'projection',
       schemas: {
@@ -233,90 +266,102 @@ describe('linearizability', () => {
     })
 
     let count = 0
-    const result = await runParallelPropertyCommands(machine as any, {
-      branches: [[{ type: 'INC' } as any], [{ type: 'TOGGLE' } as any]],
-      sut: {
-        create: () => ({
-          send: (event: any) => {
-            if (event.type === 'INC') {
-              count++
-            }
-            return count
-          },
-        }),
-        projectModel: (snapshot: any) => snapshot.context.count,
-      },
-    })
+    const result = yield* Effect.promise(() =>
+      runParallelPropertyCommands(machine, {
+        branches: [[{ type: 'INC' }], [{ type: 'TOGGLE' }]],
+        sut: {
+          create: () => ({
+            send: (event) => {
+              if (event.type === 'INC') {
+                count++
+              }
+              return count
+            },
+          }),
+          projectModel: (snapshot) => snapshot.context.count,
+        },
+      })
+    )
 
-    expect(result.linearizable).toBe(true)
+    yield* expect({ linearizable: result.linearizable }).toEqual({ linearizable: true })
   })
 
-  it('passes a usable label recorder context to the SUT', async () => {
+  it('passes a usable label recorder context to the SUT', function*({ expect }) {
     let classified = false
-    const result = await runParallelPropertyCommands(toggleMachine as any, {
-      branches: [[{ type: 'TOGGLE' } as any]],
-      sut: {
-        create: (context) => {
-          context.classify(true, 'created')
-          context.label('created')
-          context.target(1)
-          classified = true
-          return { send: () => undefined, read: () => 'on' }
+    const result = yield* Effect.promise(() =>
+      runParallelPropertyCommands(toggleMachine, {
+        branches: [[{ type: 'TOGGLE' }]],
+        sut: {
+          create: (context) => {
+            context.classify(true, 'created')
+            context.label('created')
+            context.target(1)
+            classified = true
+            return { send: () => undefined, read: () => 'on' }
+          },
+          projectModel: (snapshot) => snapshot.value,
         },
-        projectModel: (snapshot: any) => snapshot.value,
-      },
-    })
+      })
+    )
 
-    expect(classified).toBe(true)
-    expect(result.linearizable).toBe(true)
+    yield* expect({ classified, linearizable: result.linearizable }).toEqual({ classified: true, linearizable: true })
   })
 })
 
 describe('event descriptors', () => {
-  it('treats `{ generate }` with no other key as a descriptor', async () => {
-    const { coverage } = await propertyTest(toggleMachine, {
-      adapter: randomAdapter({ seed: 11, numRuns: 5, maxCommands: 4 }),
-      // A bare generator can itself be an object (fast-check arbitraries have
-      // a `generate` *method*), so only a non-function `generate` marks the
-      // descriptor form.
-      events: { TOGGLE: { generate: constant({}) } },
-      invariant: () => {},
-    })
+  it('treats `{ generate }` with no other key as a descriptor', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(toggleMachine, {
+        adapter: randomAdapter({ seed: 11, numRuns: 5, maxCommands: 4 }),
+        events: { TOGGLE: { generate: constant({}) } },
+        invariant: () => {},
+      })
+    )
 
-    expect(coverage.generatedSteps).toBeGreaterThan(0)
-    expect(
-      coverage.eventCases['["event-case","TOGGLE","default"]']?.executed,
-    ).toBeGreaterThan(0)
+    yield* expect({
+      generatedSteps: coverage.generatedSteps > 0,
+      executedForDefaultCase: (coverage.eventCases['["event-case","TOGGLE","default"]']?.executed ?? 0) > 0,
+    }).toEqual({ generatedSteps: true, executedForDefaultCase: true })
   })
 
-  it('treats an object with a `generate` method as a bare generator', async () => {
-    const { coverage } = await propertyTest(toggleMachine, {
-      adapter: randomAdapter({ seed: 11, numRuns: 5, maxCommands: 4 }),
-      events: {
-        TOGGLE: { generate: () => ({}), sample: () => ({}) } as any,
-      },
-      invariant: () => {},
-    })
+  it('treats an object with a `generate` method as a bare generator', function*({ expect }) {
+    const generatorWithCallableGenerate = { generate: () => ({}), sample: () => ({}) } as unknown as NonNullable<
+      TestEventGenerators<
+        SnapshotFrom<typeof toggleMachine>,
+        EventFromLogic<typeof toggleMachine>,
+        RandomGeneratorKind
+      >['TOGGLE']
+    >
 
-    expect(coverage.generatedSteps).toBeGreaterThan(0)
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(toggleMachine, {
+        adapter: randomAdapter({ seed: 11, numRuns: 5, maxCommands: 4 }),
+        events: { TOGGLE: generatorWithCallableGenerate },
+        invariant: () => {},
+      })
+    )
+
+    yield* expect(coverage.generatedSteps).toBeGreaterThan(0)
   })
 })
 
 describe('replay disposal', () => {
-  it('disposes sessions created before a later creator throws', async () => {
-    const failure = (await propertyTest(toggleMachine, {
-      adapter: randomAdapter({ seed: 7, numRuns: 1, maxCommands: 2 }),
-      events: { TOGGLE: constant({}) },
-      invariant: ({ snapshot }) => {
-        if ((snapshot as any).value === 'on') {
-          throw new Error('reached on')
-        }
-      },
-    }).catch((cause) => cause)) as ModelTestFailure
+  it('disposes sessions created before a later creator throws', function*({ expect }) {
+    const failure = (yield* rejection(() =>
+      propertyTest(toggleMachine, {
+        adapter: randomAdapter({ seed: 7, numRuns: 1, maxCommands: 2 }),
+        events: { TOGGLE: constant({}) },
+        invariant: ({ snapshot }) => {
+          if (snapshot.value === 'on') {
+            throw new Error('reached on')
+          }
+        },
+      })
+    )) as ModelTestFailure
     const fixture = failure.fixture as TestFixture
 
     let referenceDisposed = 0
-    await expect(
+    const error = yield* rejection(() =>
       replayTest(toggleMachine, fixture, {
         invariant: () => {},
         reference: {
@@ -327,7 +372,7 @@ describe('replay disposal', () => {
               referenceDisposed++
             },
           }),
-          projectModel: (snapshot: any) => snapshot.value,
+          projectModel: (snapshot) => snapshot.value,
           equivalent: () => true,
         },
         sut: {
@@ -335,17 +380,18 @@ describe('replay disposal', () => {
             throw new Error('test session creation failed')
           },
         },
-      }),
-    ).rejects.toThrow('test session creation failed')
+      })
+    )
 
-    // `start()` runs inside the disposal boundary, so the reference session
-    // created before the failing creator is still disposed.
-    expect(referenceDisposed).toBe(1)
+    yield* expect({
+      message: error instanceof Error ? error.message : undefined,
+      referenceDisposed,
+    }).toEqual({ message: expect.stringContaining('test session creation failed'), referenceDisposed: 1 })
   })
 })
 
 describe('clock-delivered events in fixtures', () => {
-  it('replays a SUT-clock run identically', async () => {
+  it('replays a SUT-clock run identically', function*({ expect }) {
     const timerMachine = createMachine({
       id: 'timer',
       schemas: {
@@ -354,7 +400,7 @@ describe('clock-delivered events in fixtures', () => {
       },
       context: { ticks: 0 },
       on: {
-        TICK: ({ context }: any) => ({ context: { ticks: context.ticks + 1 } }),
+        TICK: ({ context }) => ({ context: { ticks: context.ticks + 1 } }),
       },
     })
 
@@ -379,61 +425,67 @@ describe('clock-delivered events in fixtures', () => {
             },
           }
         },
-        projectModel: (snapshot: any) => snapshot.context.ticks,
+        projectModel: (snapshot: SnapshotFrom<typeof timerMachine>) => snapshot.context.ticks,
         projectSut: (observed: unknown) => observed,
         equivalent: (model: unknown, sut: unknown) => model === sut,
       }
     }
 
-    const failure = (await propertyTest(timerMachine as any, {
-      adapter: randomAdapter({ seed: 13, numRuns: 4, maxCommands: 4 }),
-      events: {},
-      commands: { advance: constant(1) },
-      sut: createClockSut() as any,
-      invariant: ({ snapshot }: any) => {
-        if (snapshot.context.ticks >= 2) {
-          throw new Error('too many ticks')
-        }
-      },
-    }).catch((cause) => cause)) as ModelTestFailure
-
-    expect(failure).toBeInstanceOf(ModelTestFailure)
+    const failure = (yield* rejection(() =>
+      propertyTest(timerMachine, {
+        adapter: randomAdapter({ seed: 13, numRuns: 4, maxCommands: 4 }),
+        events: {},
+        commands: { advance: constant(1) },
+        sut: createClockSut(),
+        invariant: ({ snapshot }) => {
+          if (snapshot.context.ticks >= 2) {
+            throw new Error('too many ticks')
+          }
+        },
+      })
+    )) as ModelTestFailure
     const fixture = failure.fixture as TestFixture
     const advanceEntry = fixture.timeline.find(
       (entry) => entry.command.type === 'advance',
     )
-    // The delivered events are recorded on the `advance` command *and* kept as
-    // the `origin: 'clock'` event entries that follow it, which is what the
-    // pure replay re-sends.
-    expect(advanceEntry).toBeDefined()
-    expect(
-      (advanceEntry!.command as any).deliveredEvents.length,
-    ).toBeGreaterThan(0)
-    expect(
-      fixture.timeline.some(
+    yield* expect({
+      failure,
+      hasAdvanceEntry: advanceEntry !== undefined,
+      deliveredEvents: advanceEntry !== undefined && advanceEntry.command.type === 'advance'
+        ? advanceEntry.command.deliveredEvents.length > 0
+        : false,
+      hasClockEvent: fixture.timeline.some(
         (entry) => entry.command.type === 'event' && entry.command.origin === 'clock',
       ),
-    ).toBe(true)
+    }).toEqual({
+      failure: expect.any(ModelTestFailure),
+      hasAdvanceEntry: true,
+      deliveredEvents: true,
+      hasClockEvent: true,
+    })
 
-    // The fixture reproduces its recorded failure, with the same clock events
-    // delivered in the same order.
-    const replayed = (await replayTest(timerMachine as any, fixture, {
-      invariant: ({ snapshot }: any) => {
-        if (snapshot.context.ticks >= 2) {
-          throw new Error('too many ticks')
-        }
-      },
-    }).catch((cause) => cause)) as ModelTestFailure
+    const replayed = (yield* rejection(() =>
+      replayTest(timerMachine, fixture, {
+        invariant: ({ snapshot }) => {
+          if (snapshot.context.ticks >= 2) {
+            throw new Error('too many ticks')
+          }
+        },
+      })
+    )) as ModelTestFailure
 
-    expect(replayed).toBeInstanceOf(ModelTestFailure)
-    expect(replayed.trace.timeline.map((entry: any) => entry.command)).toEqual(
-      fixture.timeline
+    yield* expect({
+      replayed,
+      timelineCommands: replayed.trace.timeline.flatMap((entry) => 'command' in entry ? [entry.command] : []),
+    }).toEqual({
+      replayed: expect.any(ModelTestFailure),
+      timelineCommands: fixture.timeline
         .slice(0, replayed.trace.timeline.length)
-        .map((entry) => entry.command),
-    )
+        .flatMap((entry) => 'command' in entry ? [entry.command] : []),
+    })
   })
 
-  it('rejects a fixture whose clock-delivered events were dropped', async () => {
+  it('rejects a fixture whose clock-delivered events were dropped', function*({ expect }) {
     const fixture: TestFixture = {
       formatVersion: 2,
       start: { type: 'input', input: undefined },
@@ -459,8 +511,10 @@ describe('clock-delivered events in fixtures', () => {
       failedAt: 1,
     }
 
-    await expect(
-      replayTest(toggleMachine, fixture, { invariant: () => {} }),
-    ).rejects.toThrow('is not a clock-delivered event')
+    const error = yield* rejection(() => replayTest(toggleMachine, fixture, { invariant: () => {} }))
+
+    yield* expect({ message: error instanceof Error ? error.message : undefined }).toEqual({
+      message: expect.stringContaining('is not a clock-delivered event'),
+    })
   })
 })

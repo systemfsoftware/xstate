@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createAsyncLogic, setup, types } from '../src/index.js'
 import type { StateValueFrom } from '../src/types.js'
 
 describe('setup state contracts', () => {
-  it('carries declared state types through machine state values and runtime nodes', () => {
+  it('carries declared state types through machine state values and runtime nodes', function*({ expect }) {
     const s = setup({
       states: {
         active: {
@@ -69,16 +69,22 @@ describe('setup state contracts', () => {
       throw new Error('expected the playback state')
     }
 
-    expect(activeState.type).toBe('parallel')
-    expect(activeState.id).toBe('active-state')
-    expect(playbackState.type).toBe('compound')
-    expect(playbackState.config.initial).toBe('stopped')
-    expect(stateValue).toEqual({
-      active: { playback: 'stopped', volume: 'audible' },
+    yield* expect({
+      activeType: activeState.type,
+      activeId: activeState.id,
+      playbackType: playbackState.type,
+      playbackInitial: playbackState.config.initial,
+      stateValue,
+    }).toEqual({
+      activeType: 'parallel',
+      activeId: 'active-state',
+      playbackType: 'compound',
+      playbackInitial: 'stopped',
+      stateValue: { active: { playback: 'stopped', volume: 'audible' } },
     })
   })
 
-  it('inherits history defaults from setup state contracts', () => {
+  it('inherits history defaults from setup state contracts', function*({ expect }) {
     const machine = setup({
       states: {
         parent: {
@@ -113,11 +119,13 @@ describe('setup state contracts', () => {
       throw new Error('expected the hist state')
     }
 
-    expect(histState.type).toBe('history')
-    expect(histState.config.target).toBe('idle')
+    yield* expect({
+      histType: histState.type,
+      histTarget: histState.config.target,
+    }).toEqual({ histType: 'history', histTarget: 'idle' })
   })
 
-  it('treats setup history metadata as a history node without a type', () => {
+  it('treats setup history metadata as a history node without a type', function*({ expect }) {
     const s = setup({
       states: {
         parent: {
@@ -149,10 +157,10 @@ describe('setup state contracts', () => {
       throw new Error('expected the hist state')
     }
 
-    expect(histState.type).toBe('history')
+    yield* expect(histState.type).toBe('history')
   })
 
-  it('keeps child input typing on setup-declared compound initials', () => {
+  it('keeps child input typing on setup-declared compound initials', function*({ expect }) {
     const s = setup({
       schemas: { context: types<{ value: number }>() },
       states: {
@@ -166,7 +174,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       context: { value: 1 },
       initial: 'parent',
       states: {
@@ -202,9 +210,11 @@ describe('setup state contracts', () => {
         },
       })
     }
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('requires input for every explicitly entered composite state', () => {
+  it('requires input for every explicitly entered composite state', function*({ expect }) {
     const s = setup({
       schemas: { events: { GO: types<{}>() } },
       states: {
@@ -240,7 +250,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'idle',
       states: {
         idle: {
@@ -336,9 +346,11 @@ describe('setup state contracts', () => {
         },
       })
     }
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('validates setup-declared history targets and ids', () => {
+  it('validates setup-declared history targets and ids', function*({ expect }) {
     const valid = setup({
       states: {
         parent: {
@@ -506,7 +518,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    historyWithNestedInitialInputs.createMachine({
+    const machine = historyWithNestedInitialInputs.createMachine({
       initial: 'parent',
       states: {
         parent: {
@@ -529,9 +541,11 @@ describe('setup state contracts', () => {
         },
       },
     })
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('requires the structural fields declared by setup', () => {
+  it('requires the structural fields declared by setup', function*({ expect }) {
     const parallel = setup({
       states: {
         active: {
@@ -638,7 +652,7 @@ describe('setup state contracts', () => {
       states: { route: { type: 'choice' } },
     })
 
-    choice.createMachine({
+    const machine = choice.createMachine({
       context: { value: 0 },
       initial: 'route',
       states: {
@@ -668,11 +682,11 @@ describe('setup state contracts', () => {
       })
     }
 
-    expect(true).toBe(true)
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('retains current permissive setup schemas without structural metadata', () => {
-    setup({
+  it('retains current permissive setup schemas without structural metadata', function*({ expect }) {
+    const machine = setup({
       states: {
         active: {
           schemas: {},
@@ -685,10 +699,10 @@ describe('setup state contracts', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('narrows relative targets for atomic states', () => {
+  it('narrows relative targets for atomic states', function*({ expect }) {
     const s = setup({
       states: {
         active: {},
@@ -696,7 +710,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'active',
       states: {
         active: {
@@ -725,16 +739,16 @@ describe('setup state contracts', () => {
       })
     }
 
-    expect(true).toBe(true)
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('requires root transitions to use root-relative targets', () => {
+  it('requires root transitions to use root-relative targets', function*({ expect }) {
     const s = setup({
       schemas: { events: { GO: types<{}>() } },
       states: { active: {}, inactive: {} },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'active',
       on: { GO: { target: '.inactive' } },
       states: { active: {}, inactive: {} },
@@ -753,13 +767,13 @@ describe('setup state contracts', () => {
       })
     }
 
-    expect(true).toBe(true)
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('types root invoke completion targets as root-relative targets', () => {
+  it('types root invoke completion targets as root-relative targets', function*({ expect }) {
     const s = setup({
       actors: {
-        worker: createAsyncLogic({ run: async () => undefined }),
+        worker: createAsyncLogic({ run: () => Promise.resolve(undefined) }),
       },
       states: {
         idle: {},
@@ -767,7 +781,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'idle',
       invoke: {
         src: 'worker',
@@ -787,9 +801,11 @@ describe('setup state contracts', () => {
         states: { idle: {}, done: {} },
       })
     }
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('preserves escaped dots in setup state paths', () => {
+  it('preserves escaped dots in setup state paths', function*({ expect }) {
     const s = setup({
       schemas: { events: { GO: types<{}>(), ID: types<{}>() } },
       states: {
@@ -854,7 +870,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: { target: '#active\\.id' },
       states: {
         active: {
@@ -886,9 +902,11 @@ describe('setup state contracts', () => {
         },
       })
     }
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('types choice targets and their target inputs from setup', () => {
+  it('types choice targets and their target inputs from setup', function*({ expect }) {
     const s = setup({
       schemas: { context: types<{ value: number }>() },
       states: {
@@ -905,7 +923,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       context: { value: 1 },
       initial: 'route',
       states: {
@@ -989,10 +1007,10 @@ describe('setup state contracts', () => {
       })
     }
 
-    expect(true).toBe(true)
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('requires self-reentry transitions to provide current state input', () => {
+  it('requires self-reentry transitions to provide current state input', function*({ expect }) {
     const s = setup({
       schemas: { events: { GO: types<{}>() } },
       states: {
@@ -1000,7 +1018,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: { target: 'active', input: { id: 0 } },
       states: {
         active: {
@@ -1028,10 +1046,10 @@ describe('setup state contracts', () => {
       })
     }
 
-    expect(true).toBe(true)
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('uses setup parallel metadata when validating authored target sets', () => {
+  it('uses setup parallel metadata when validating authored target sets', function*({ expect }) {
     const s = setup({
       schemas: { events: { RESET: types<{}>() } },
       states: {
@@ -1073,10 +1091,10 @@ describe('setup state contracts', () => {
       throw new Error('expected the active state')
     }
 
-    expect(activeState.type).toBe('parallel')
+    yield* expect(activeState.type).toBe('parallel')
   })
 
-  it('keeps standalone target sets aligned with statechart topology', () => {
+  it('keeps standalone target sets aligned with statechart topology', function*({ expect }) {
     const s = setup({
       schemas: { events: { DONE: types<{}>() } },
       states: {
@@ -1098,7 +1116,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createStateConfig('active', {
+    const config = s.createStateConfig('active', {
       on: {
         DONE: { target: ['.left.idle', '.right.idle'] },
       },
@@ -1125,9 +1143,11 @@ describe('setup state contracts', () => {
         states: { idle: {}, done: {} },
       })
     }
+
+    yield* expect(Object.keys(config.states)).toEqual(['left', 'right'])
   })
 
-  it('keeps transitions on parallel regions scoped to their own children', () => {
+  it('keeps transitions on parallel regions scoped to their own children', function*({ expect }) {
     const s = setup({
       schemas: { events: { DONE: types<{}>() } },
       states: {
@@ -1149,7 +1169,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'active',
       states: {
         active: {
@@ -1183,9 +1203,11 @@ describe('setup state contracts', () => {
         },
       })
     }
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('keeps target-set input typing for parallel-region self targets', () => {
+  it('keeps target-set input typing for parallel-region self targets', function*({ expect }) {
     const s = setup({
       schemas: { events: { REFRESH: types<{}>() } },
       states: {
@@ -1199,7 +1221,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    s.createMachine({
+    const machine = s.createMachine({
       initial: 'active',
       states: {
         active: {
@@ -1236,9 +1258,11 @@ describe('setup state contracts', () => {
         },
       })
     }
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('correlates nested setup targets with their context and input schemas', () => {
+  it('correlates nested setup targets with their context and input schemas', function*({ expect }) {
     const s = setup({
       schemas: {
         context: types<{ mode: 'idle' } | { mode: 'done'; code: number }>(),
@@ -1349,7 +1373,7 @@ describe('setup state contracts', () => {
       },
     })
 
-    machineSetup.createMachine({
+    const machine = machineSetup.createMachine({
       initial: 'parent',
       states: {
         parent: {
@@ -1431,10 +1455,10 @@ describe('setup state contracts', () => {
       })
     }
 
-    expect(true).toBe(true)
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('resolves root IDs from nested state transitions', () => {
+  it('resolves root IDs from nested state transitions', function*({ expect }) {
     const s = setup({
       schemas: { events: { GO: types<{}>() } },
       states: {
@@ -1497,15 +1521,15 @@ describe('setup state contracts', () => {
       throw new Error('expected the done state')
     }
 
-    expect(doneState.id).toBe('two-done')
+    yield* expect(doneState.id).toBe('two-done')
   })
 
-  it('passes state input to invoke input callbacks', () => {
+  it('passes state input to invoke input callbacks', function*({ expect }) {
     const seen: Array<{ token: string }> = []
     const worker = createAsyncLogic<undefined, { token: string }>({
-      run: async ({ input }) => {
+      run: ({ input }) => {
         seen.push(input)
-        return undefined
+        return Promise.resolve(undefined)
       },
     })
 
@@ -1533,10 +1557,10 @@ describe('setup state contracts', () => {
 
     createActor(machine).start()
 
-    expect(seen).toEqual([{ token: 'abc' }])
+    yield* expect(seen).toEqual([{ token: 'abc' }])
   })
 
-  it('requires shared input for every target in a target set', () => {
+  it('requires shared input for every target in a target set', function*({ expect }) {
     const s = setup({
       schemas: { events: { GO: types<{}>() } },
       states: {
@@ -1686,12 +1710,12 @@ describe('setup state contracts', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'GO' })
 
-    expect(actor.getSnapshot().value).toEqual({
+    yield* expect(actor.getSnapshot().value).toEqual({
       active: { left: 'ready', right: 'ready' },
     })
   })
 
-  it('passes nested initial inputs through a history default into parallel regions', () => {
+  it('passes nested initial inputs through a history default into parallel regions', function*({ expect }) {
     const seen: Array<string | number | boolean> = []
     const machine = setup({
       schemas: { events: { RESTORE: types<{}>() } },
@@ -1766,13 +1790,16 @@ describe('setup state contracts', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'RESTORE' })
 
-    expect(actor.getSnapshot().value).toEqual({
-      parent: { active: { left: 'leaf', right: 'leaf' } },
+    yield* expect({
+      value: actor.getSnapshot().value,
+      seen,
+    }).toEqual({
+      value: { parent: { active: { left: 'leaf', right: 'leaf' } } },
+      seen: [7, true],
     })
-    expect(seen).toEqual([7, true])
   })
 
-  it('carries setup route metadata into the machine event contract', () => {
+  it('carries setup route metadata into the machine event contract', function*({ expect }) {
     const machine = setup({
       states: { home: { id: 'home', route: true } },
     }).createMachine({
@@ -1791,10 +1818,10 @@ describe('setup state contracts', () => {
       })
     }
 
-    expect(actor.getSnapshot().value).toBe('home')
+    yield* expect(actor.getSnapshot().value).toBe('home')
   })
 
-  it('uses the authored machine ID when it overrides a setup ID', () => {
+  it('uses the authored machine ID when it overrides a setup ID', function*({ expect }) {
     const machine = setup({
       states: { home: { id: 'setup-home', route: true } },
     }).createMachine({
@@ -1807,8 +1834,6 @@ describe('setup state contracts', () => {
       throw new Error('expected the home state')
     }
 
-    expect(homeState.id).toBe('machine-home')
-
     const actor = createActor(machine).start()
     actor.send({ type: 'xstate.route', to: '#machine-home' })
 
@@ -1820,10 +1845,13 @@ describe('setup state contracts', () => {
       })
     }
 
-    expect(actor.getSnapshot().value).toBe('home')
+    yield* expect({
+      homeId: homeState.id,
+      value: actor.getSnapshot().value,
+    }).toEqual({ homeId: 'machine-home', value: 'home' })
   })
 
-  it('keeps descendant IDs in strict target contracts when parents have IDs', () => {
+  it('keeps descendant IDs in strict target contracts when parents have IDs', function*({ expect }) {
     const s = setup({
       schemas: {
         events: {
@@ -1931,10 +1959,10 @@ describe('setup state contracts', () => {
       throw new Error('expected the ready state')
     }
 
-    expect(readyState.id).toBe('left-ready')
+    yield* expect(readyState.id).toBe('left-ready')
   })
 
-  it('handles a larger explicit parallel topology', () => {
+  it('handles a larger explicit parallel topology', function*({ expect }) {
     const s = setup({
       schemas: { events: { NEXT: types<{}>() } },
       states: {
@@ -2122,6 +2150,15 @@ describe('setup state contracts', () => {
       throw new Error('expected the regionSix state')
     }
 
-    expect(regionSixState.states['s8']).toBeDefined()
+    yield* expect(Object.keys(regionSixState.states)).toEqual([
+      's1',
+      's2',
+      's3',
+      's4',
+      's5',
+      's6',
+      's7',
+      's8',
+    ])
   })
 })

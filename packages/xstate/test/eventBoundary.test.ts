@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import { createDurable } from '../src/durable/index.js'
 import {
@@ -11,6 +12,9 @@ import {
   transition,
 } from '../src/index.js'
 import { standardSchemaValidator } from '../src/validation/index.js'
+
+type GoEvent = { type: 'GO'; count: number }
+type TickEvent = { type: 'tick'; count: number }
 
 const createValidatedMachine = () =>
   setup({
@@ -38,46 +42,67 @@ const createValidatedMachine = () =>
   })
 
 describe('event boundary: reject and report', () => {
-  it('rejects an invalid external event on send without erroring the actor', () => {
+  it('rejects an invalid external event on send without erroring the actor', function*({ expect }) {
     const rejections: EventRejection[] = []
     const actor = createActor(createValidatedMachine(), {
       onRejectedEvent: (rejection) => rejections.push(rejection),
     }).start()
 
-    actor.send({ type: 'GO', count: 'oops' } as any)
+    actor.send({ type: 'GO', count: 'oops' } as unknown as GoEvent)
 
-    // the event never entered the machine
-    expect(actor.getSnapshot().value).toBe('idle')
-    expect(actor.getSnapshot().status).toBe('active')
+    const idleValue = actor.getSnapshot().value
+    const idleStatus = actor.getSnapshot().status
 
-    expect(rejections).toHaveLength(1)
-    expect(rejections[0]).toMatchObject({
+    if (rejections[0] === undefined) {
+      throw new Error('expected an event rejection')
+    }
+    const rejection = rejections[0]
+    const issueCountPositive = (rejection.issues?.length ?? 0) > 0
+    const isError = rejection.error instanceof Error
+
+    actor.send({ type: 'GO', count: 1 })
+    const finalValue = actor.getSnapshot().value
+
+    yield* expect({
+      idleValue,
+      idleStatus,
+      rejectionCount: rejections.length,
+      event: rejection.event,
+      targetRefIsActor: rejection.targetRef === actor,
+      targetId: rejection.targetId,
+      sourceRef: rejection.sourceRef,
+      eventOrigin: rejection.eventOrigin,
+      reason: rejection.reason,
+      issueCountPositive,
+      isError,
+      finalValue,
+    }).toEqual({
+      idleValue: 'idle',
+      idleStatus: 'active',
+      rejectionCount: 1,
       event: { type: 'GO', count: 'oops' },
-      targetRef: actor,
+      targetRefIsActor: true,
       targetId: actor.id,
       sourceRef: undefined,
       eventOrigin: 'external',
       reason: 'invalidEvent',
+      issueCountPositive: true,
+      isError: true,
+      finalValue: 'going',
     })
-    if (rejections[0] === undefined) {
-      throw new Error('expected an event rejection')
-    }
-    expect(rejections[0].issues?.length).toBeGreaterThan(0)
-    expect(rejections[0].error).toBeInstanceOf(Error)
-
-    // the actor still processes valid events afterwards
-    actor.send({ type: 'GO', count: 1 })
-    expect(actor.getSnapshot().value).toBe('going')
   })
 
-  it('rejects an invalid event sent from another actor with eventOrigin "actor"', () => {
+  it('rejects an invalid event sent from another actor with eventOrigin "actor"', function*({ expect }) {
     const child = createValidatedMachine()
     const rejections: EventRejection[] = []
     const parent = createMachine({
       invoke: { id: 'child', src: child },
       on: {
         forward: ({ children }, enq) => {
-          enq.sendTo(children['child']!, { type: 'GO', count: 'bad' } as any)
+          enq.sendTo(children['child']!, {
+            type: 'GO',
+            count: 'bad',
+          } as unknown as GoEvent)
         },
       },
     })
@@ -87,39 +112,59 @@ describe('event boundary: reject and report', () => {
 
     actor.send({ type: 'forward' })
 
-    expect(rejections).toHaveLength(1)
-    expect(rejections[0]).toMatchObject({
+    if (rejections[0] === undefined) {
+      throw new Error('expected an event rejection')
+    }
+    const rejection = rejections[0]
+
+    yield* expect({
+      rejectionCount: rejections.length,
+      event: rejection.event,
+      targetId: rejection.targetId,
+      eventOrigin: rejection.eventOrigin,
+      reason: rejection.reason,
+      sourceRefIsActor: rejection.sourceRef === actor,
+      actorStatus: actor.getSnapshot().status,
+      childStatus: actor.getSnapshot().children['child']!.getSnapshot().status,
+    }).toEqual({
+      rejectionCount: 1,
       event: { type: 'GO', count: 'bad' },
       targetId: 'child',
       eventOrigin: 'actor',
       reason: 'invalidEvent',
+      sourceRefIsActor: true,
+      actorStatus: 'active',
+      childStatus: 'active',
     })
-    if (rejections[0] === undefined) {
-      throw new Error('expected an event rejection')
-    }
-    expect(rejections[0].sourceRef).toBe(actor)
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(actor.getSnapshot().children['child']!.getSnapshot().status).toBe(
-      'active',
-    )
   })
 
-  it('warns on rejection in development mode', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      const actor = createActor(createValidatedMachine()).start()
-      actor.send({ type: 'GO', count: 'oops' } as any)
-      expect(warn).toHaveBeenCalledTimes(1)
-      if (warn.mock.calls[0] === undefined) {
-        throw new Error('expected a warning call')
-      }
-      expect(warn.mock.calls[0][0]).toMatch('Event "GO" to actor')
-    } finally {
-      warn.mockRestore()
-    }
+  it('warns on rejection in development mode', function*({ expect }) {
+    const rejections: EventRejection[] = []
+    const warnings: string[] = []
+    const actor = createActor(createValidatedMachine(), {
+      onRejectedEvent: (rejection) => rejections.push(rejection),
+      warn: (message) => warnings.push(message),
+    }).start()
+    actor.send({ type: 'GO', count: 'oops' } as unknown as GoEvent)
+
+    yield* expect({
+      warnings,
+      rejectionCount: rejections.length,
+      event: rejections[0]?.event,
+      reason: rejections[0]?.reason,
+      targetIsActor: rejections[0]?.targetId === actor.id,
+      actorStatus: actor.getSnapshot().status,
+    }).toEqual({
+      warnings: ['Event "GO" to actor "x:0" was not delivered (invalidEvent).'],
+      rejectionCount: 1,
+      event: { type: 'GO', count: 'oops' },
+      reason: 'invalidEvent',
+      targetIsActor: true,
+      actorStatus: 'active',
+    })
   })
 
-  it('rejects queued deliveries of internal event types from outside', () => {
+  it('rejects queued deliveries of internal event types from outside', function*({ expect }) {
     const machine = createMachine({
       schemas: { internalEvents: { tick: z.object({}) } },
       initial: 'idle',
@@ -134,33 +179,43 @@ describe('event boundary: reject and report', () => {
     }).start()
     ;(actor.send as (event: AnyEventObject) => void)({ type: 'tick' })
 
-    expect(actor.getSnapshot().value).toBe('idle')
-    expect(rejections[0]).toMatchObject({
+    yield* expect({
+      value: actor.getSnapshot().value,
+      eventOrigin: rejections[0]?.eventOrigin,
+      reason: rejections[0]?.reason,
+    }).toEqual({
+      value: 'idle',
       eventOrigin: 'external',
       reason: 'internalEvent',
     })
   })
 
-  it('pure transition() returns the snapshot unchanged with a rejection effect', () => {
+  it('pure transition() returns the snapshot unchanged with a rejection effect', function*({ expect }) {
     const machine = createValidatedMachine()
     const [snapshot] = initialTransition(machine)
 
     const [nextSnapshot, effects] = transition(machine, snapshot, {
       type: 'GO',
       count: 'oops',
-    } as any)
+    } as unknown as GoEvent)
 
-    expect(nextSnapshot).toBe(snapshot)
-    expect(effects).toHaveLength(1)
-    expect(effects[0]).toMatchObject({
-      kind: 'builtin',
-      type: '@xstate.deadLetter',
-      event: { type: 'GO', count: 'oops' },
-      reason: 'invalidEvent',
+    yield* expect({
+      unchanged: nextSnapshot === snapshot,
+      effectCount: effects.length,
+      effect: effects[0],
+    }).toMatchObject({
+      unchanged: true,
+      effectCount: 1,
+      effect: {
+        kind: 'builtin',
+        type: '@xstate.deadLetter',
+        event: { type: 'GO', count: 'oops' },
+        reason: 'invalidEvent',
+      },
     })
   })
 
-  it('internal faults still error: an invalid delayed raise errors the actor', () => {
+  it('internal faults still error: an invalid delayed raise errors the actor', function*({ expect }) {
     const machine = setup({
       validator: standardSchemaValidator(),
       schemas: {
@@ -177,7 +232,9 @@ describe('event boundary: reject and report', () => {
         idle: {
           on: {
             START: (_, enq) => {
-              enq.raise({ type: 'tick', count: 'bad' } as any, { delay: 10 })
+              enq.raise({ type: 'tick', count: 'bad' } as unknown as TickEvent, {
+                delay: 10,
+              })
             },
             tick: {},
           },
@@ -187,11 +244,16 @@ describe('event boundary: reject and report', () => {
 
     // pure transition throws — a machine bug must be loud
     const [snapshot] = initialTransition(machine)
-    expect(() => transition(machine, snapshot, { type: 'START' })).toThrow(
-      /tick/,
-    )
+    let thrown: unknown
+    try {
+      transition(machine, snapshot, { type: 'START' })
+    } catch (error) {
+      thrown = error
+    }
+    const thrownMessage = thrown instanceof Error
+      ? thrown.message
+      : String(thrown)
 
-    // the running actor errors
     const rejections: EventRejection[] = []
     const actor = createActor(machine, {
       onRejectedEvent: (rejection) => rejections.push(rejection),
@@ -199,12 +261,20 @@ describe('event boundary: reject and report', () => {
     actor.subscribe({ error: () => {} })
     actor.start()
     actor.send({ type: 'START' })
-    expect(actor.getSnapshot().status).toBe('error')
-    expect(rejections).toHaveLength(0)
+
+    yield* expect({
+      thrownMessage,
+      status: actor.getSnapshot().status,
+      rejectionCount: rejections.length,
+    }).toEqual({
+      thrownMessage: expect.stringMatching(/tick/),
+      status: 'error',
+      rejectionCount: 0,
+    })
   })
 
   describe('durable execution', () => {
-    it('journals rejections through the deadLetter runtime operation and keeps replay total', async () => {
+    it('journals rejections through the deadLetter runtime operation and keeps replay total', function*({ expect }) {
       const machine = createValidatedMachine()
       const queue: AnyEventObject[] = [
         { type: 'GO', count: 'poisoned' },
@@ -218,20 +288,26 @@ describe('event boundary: reject and report', () => {
         deadLetter: (_source, _target, event, reason) => {
           rejected.push({ event, reason })
         },
-        waitForEvent: () => queue.shift() as any,
+        waitForEvent: () => queue.shift()!,
       })
 
-      await execution.run()
+      yield* Effect.promise(() => execution.run())
 
-      expect(queue).toHaveLength(0)
-      expect(rejected).toHaveLength(1)
-      expect(rejected[0]).toMatchObject({
-        event: { type: 'GO', count: 'poisoned' },
-        reason: 'invalidEvent',
+      yield* expect({
+        remaining: queue.length,
+        rejectionCount: rejected.length,
+        rejection: rejected[0],
+      }).toMatchObject({
+        remaining: 0,
+        rejectionCount: 1,
+        rejection: {
+          event: { type: 'GO', count: 'poisoned' },
+          reason: 'invalidEvent',
+        },
       })
     })
 
-    it('replaying a poisoned event yields the same unchanged snapshot (totality)', () => {
+    it('replaying a poisoned event yields the same unchanged snapshot (totality)', function*({ expect }) {
       const machine = createValidatedMachine()
       const execution = createDurable(machine, {
         executeAction: () => {},
@@ -241,26 +317,29 @@ describe('event boundary: reject and report', () => {
       })
 
       const [snapshot] = execution.initialTransition()
-      const poisoned = { type: 'GO', count: 'poisoned' } as any
+      const poisoned = { type: 'GO', count: 'poisoned' } as unknown as GoEvent
 
       const [first, firstEffects] = execution.transition(snapshot, poisoned)
       const [second, secondEffects] = execution.transition(snapshot, poisoned)
 
-      expect(first).toBe(snapshot)
-      expect(second).toBe(snapshot)
       if (firstEffects[0] === undefined) {
         throw new Error('expected a first effect')
       }
       if (secondEffects[0] === undefined) {
         throw new Error('expected a second effect')
       }
-      expect(firstEffects[0].effect).toMatchObject({
-        type: '@xstate.deadLetter',
+
+      yield* expect({
+        firstUnchanged: first === snapshot,
+        secondUnchanged: second === snapshot,
+        firstEffect: firstEffects[0].effect,
+        secondEffect: secondEffects[0].effect,
+      }).toMatchObject({
+        firstUnchanged: true,
+        secondUnchanged: true,
+        firstEffect: { type: '@xstate.deadLetter' },
+        secondEffect: { type: '@xstate.deadLetter' },
       })
-      expect(secondEffects[0].effect).toMatchObject({
-        type: '@xstate.deadLetter',
-      })
-      // no throw anywhere: replay stays total with poisoned queued events
     })
   })
 })

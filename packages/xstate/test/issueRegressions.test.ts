@@ -1,9 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-/**
- * Regression tests for open GitHub issues that are fixed (or made moot) in v6.
- * Each test reproduces the issue as originally reported, rewritten with v6
- * APIs, and asserts the fixed behavior.
- */
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import { getShortestPaths } from '../src/graph/index.js'
 import {
@@ -16,12 +12,52 @@ import {
   types,
 } from '../src/index.js'
 
-function roundTrip(persisted: unknown): any {
-  return JSON.parse(JSON.stringify(persisted))
+function roundTrip<T>(persisted: T): T {
+  return JSON.parse(JSON.stringify(persisted)) as T
+}
+
+const spawnedChildSrc = (persisted: unknown): unknown => {
+  if (typeof persisted !== 'object' || persisted === null || !('children' in persisted)) {
+    return undefined
+  }
+  const children = persisted.children
+  if (typeof children !== 'object' || children === null || !('w1' in children)) {
+    return undefined
+  }
+  const child = children.w1
+  if (typeof child !== 'object' || child === null || !('src' in child)) {
+    return undefined
+  }
+  return child.src
+}
+
+const pollUntil = (done: () => boolean) =>
+  Effect.promise(() => {
+    const { promise, resolve } = Promise.withResolvers<void>()
+    let attempts = 0
+    const poll = () => {
+      if (done() || attempts >= 200) {
+        resolve()
+        return
+      }
+      attempts += 1
+      setTimeout(poll, 1)
+    }
+    poll()
+    return promise
+  })
+
+const capturedMessage = (run: () => unknown): string | undefined => {
+  try {
+    run()
+    return undefined
+  } catch (error) {
+    return error instanceof Error ? error.message : 'a non-Error was thrown'
+  }
 }
 
 describe('persistence', () => {
-  it('#4166 state meta is rehydrated after a JSON round-trip', () => {
+  it('#4166 state meta is rehydrated after a JSON round-trip', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         meta: z.object({ title: z.string() }),
@@ -45,12 +81,12 @@ describe('persistence', () => {
 
     const restored = createActor(machine, { snapshot: persisted }).start()
 
-    expect(restored.getSnapshot().getMeta()).toEqual({
+    yield* expect(restored.getSnapshot().getMeta()).toEqual({
       '(machine).b': { title: 'B' },
     })
   })
 
-  it('#5057 a spawned child can be persisted when spawned from a registered source', () => {
+  it('#5057 a spawned child can be persisted when spawned from a registered source', function*({ expect }) {
     const worker = createMachine({
       context: { count: 0 },
       on: {
@@ -72,28 +108,34 @@ describe('persistence', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'SPAWN' })
 
-    const persisted = roundTrip(actor.getPersistedSnapshot())
-    expect(persisted.children.w1.src).toBe('worker')
+    const persistedSnapshot = roundTrip(actor.getPersistedSnapshot())
+    const persistedChildSrc = spawnedChildSrc(persistedSnapshot)
 
-    const restored = createActor(machine, { snapshot: persisted }).start()
-    expect(restored.getSnapshot().children['w1']).toBeDefined()
+    const restored = createActor(machine, { snapshot: persistedSnapshot }).start()
+    const restoredChildDefined = restored.getSnapshot().children['w1'] !== undefined
 
-    // Raw inline logic has no source identity, so persisting it still throws
-    restored.send({ type: 'SPAWN_INLINE' })
-    expect(() => restored.getPersistedSnapshot()).toThrow(
-      /inline child actor cannot be persisted/i,
-    )
+    const inlinePersistMessage = capturedMessage(() => {
+      restored.send({ type: 'SPAWN_INLINE' })
+      restored.getPersistedSnapshot()
+    })
+
+    yield* expect({ persistedChildSrc, restoredChildDefined, inlinePersistMessage }).toEqual({
+      persistedChildSrc: 'worker',
+      restoredChildDefined: true,
+      inlinePersistMessage: 'An inline child actor cannot be persisted.',
+    })
   })
 })
 
 describe('lifecycle', () => {
-  it('#5219 eventless source entry runs before the target state invoke starts', async () => {
+  it('#5219 eventless source entry runs before the target state invoke starts', function*({ expect }) {
     const log: string[] = []
     const machine = setup({
       actors: {
         invoker: createAsyncLogic({
-          run: async () => {
+          run: () => {
             log.push('next')
+            return Promise.resolve()
           },
         }),
       },
@@ -119,15 +161,17 @@ describe('lifecycle', () => {
     })
 
     const actor = createActor(machine).start()
-    await toPromise(actor)
+    yield* Effect.promise(() => toPromise(actor))
 
-    expect(log).toEqual(['start', 'next'])
-    expect(actor.getSnapshot().value).toBe('complete')
+    yield* expect({ log, value: actor.getSnapshot().value }).toEqual({ log: ['start', 'next'], value: 'complete' })
   })
 
-  it('#5433 an invoked callback is cleaned up after onError leaves the state', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const cleanup = vi.fn()
+  it('#5433 an invoked callback is cleaned up after onError leaves the state', function*({ expect }) {
+    const warnings: string[] = []
+    let cleanupCalls = 0
+    const cleanup = () => {
+      cleanupCalls += 1
+    }
     let sendBackAfterStop: (() => void) | undefined
     const { promise, reject } = Promise.withResolvers<never>()
 
@@ -152,65 +196,78 @@ describe('lifecycle', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { warn: (message) => warnings.push(message) }).start()
     reject(new Error('refresh failed'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(actor.getSnapshot().value).toBe('failed')
-    expect(cleanup).toHaveBeenCalledTimes(1)
+    yield* pollUntil(() => actor.getSnapshot().value === 'failed')
 
     sendBackAfterStop?.()
-    expect(warn).not.toHaveBeenCalled()
-    warn.mockRestore()
+
+    yield* expect({
+      value: actor.getSnapshot().value,
+      cleanupCalls,
+      warnings: [...warnings],
+    }).toEqual({
+      value: 'failed',
+      cleanupCalls: 1,
+      warnings: [],
+    })
   })
 
-  it('#4726 invoked callback cleanup runs when the machine errors', async () => {
-    vi.useFakeTimers()
-    try {
-      let counter = 1
-      let isOver = false
-      const machine = setup({
-        actors: {
-          test: createCallbackLogic(({ sendBack }) => {
-            const id = setInterval(() => {
-              counter++
-              sendBack({ type: 'haha' + counter })
-            }, 100)
-            return () => {
-              clearInterval(id)
-              isOver = true
-            }
-          }),
-        },
-      }).createMachine({
-        invoke: { src: 'test' },
-        initial: 'idle',
-        states: {
-          idle: {
-            on: {
-              haha3: () => {
-                throw new Error('haha')
-              },
+  it.live('#4726 invoked callback cleanup runs when the machine errors', function*({ expect }) {
+    let counter = 1
+    let isOver = false
+    const machine = setup({
+      actors: {
+        test: createCallbackLogic(({ sendBack }) => {
+          const id = setInterval(() => {
+            counter++
+            sendBack({ type: 'haha' + counter })
+          }, 100)
+          return () => {
+            clearInterval(id)
+            isOver = true
+          }
+        }),
+      },
+    }).createMachine({
+      invoke: { src: 'test' },
+      initial: 'idle',
+      states: {
+        idle: {
+          on: {
+            haha3: () => {
+              throw new Error('haha')
             },
           },
         },
-      })
+      },
+    })
 
-      const actor = createActor(machine)
-      actor.start()
-      const result = toPromise(actor)
-      vi.advanceTimersByTime(300)
+    const actor = createActor(machine)
+    actor.start()
+    const outcomePromise = toPromise(actor).then(
+      () => 'resolved',
+      (error: unknown) => (error instanceof Error ? error.message : 'a non-Error was thrown'),
+    )
 
-      await expect(result).rejects.toThrow('haha')
-      expect(actor.getSnapshot().status).toBe('error')
-      expect(counter).toBeGreaterThan(2)
-      expect(isOver).toBe(true)
-    } finally {
-      vi.useRealTimers()
-    }
+    yield* pollUntil(() => actor.getSnapshot().status === 'error')
+
+    const outcome = yield* Effect.promise(() => outcomePromise)
+
+    yield* expect({
+      outcome,
+      status: actor.getSnapshot().status,
+      moreThanTwoIncrements: counter > 2,
+      isOver,
+    }).toEqual({
+      outcome: 'haha',
+      status: 'error',
+      moreThanTwoIncrements: true,
+      isOver: true,
+    })
   })
 
-  it('#5120 sending to the parent of a root actor does not throw', () => {
+  it('#5120 sending to the parent of a root actor does not throw', function*({ expect }) {
     const machine = setup({}).createMachine({
       initial: 'init',
       states: {
@@ -223,44 +280,39 @@ describe('lifecycle', () => {
     })
 
     const actor = createActor(machine)
-    expect(() => actor.start()).not.toThrow()
-    expect(actor.getSnapshot().status).toBe('active')
+    actor.start()
+    yield* expect(actor.getSnapshot().status).toBe('active')
   })
 })
 
 describe('misc', () => {
-  it('#2419 delay functions can see the state that declares the delay', () => {
-    vi.useFakeTimers()
-    try {
-      const seen: string[] = []
-      const machine = createMachine({
-        initial: 'start',
-        context: { multiplier: 2 },
-        delays: {
-          dynamic: ({ context, stateNode }) => {
-            seen.push(stateNode.key)
-            return 100 * context.multiplier
-          },
+  it.live('#2419 delay functions can see the state that declares the delay', function*({ expect }) {
+    const seen: string[] = []
+    const machine = createMachine({
+      initial: 'start',
+      context: { multiplier: 2 },
+      delays: {
+        dynamic: ({ context, stateNode }) => {
+          seen.push(stateNode.key)
+          return 100 * context.multiplier
         },
-        states: {
-          start: { on: { GO: { target: 'process' } } },
-          process: { after: { dynamic: { target: 'done' } } },
-          done: {},
-        },
-      })
+      },
+      states: {
+        start: { on: { GO: { target: 'process' } } },
+        process: { after: { dynamic: { target: 'done' } } },
+        done: {},
+      },
+    })
 
-      const actor = createActor(machine).start()
-      actor.send({ type: 'GO' })
+    const actor = createActor(machine).start()
+    actor.send({ type: 'GO' })
 
-      expect(seen).toEqual(['process'])
-      vi.advanceTimersByTime(200)
-      expect(actor.getSnapshot().value).toBe('done')
-    } finally {
-      vi.useRealTimers()
-    }
+    yield* expect(seen).toEqual(['process'])
+    yield* pollUntil(() => actor.getSnapshot().value === 'done')
+    yield* expect(actor.getSnapshot().value).toBe('done')
   })
 
-  it('#4146 path traversal only takes a guarded transition while the guard passes', () => {
+  it('#4146 path traversal only takes a guarded transition while the guard passes', function*({ expect }) {
     const cond = (context: { counter: number }) => context.counter === 0
     const paths = getShortestPaths(
       createMachine({
@@ -282,15 +334,18 @@ describe('misc', () => {
       }),
     )
 
-    // INC is taken once: the second INC fails the guard and is not a step
-    expect(paths.map((p) => p.steps.map((s) => s.event.type))).toEqual([
-      ['@xstate.init'],
-      ['@xstate.init', 'INC'],
-    ])
+    const eventTypes = paths.map((p) => p.steps.map((s) => s.event.type))
     const secondPath = paths[1]
     if (secondPath === undefined) {
       throw new Error('expected a second path')
     }
-    expect(secondPath.state.context.counter).toBe(1)
+
+    yield* expect({ eventTypes, counter: secondPath.state.context.counter }).toEqual({
+      eventTypes: [
+        ['@xstate.init'],
+        ['@xstate.init', 'INC'],
+      ],
+      counter: 1,
+    })
   })
 })

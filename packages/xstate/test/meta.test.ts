@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createActor, createMachine, serializeMachine, setup, type StateId } from '../src/index.js'
 
@@ -125,25 +125,31 @@ describe('state meta data', () => {
     },
   })
 
-  it('states should aggregate meta data', () => {
+  it('states should aggregate meta data', function*({ expect }) {
     const actorRef = createActor(lightMachine).start()
     actorRef.send({ type: 'TIMER' })
     const yellowState = actorRef.getSnapshot()
 
-    expect(yellowState.getMeta()).toEqual({
-      'light.yellow': {
-        yellowData: 'yellow data',
+    yield* expect({
+      meta: yellowState.getMeta(),
+      hasGreen: 'light.green' in yellowState.getMeta(),
+      hasRoot: 'light' in yellowState.getMeta(),
+    }).toEqual({
+      meta: {
+        'light.yellow': {
+          yellowData: 'yellow data',
+        },
       },
+      hasGreen: false,
+      hasRoot: false,
     })
-    expect('light.green' in yellowState.getMeta()).toBeFalsy()
-    expect('light' in yellowState.getMeta()).toBeFalsy()
   })
 
-  it('states should aggregate meta data (deep)', () => {
+  it('states should aggregate meta data (deep)', function*({ expect }) {
     const actorRef = createActor(lightMachine).start()
     actorRef.send({ type: 'TIMER' })
     actorRef.send({ type: 'TIMER' })
-    expect(actorRef.getSnapshot().getMeta()).toEqual({
+    yield* expect(actorRef.getSnapshot().getMeta()).toEqual({
       'light.red': {
         redData: {
           nested: {
@@ -159,7 +165,7 @@ describe('state meta data', () => {
   })
 
   // https://github.com/statelyai/xstate/issues/1105
-  it('services started from a persisted state should calculate meta data', () => {
+  it('services started from a persisted state should calculate meta data', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         meta: z.object({
@@ -187,14 +193,14 @@ describe('state meta data', () => {
     })
     actor.start()
 
-    expect(actor.getSnapshot().getMeta()).toEqual({
+    yield* expect(actor.getSnapshot().getMeta()).toEqual({
       'test.second': {
         name: 'second state',
       },
     })
   })
 
-  it('meta keys are strongly-typed', () => {
+  it('meta keys are strongly-typed', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         meta: z.object({
@@ -244,10 +250,12 @@ describe('state meta data', () => {
 
     // @ts-expect-error
     meta['root.c.one']
+
+    yield* expect(snapshot.getMeta()).toEqual({})
   })
 
-  it('TS should error with unexpected meta property', () => {
-    createMachine({
+  it('TS should error with unexpected meta property', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         meta: z.object({
           layout: z.string(),
@@ -267,10 +275,12 @@ describe('state meta data', () => {
         },
       },
     })
+
+    yield* expect(machine.states['b']!.meta).toEqual({ notLayout: 'uh oh' })
   })
 
-  it('TS should error with wrong meta value type', () => {
-    createMachine({
+  it('TS should error with wrong meta value type', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         meta: z.object({
           layout: z.string(),
@@ -290,10 +300,12 @@ describe('state meta data', () => {
         },
       } as any,
     })
+
+    yield* expect(machine.states['d']!.meta).toEqual({ layout: 42 })
   })
 
-  it('should allow states to omit meta', () => {
-    createMachine({
+  it('should allow states to omit meta', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         meta: z.object({
           layout: z.string(),
@@ -309,10 +321,15 @@ describe('state meta data', () => {
         c: {}, // no meta
       },
     })
+
+    yield* expect({
+      a: machine.states['a']!.meta,
+      c: machine.states['c']!.meta,
+    }).toEqual({ a: { layout: 'a-layout' }, c: undefined })
   })
 
-  it('TS should error with unexpected transition meta property', () => {
-    createMachine({
+  it('TS should error with unexpected transition meta property', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         meta: z.object({
           layout: z.string(),
@@ -331,10 +348,12 @@ describe('state meta data', () => {
         }),
       } as any,
     })
+
+    yield* expect(machine.root.transitions.get('e1')!.length).toEqual(1)
   })
 
-  it('TS should error with wrong transition meta value type', () => {
-    createMachine({
+  it('TS should error with wrong transition meta value type', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         meta: z.object({
           layout: z.string(),
@@ -353,9 +372,11 @@ describe('state meta data', () => {
         }),
       } as any,
     })
+
+    yield* expect(machine.root.transitions.get('e1')!.length).toEqual(1)
   })
 
-  it('should support typing meta properties (no ts-expected errors)', () => {
+  it('should support typing meta properties (no ts-expected errors)', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         meta: z.object({
@@ -392,9 +413,13 @@ describe('state meta data', () => {
       | undefined
 
     actor.getSnapshot().getMeta()['(machine).a']
+
+    yield* expect(actor.getSnapshot().getMeta()['(machine).a']).toEqual({
+      layout: 'a-layout',
+    })
   })
 
-  it('should strongly type the state IDs in snapshot.getMeta()', () => {
+  it('should strongly type the state IDs in snapshot.getMeta()', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         meta: z.object({}),
@@ -432,9 +457,14 @@ describe('state meta data', () => {
 
     // @ts-expect-error
     metaValues['unknown state']
+
+    yield* expect({
+      parentState: metaValues['root.parentState'],
+      childState: metaValues['root.parentState.childState'],
+    }).toEqual({ parentState: {}, childState: {} })
   })
 
-  it('should strongly type the state IDs in snapshot.getMeta() (no root ID)', () => {
+  it('should strongly type the state IDs in snapshot.getMeta() (no root ID)', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         meta: z.object({}),
@@ -472,11 +502,16 @@ describe('state meta data', () => {
 
     // @ts-expect-error
     metaValues['unknown state']
+
+    yield* expect({
+      parentState: metaValues['(machine).parentState'],
+      childState: metaValues['(machine).parentState.childState'],
+    }).toEqual({ parentState: {}, childState: {} })
   })
 })
 
 describe('transition meta data', () => {
-  it('supports distinct state and transition metadata schemas', () => {
+  it('supports distinct state and transition metadata schemas', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         meta: z.object({ label: z.string() }),
@@ -496,10 +531,15 @@ describe('transition meta data', () => {
     nextTransition.meta satisfies
       | { trackingId: number }
       | undefined
+
+    yield* expect({
+      rootMeta: machine.root.meta,
+      nextMeta: nextTransition.meta,
+    }).toEqual({ rootMeta: { label: 'root' }, nextMeta: { trackingId: 42 } })
   })
 
-  it('rejects state and transition metadata in the wrong positions', () => {
-    createMachine({
+  it('rejects state and transition metadata in the wrong positions', function*({ expect }) {
+    const stateMetaMachine = createMachine({
       schemas: {
         meta: z.object({ state: z.string() }),
         transitionMeta: z.object({ transition: z.string() }),
@@ -508,7 +548,7 @@ describe('transition meta data', () => {
       meta: { transition: 'root' },
     })
 
-    createMachine({
+    const transitionMetaMachine = createMachine({
       schemas: {
         meta: z.object({ state: z.string() }),
         transitionMeta: z.object({ transition: z.string() }),
@@ -520,9 +560,22 @@ describe('transition meta data', () => {
         },
       },
     })
+
+    const nextTransition = transitionMetaMachine.root.transitions.get('NEXT')![0]
+    if (nextTransition === undefined) {
+      throw new Error('expected the NEXT transition')
+    }
+
+    yield* expect({
+      stateRootMeta: stateMetaMachine.root.meta,
+      transitionMeta: nextTransition.meta,
+    }).toEqual({
+      stateRootMeta: { transition: 'root' },
+      transitionMeta: { state: 'next' },
+    })
   })
 
-  it('uses the state metadata schema for transitions by default', () => {
+  it('uses the state metadata schema for transitions by default', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({}),
@@ -544,6 +597,14 @@ describe('transition meta data', () => {
       | { legacy: string }
       | undefined
 
+    yield* expect({
+      rootMeta: machine.root.meta,
+      nextMeta: nextTransition.meta,
+    }).toEqual({
+      rootMeta: { legacy: 'state' },
+      nextMeta: { legacy: 'transition' },
+    })
+
     createMachine({
       schemas: {
         // @ts-expect-error invalid metadata prevents this overload match
@@ -561,7 +622,7 @@ describe('transition meta data', () => {
     })
   })
 
-  it('preserves transition metadata on v6 transition definitions', () => {
+  it('preserves transition metadata on v6 transition definitions', function*({ expect }) {
     const machine = setup({
       schemas: {
         meta: z.object({ state: z.string() }),
@@ -648,18 +709,23 @@ describe('transition meta data', () => {
       | { source: string }
       | undefined
 
-    expect(machine.root.initial.meta).toEqual({ source: 'initial' })
-    expect(machine.root.initial.description).toBe('start idle')
-    expect(
-      JSON.parse(JSON.stringify(serializeMachine(machine))).initial,
-    ).toMatchObject({
-      meta: { source: 'initial' },
-      description: 'start idle',
+    yield* expect({
+      initialMeta: machine.root.initial.meta,
+      initialDescriptionIsStartIdle: machine.root.initial.description === 'start idle',
+      serializedInitial: JSON.parse(JSON.stringify(serializeMachine(machine)))
+        .initial,
+    }).toEqual({
+      initialMeta: { source: 'initial' },
+      initialDescriptionIsStartIdle: true,
+      serializedInitial: expect.objectContaining({
+        meta: { source: 'initial' },
+        description: 'start idle',
+      }),
     })
   })
 
-  it('TS should error with unexpected transition meta property', () => {
-    createMachine({
+  it('TS should error with unexpected transition meta property', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         meta: z.object({
           layout: z.string(),
@@ -678,10 +744,12 @@ describe('transition meta data', () => {
         }),
       } as any,
     })
+
+    yield* expect(machine.root.transitions.get('e1')!.length).toEqual(1)
   })
 
-  it('TS should error with wrong transition meta value type', () => {
-    createMachine({
+  it('TS should error with wrong transition meta value type', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         meta: z.object({
           layout: z.string(),
@@ -700,11 +768,13 @@ describe('transition meta data', () => {
         }),
       } as any,
     })
+
+    yield* expect(machine.root.transitions.get('e1')!.length).toEqual(1)
   })
 })
 
 describe('state description', () => {
-  it('state node should have its description', () => {
+  it('state node should have its description', function*({ expect }) {
     const machine = createMachine({
       initial: 'test',
       states: {
@@ -719,12 +789,12 @@ describe('state description', () => {
       throw new Error('expected the test state')
     }
 
-    expect(testState.description).toEqual('This is a test')
+    yield* expect(testState.description).toEqual('This is a test')
   })
 })
 
 describe('transition description', () => {
-  it('state node should have its description', () => {
+  it('state node should have its description', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -747,6 +817,6 @@ describe('transition description', () => {
       throw new Error('expected an EVENT transition')
     }
 
-    expect(eventTransition.description).toEqual('This is a test')
+    yield* expect(eventTransition.description).toEqual('This is a test')
   })
 })

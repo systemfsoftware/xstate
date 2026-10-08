@@ -1,6 +1,7 @@
+import { describe, expectTypeOf, it } from '@systemfsoftware/vitest'
 import { createMachine, type SnapshotFrom, types } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import * as fc from 'fast-check'
-import { describe, expect, expectTypeOf, it } from 'vitest'
 import * as z from 'zod'
 import type { TestStateKey } from '../src/engine/propertyTest.js'
 import { ModelTestFailure, propertyTest, testPaths } from '../src/index.js'
@@ -35,18 +36,22 @@ describe('testPaths() with top-level `states` and no `sut`', () => {
     }
   }
 
-  it('accepts fast-check arbitraries', async () => {
+  it('accepts fast-check arbitraries', function*({ expect }) {
     const { seen, states } = recordStates()
-    await testPaths(lightMachine, {
-      events: { NEXT: fc.constant({}) },
-      states,
-    })
+    yield* Effect.promise(() =>
+      testPaths(lightMachine, {
+        events: { NEXT: fc.constant({}) },
+        states,
+      })
+    )
 
-    expect(seen).toContain('yellow')
-    expect(seen).toContain('red.walk')
+    yield* expect({
+      sawYellow: seen.includes('yellow'),
+      sawRedWalk: seen.includes('red.walk'),
+    }).toEqual({ sawYellow: true, sawRedWalk: true })
   })
 
-  it('accepts schema-derived events', async () => {
+  it('accepts schema-derived events', function*({ expect }) {
     const schemaMachine = createMachine({
       schemas: { events: { SET: z.object({ value: z.number().int() }) } },
       initial: 'idle',
@@ -56,27 +61,32 @@ describe('testPaths() with top-level `states` and no `sut`', () => {
       },
     })
     const seen: unknown[] = []
-    const { results } = await testPaths(schemaMachine, {
-      states: {
-        set: (snapshot) => {
-          seen.push(snapshot.value)
+    const { results } = yield* Effect.promise(() =>
+      testPaths(schemaMachine, {
+        states: {
+          set: (snapshot) => {
+            seen.push(snapshot.value)
+          },
         },
-      },
-    })
+      })
+    )
 
-    expect(results.length).toBeGreaterThan(0)
-    expect(seen).toContain('set')
+    yield* expect({
+      resultCountPositive: results.length > 0,
+      sawSet: seen.includes('set'),
+    }).toEqual({ resultCountPositive: true, sawSet: true })
   })
 
-  it('accepts `(rng) => payload` generators', async () => {
+  it('accepts `(rng) => payload` generators', function*({ expect }) {
     const { seen, states } = recordStates()
-    // Typed for arbitraries, but a plain generator passes through untouched.
-    await testPaths(lightMachine, {
-      events: { NEXT: (() => ({})) as never },
-      states,
-    })
+    yield* Effect.promise(() =>
+      testPaths(lightMachine, {
+        events: { NEXT: (() => ({})) as never },
+        states,
+      })
+    )
 
-    expect(seen).toContain('red.walk')
+    yield* expect({ sawRedWalk: seen.includes('red.walk') }).toEqual({ sawRedWalk: true })
   })
 })
 
@@ -90,32 +100,38 @@ describe('fast-check run bounds', () => {
     on: { INC: ({ context }) => ({ context: { count: context.count + 1 } }) },
   })
 
-  it('reaches a `maxCommands` above fast-check’s default size', async () => {
-    const { coverage } = await propertyTest(counterMachine, {
-      seed: 1,
-      numRuns: 50,
-      maxCommands: 20,
-      events: { INC: fc.constant({}) },
-    })
+  it('reaches a `maxCommands` above fast-check’s default size', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 1,
+        numRuns: 50,
+        maxCommands: 20,
+        events: { INC: fc.constant({}) },
+      })
+    )
 
-    expect(coverage.exploration.maximumObservedSequenceLength).toBe(20)
+    yield* expect(coverage.exploration.maximumObservedSequenceLength).toBe(20)
   })
 
-  it('bounds a batched campaign by `numRuns`', async () => {
-    const { coverage } = await propertyTest(counterMachine, {
-      seed: 1,
-      numRuns: 7,
-      until: () => false,
-      events: { INC: fc.constant({}) },
-    })
+  it('bounds a batched campaign by `numRuns`', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 1,
+        numRuns: 7,
+        until: () => false,
+        events: { INC: fc.constant({}) },
+      })
+    )
 
-    expect(coverage.exploration.completedRuns).toBe(7)
-    expect(coverage.exploration.configuredRuns).toBe(7)
+    yield* expect({
+      completedRuns: coverage.exploration.completedRuns,
+      configuredRuns: coverage.exploration.configuredRuns,
+    }).toEqual({ completedRuns: 7, configuredRuns: 7 })
   })
 })
 
 describe('types', () => {
-  it('keeps the snapshot type in testPaths() results', () => {
+  it('keeps the snapshot type in testPaths() results', function*({ expect }) {
     if (false as boolean) {
       void testPaths(lightMachine).then(({ results }) => {
         const first = results[0]
@@ -127,21 +143,27 @@ describe('types', () => {
         >()
       })
     }
+
+    yield* expect(lightMachine.id).toEqual('light')
   })
 
-  it('suggests state-value keys for `states`', () => {
+  it('suggests state-value keys for `states`', function*({ expect }) {
     type Key = TestStateKey<SnapshotFrom<typeof lightMachine>>
     expectTypeOf<'red.walk'>().toMatchTypeOf<Key>()
     expectTypeOf<'green'>().toMatchTypeOf<Key>()
     expectTypeOf<'#light.red'>().toMatchTypeOf<Key>()
     expectTypeOf<'*'>().toMatchTypeOf<Key>()
+
+    yield* expect(lightMachine.id).toEqual('light')
   })
 
-  it('keeps the trace typed after `instanceof`', () => {
+  it('keeps the trace typed after `instanceof`', function*({ expect }) {
     const error: unknown = undefined
     if (error instanceof ModelTestFailure) {
       expectTypeOf(error.trace).not.toBeAny()
       expectTypeOf(error.trace.finalSnapshot).not.toBeAny()
     }
+
+    yield* expect(ModelTestFailure.name).toEqual('ModelTestFailure')
   })
 })

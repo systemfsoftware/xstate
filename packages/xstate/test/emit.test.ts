@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import {
   type AnyEventObject,
@@ -11,20 +12,9 @@ import {
   createObservableLogic,
 } from '../src/index.js'
 
-// mocked reportUnhandledError due to unknown issue with vitest and global error
-// handlers not catching thrown errors
-// see: https://github.com/vitest-dev/vitest/issues/6292
-vi.mock('../src/reportUnhandledError.js', () => {
-  return {
-    reportUnhandledError: (err: unknown) => {
-      console.error(err)
-    },
-  }
-})
-
 describe('event emitter', () => {
-  it('only emits expected events if specified in schemas', () => {
-    createMachine({
+  it('only emits expected events if specified in schemas', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         emitted: {
           greet: z.object({
@@ -54,10 +44,12 @@ describe('event emitter', () => {
         },
       },
     })
+
+    yield* expect(machine.getInitialSnapshot().status).toBe('active')
   })
 
-  it('emits any events if not specified in schemas (unsafe)', () => {
-    createMachine({
+  it('emits any events if not specified in schemas (unsafe)', function*({ expect }) {
+    const machine = createMachine({
       entry: (_, enq) => {
         enq.emit({
           type: 'nonsense',
@@ -80,9 +72,11 @@ describe('event emitter', () => {
         },
       },
     })
+
+    yield* expect(machine.getInitialSnapshot().status).toBe('active')
   })
 
-  it('emits events that can be listened to on actorRef.on(…)', async () => {
+  it('emits events that can be listened to on actorRef.on(…)', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         emitted: {
@@ -108,14 +102,16 @@ describe('event emitter', () => {
         type: 'someEvent',
       })
     })
-    const event = await new Promise<AnyEventObject>((res) => {
-      actor.on('emitted', res)
-    })
+    const event = yield* Effect.promise(() =>
+      new Promise<AnyEventObject>((res) => {
+        actor.on('emitted', res)
+      })
+    )
 
-    expect(event['foo']).toBe('bar')
+    yield* expect(event['foo']).toBe('bar')
   })
 
-  it('enqueue.emit(…) emits events that can be listened to on actorRef.on(…)', async () => {
+  it('enqueue.emit(…) emits events that can be listened to on actorRef.on(…)', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         emitted: {
@@ -145,14 +141,16 @@ describe('event emitter', () => {
         type: 'someEvent',
       })
     })
-    const event = await new Promise<AnyEventObject>((res) => {
-      actor.on('emitted', res)
-    })
+    const event = yield* Effect.promise(() =>
+      new Promise<AnyEventObject>((res) => {
+        actor.on('emitted', res)
+      })
+    )
 
-    expect(event['foo']).toBe('bar')
+    yield* expect(event['foo']).toBe('bar')
   })
 
-  it('handles errors', async () => {
+  it('handles errors', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         emitted: {
@@ -171,9 +169,15 @@ describe('event emitter', () => {
       },
     })
 
-    const actor = createActor(machine).start()
+    const listenerError = new Error('oops')
+    const reported: unknown[] = []
+    const actor = createActor(machine, {
+      reportUnhandledError: (error) => {
+        reported.push(error)
+      },
+    }).start()
     actor.on('emitted', () => {
-      throw new Error('oops')
+      throw listenerError
     })
     setTimeout(() => {
       actor.send({
@@ -181,12 +185,18 @@ describe('event emitter', () => {
       })
     })
 
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 10)))
 
-    expect(actor.getSnapshot().status).toEqual('active')
+    yield* expect({
+      status: actor.getSnapshot().status,
+      reported,
+    }).toEqual({
+      status: 'active',
+      reported: [listenerError],
+    })
   })
 
-  it('dynamically emits events that can be listened to on actorRef.on(…)', async () => {
+  it('dynamically emits events that can be listened to on actorRef.on(…)', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -211,18 +221,20 @@ describe('event emitter', () => {
         type: 'someEvent',
       })
     })
-    const event = await new Promise<AnyEventObject>((res) => {
-      actor.on('emitted', res)
-    })
+    const event = yield* Effect.promise(() =>
+      new Promise<AnyEventObject>((res) => {
+        actor.on('emitted', res)
+      })
+    )
 
-    expect(event).toEqual({
+    yield* expect(event).toEqual({
       type: 'emitted',
       count: 10,
     })
   })
 
-  it('listener should be able to read the updated snapshot of the emitting actor', () => {
-    const spy = vi.fn()
+  it('listener should be able to read the updated snapshot of the emitting actor', function*({ expect }) {
+    const values: unknown[] = []
 
     const machine = createMachine({
       initial: 'a',
@@ -246,18 +258,17 @@ describe('event emitter', () => {
 
     const actor = createActor(machine)
     actor.on('someEvent', () => {
-      spy(actor.getSnapshot().value)
+      values.push(actor.getSnapshot().value)
     })
 
     actor.start()
     actor.send({ type: 'ev' })
 
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy).toHaveBeenCalledWith('b')
+    yield* expect(values).toEqual(['b'])
   })
 
-  it('wildcard listeners should be able to receive all emitted events', () => {
-    const spy = vi.fn()
+  it('wildcard listeners should be able to receive all emitted events', function*({ expect }) {
+    const events: unknown[] = []
 
     const machine = createMachine({
       schemas: {
@@ -286,25 +297,26 @@ describe('event emitter', () => {
 
       // @ts-expect-error
       ev.type satisfies 'whatever'
-      spy(ev)
+      events.push(ev)
     })
 
     actor.start()
 
     actor.send({ type: 'event' })
 
-    expect(spy).toHaveBeenCalledTimes(1)
+    yield* expect(events).toEqual([{ type: 'emitted' }])
   })
 
-  it('events can be emitted from async logic', () => {
-    const spy = vi.fn()
+  it('events can be emitted from async logic', function*({ expect }) {
+    const events: unknown[] = []
 
     const logic = createAsyncLogic<any, any, { type: 'emitted'; msg: string }>({
-      run: async (_, enq) => {
+      run: (_, enq) => {
         enq.emit({
           type: 'emitted',
           msg: 'hello',
         })
+        return Promise.resolve()
       },
     })
 
@@ -318,21 +330,16 @@ describe('event emitter', () => {
 
       ev satisfies { msg: string }
 
-      spy(ev)
+      events.push(ev)
     })
 
     actor.start()
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'emitted',
-        msg: 'hello',
-      }),
-    )
+    yield* expect(events).toEqual([{ type: 'emitted', msg: 'hello' }])
   })
 
-  it('events can be emitted from custom logic', () => {
-    const spy = vi.fn()
+  it('events can be emitted from custom logic', function*({ expect }) {
+    const events: unknown[] = []
 
     const logic = createLogic<
       {},
@@ -362,23 +369,18 @@ describe('event emitter', () => {
 
       ev satisfies { msg: string }
 
-      spy(ev)
+      events.push(ev)
     })
 
     actor.start()
 
     actor.send({ type: 'emit' })
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'emitted',
-        msg: 'hello',
-      }),
-    )
+    yield* expect(events).toEqual([{ type: 'emitted', msg: 'hello' }])
   })
 
-  it('events can be emitted from observable logic', () => {
-    const spy = vi.fn()
+  it('events can be emitted from observable logic', function*({ expect }) {
+    const events: unknown[] = []
 
     const logic = createObservableLogic<
       any,
@@ -409,21 +411,16 @@ describe('event emitter', () => {
 
       ev satisfies { msg: string }
 
-      spy(ev)
+      events.push(ev)
     })
 
     actor.start()
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'emitted',
-        msg: 'hello',
-      }),
-    )
+    yield* expect(events).toEqual([{ type: 'emitted', msg: 'hello' }])
   })
 
-  it('events can be emitted from event observable logic', () => {
-    const spy = vi.fn()
+  it('events can be emitted from event observable logic', function*({ expect }) {
+    const events: unknown[] = []
 
     const logic = createEventObservableLogic<
       any,
@@ -454,21 +451,16 @@ describe('event emitter', () => {
 
       ev satisfies { msg: string }
 
-      spy(ev)
+      events.push(ev)
     })
 
     actor.start()
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'emitted',
-        msg: 'hello',
-      }),
-    )
+    yield* expect(events).toEqual([{ type: 'emitted', msg: 'hello' }])
   })
 
-  it('events can be emitted from callback logic', () => {
-    const spy = vi.fn()
+  it('events can be emitted from callback logic', function*({ expect }) {
+    const events: unknown[] = []
 
     const logic = createCallbackLogic<
       any,
@@ -491,22 +483,17 @@ describe('event emitter', () => {
 
       ev satisfies { msg: string }
 
-      spy(ev)
+      events.push(ev)
     })
 
     actor.start()
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'emitted',
-        msg: 'hello',
-      }),
-    )
+    yield* expect(events).toEqual([{ type: 'emitted', msg: 'hello' }])
   })
 
   // TODO: event sourcing
-  it.skip('events can be emitted from callback logic (restored root)', () => {
-    const spy = vi.fn()
+  it.skip('events can be emitted from callback logic (restored root)', function*({ expect }) {
+    const events: unknown[] = []
 
     const logic = createCallbackLogic<
       any,
@@ -538,16 +525,11 @@ describe('event emitter', () => {
     })
 
     restoredActor.getSnapshot().children['cb']!.on('emitted', (ev) => {
-      spy(ev)
+      events.push(ev)
     })
 
     restoredActor.start()
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'emitted',
-        msg: 'hello',
-      }),
-    )
+    yield* expect(events).toEqual([{ type: 'emitted', msg: 'hello' }])
   })
 })

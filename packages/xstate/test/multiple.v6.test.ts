@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachineFromConfig } from '../src/index.js'
 
-describe('multiple', () => {
+describe('multiple', (it) => {
   const machine = createMachineFromConfig({
     initial: 'simple',
     states: {
@@ -125,35 +125,35 @@ describe('multiple', () => {
     },
   })
 
-  describe('transitions to parallel states', () => {
-    it('should enter initial states of parallel states', () => {
+  describe('transitions to parallel states', (it) => {
+    it('should enter initial states of parallel states', function*({ expect }) {
       const actorRef = createActor(machine).start()
       actorRef.send({ type: 'INITIAL' })
-      expect(actorRef.getSnapshot().value).toEqual({
+      yield* expect(actorRef.getSnapshot().value).toEqual({
         para: { A: 'B', K: 'L', P: 'Q' },
       })
     })
 
-    it('should enter specific states in one region', () => {
+    it('should enter specific states in one region', function*({ expect }) {
       const actorRef = createActor(machine).start()
       actorRef.send({ type: 'DEEP_M' })
-      expect(actorRef.getSnapshot().value).toEqual({
+      yield* expect(actorRef.getSnapshot().value).toEqual({
         para: { A: 'B', K: 'M', P: 'Q' },
       })
     })
 
-    it('should enter specific states in all regions', () => {
+    it('should enter specific states in all regions', function*({ expect }) {
       const actorRef = createActor(machine).start()
       actorRef.send({ type: 'DEEP_CMR' })
-      expect(actorRef.getSnapshot().value).toEqual({
+      yield* expect(actorRef.getSnapshot().value).toEqual({
         para: { A: 'C', K: 'M', P: 'R' },
       })
     })
 
-    it('should enter specific states in some regions', () => {
+    it('should enter specific states in some regions', function*({ expect }) {
       const actorRef = createActor(machine).start()
       actorRef.send({ type: 'DEEP_MR' })
-      expect(actorRef.getSnapshot().value).toEqual({
+      yield* expect(actorRef.getSnapshot().value).toEqual({
         para: { A: 'B', K: 'M', P: 'R' },
       })
     })

@@ -1,14 +1,11 @@
-import { describe, it } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
 import z from 'zod'
 import { createMachine } from '../index.js'
 import { getShortestPaths } from './index.js'
 
-describe('getShortestPath types', () => {
-  it('`getEvents` should be allowed to return a mutable array', () => {
+describe('getShortestPath types', (it) => {
+  it('`getEvents` should be allowed to return a mutable array', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as {
-      //   events: { type: 'FOO' } | { type: 'BAR' };
-      // }
       schemas: {
         events: {
           FOO: z.object({}),
@@ -17,20 +14,21 @@ describe('getShortestPath types', () => {
       },
     })
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       events: [
         {
           type: 'FOO',
         },
       ],
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 
-  it('`getEvents` should be allowed to return a readonly array', () => {
+  it('`getEvents` should be allowed to return a readonly array', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as {
-      //   events: { type: 'FOO' } | { type: 'BAR' };
-      // }
       schemas: {
         events: {
           FOO: z.object({}),
@@ -39,20 +37,21 @@ describe('getShortestPath types', () => {
       },
     })
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       events: [
         {
           type: 'FOO',
         },
       ],
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 
-  it('`events` should allow known event', () => {
+  it('`events` should allow known event', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as {
-      //   events: { type: 'FOO'; value: number };
-      // }
       schemas: {
         events: {
           FOO: z.object({ value: z.number() }),
@@ -60,7 +59,7 @@ describe('getShortestPath types', () => {
       },
     })
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       events: [
         {
           type: 'FOO',
@@ -68,13 +67,14 @@ describe('getShortestPath types', () => {
         },
       ],
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 
-  it('`events` should not require all event types (array literal expression)', () => {
+  it('`events` should not require all event types (array literal expression)', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as {
-      //   events: { type: 'FOO'; value: number } | { type: 'BAR'; value: number };
-      // }
       schemas: {
         events: {
           FOO: z.object({ value: z.number() }),
@@ -83,12 +83,16 @@ describe('getShortestPath types', () => {
       },
     })
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       events: [{ type: 'FOO', value: 100 }],
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 
-  it('`events` should not require all event types (tuple)', () => {
+  it('`events` should not require all event types (tuple)', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -100,12 +104,16 @@ describe('getShortestPath types', () => {
 
     const events = [{ type: 'FOO', value: 100 }] as const
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       events,
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 
-  it('`events` should not require all event types (function)', () => {
+  it('`events` should not require all event types (function)', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -115,14 +123,17 @@ describe('getShortestPath types', () => {
       },
     })
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       events: () => [{ type: 'FOO', value: 100 }] as const,
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 
-  it('`events` should not allow unknown events', () => {
+  it('`events` should not allow unknown events', function*({ expect }) {
     const machine = createMachine({
-      // types: { events: {} as { type: 'FOO'; value: number } }
       schemas: {
         events: {
           FOO: z.object({ value: z.number() }),
@@ -130,7 +141,7 @@ describe('getShortestPath types', () => {
       },
     })
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       events: [
         {
           // @ts-expect-error
@@ -139,13 +150,14 @@ describe('getShortestPath types', () => {
         },
       ],
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 
-  it('`events` should only allow props of a specific event', () => {
+  it('`events` should only allow props of a specific event', function*({ expect }) {
     const machine = createMachine({
-      // types: {} as {
-      //   events: { type: 'FOO'; value: number } | { type: 'BAR'; other: string };
-      // }
       schemas: {
         events: {
           FOO: z.object({ value: z.number() }),
@@ -154,7 +166,7 @@ describe('getShortestPath types', () => {
       },
     })
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       events: [
         {
           type: 'FOO',
@@ -163,21 +175,33 @@ describe('getShortestPath types', () => {
         },
       ],
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 
-  it('`serializeEvent` should be allowed to return plain string', () => {
+  it('`serializeEvent` should be allowed to return plain string', function*({ expect }) {
     const machine = createMachine({})
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       serializeEvent: () => '',
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 
-  it('`serializeState` should be allowed to return plain string', () => {
+  it('`serializeState` should be allowed to return plain string', function*({ expect }) {
     const machine = createMachine({})
 
-    getShortestPaths(machine, {
+    const paths = getShortestPaths(machine, {
       serializeState: () => '',
     })
+
+    yield* expect(
+      paths.map((path) => path.steps.map((step) => step.event.type)),
+    ).toEqual([['@xstate.init']])
   })
 })

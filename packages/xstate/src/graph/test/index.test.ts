@@ -1,10 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
 import { createMachine } from '../../index.js'
 import { getShortestPaths } from '../index.js'
 
+const thrownBy = (run: () => unknown): unknown => {
+  try {
+    run()
+    return undefined
+  } catch (error) {
+    return error
+  }
+}
+
 describe('events', () => {
-  it('should allow for dynamic generation of cases based on state', () => {
+  it('should allow for dynamic generation of cases based on state', function*({ expect }) {
     const values = [1, 2, 3]
     const testMachine = createMachine({
       schemas: {
@@ -17,7 +26,7 @@ describe('events', () => {
       },
       initial: 'a',
       context: {
-        values, // to be read by generator
+        values,
       },
       states: {
         a: {
@@ -43,7 +52,7 @@ describe('events', () => {
       events: (state) => state.context.values.map((value) => ({ type: 'EVENT', value }) as const),
     })
 
-    expect(
+    yield* expect(
       paths
         .filter((path) => path.steps.length > 1)
         .map((path) => {
@@ -53,27 +62,25 @@ describe('events', () => {
           }
           return step.event
         }),
-    ).toMatchInlineSnapshot(`
-      [
-        {
-          "type": "EVENT",
-          "value": 1,
-        },
-        {
-          "type": "EVENT",
-          "value": 2,
-        },
-        {
-          "type": "EVENT",
-          "value": 3,
-        },
-      ]
-    `)
+    ).toEqual([
+      {
+        type: 'EVENT',
+        value: 1,
+      },
+      {
+        type: 'EVENT',
+        value: 2,
+      },
+      {
+        type: 'EVENT',
+        value: 3,
+      },
+    ])
   })
 })
 
 describe('state limiting', () => {
-  it('should limit states with stopWhen option', () => {
+  it('should limit states with stopWhen option', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -103,7 +110,7 @@ describe('state limiting', () => {
       },
     })
 
-    expect(paths.map((path) => path.state.context.count)).toEqual([
+    yield* expect(paths.map((path) => path.state.context.count)).toEqual([
       0,
       1,
       2,
@@ -115,7 +122,7 @@ describe('state limiting', () => {
 })
 
 // https://github.com/statelyai/xstate/issues/1935
-it('prevents infinite recursion based on a provided limit', () => {
+it('prevents infinite recursion based on a provided limit', function*({ expect }) {
   const machine = createMachine({
     schemas: {
       context: z.object({
@@ -135,12 +142,21 @@ it('prevents infinite recursion based on a provided limit', () => {
     },
   })
 
-  expect(() => {
+  const error = thrownBy(() => {
     getShortestPaths(machine, { limit: 100 })
-  }).toThrowErrorMatchingInlineSnapshot(`[Error: Traversal limit exceeded]`)
+  })
+
+  yield* expect(
+    error instanceof Error
+      ? { name: error.name, message: error.message }
+      : { name: typeof error, message: 'no error was thrown' },
+  ).toEqual({
+    name: 'Error',
+    message: 'Traversal limit exceeded',
+  })
 })
 
-it('should traverse with input', () => {
+it('should traverse with input', function*({ expect }) {
   const machine = createMachine({
     schemas: {
       input: z.object({
@@ -176,7 +192,6 @@ it('should traverse with input', () => {
   if (firstPath1 === undefined) {
     throw new Error('expected a first path')
   }
-  expect(firstPath1.steps.map((s) => s.state.value)).toEqual(['shortName'])
 
   const path2 = getShortestPaths(machine, {
     input: { name: 'edward' },
@@ -186,5 +201,12 @@ it('should traverse with input', () => {
   if (firstPath2 === undefined) {
     throw new Error('expected a first path')
   }
-  expect(firstPath2.steps.map((s) => s.state.value)).toEqual(['longName'])
+
+  yield* expect({
+    shortName: firstPath1.steps.map((s) => s.state.value),
+    longName: firstPath2.steps.map((s) => s.state.value),
+  }).toEqual({
+    shortName: ['shortName'],
+    longName: ['longName'],
+  })
 })

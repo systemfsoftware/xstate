@@ -1,6 +1,7 @@
-import { createMachine } from '@systemfsoftware/xstate'
+import { describe, it } from '@systemfsoftware/vitest'
+import { createMachine, type EventFrom, type SnapshotFrom } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import * as fc from 'fast-check'
-import { describe, expect, it } from 'vitest'
 import {
   describeTestSuite,
   fastCheckAdapter,
@@ -20,11 +21,22 @@ const trafficMachine = createMachine({
   },
 })
 
-/** `STOP` always parks the light on red. */
-const invariant = ({ snapshot, event }: { snapshot: any; event: any }) => {
-  expect(typeof snapshot.value).toBe('string')
-  if (event?.type === 'STOP') {
-    expect(snapshot.value).toBe('red')
+const invariant = ({
+  snapshot,
+  event,
+}: {
+  snapshot: SnapshotFrom<typeof trafficMachine>
+  event: EventFrom<typeof trafficMachine> | undefined
+}) => {
+  if (typeof snapshot.value !== 'string') {
+    throw new Error(
+      `expected snapshot.value to be a string, got ${typeof snapshot.value}`,
+    )
+  }
+  if (event?.type === 'STOP' && snapshot.value !== 'red') {
+    throw new Error(
+      `expected STOP to park the light on red, got ${String(snapshot.value)}`,
+    )
   }
 }
 
@@ -40,28 +52,36 @@ const generate = () =>
   })
 
 describe('property suites with FastCheck', () => {
-  it('exports a coverage-complete suite that replays offline', async () => {
-    const suite = await generate()
+  it('exports a coverage-complete suite that replays offline', function*({
+    expect,
+  }) {
+    const suite = yield* Effect.promise(() => generate())
 
-    expect(suite.machineId).toBe('traffic')
     const transitionsDimension = suite.coverage.dimensions['transitions']
     if (transitionsDimension === undefined) {
       throw new Error('expected a transitions dimension')
     }
-    expect(transitionsDimension.uncovered).toEqual([])
-    expect(suite.fixtures.length).toBeGreaterThan(0)
+    yield* expect({
+      machineId: suite.machineId,
+      uncovered: transitionsDimension.uncovered,
+      hasFixtures: suite.fixtures.length > 0,
+    }).toEqual({ machineId: 'traffic', uncovered: [], hasFixtures: true })
 
     const replayed = parseTestSuite(serializeTestSuite(suite))
-    const result = await replayTestSuite(trafficMachine, replayed, {
-      invariant,
-    })
+    const result = yield* Effect.promise(() =>
+      replayTestSuite(trafficMachine, replayed, {
+        invariant,
+      })
+    )
 
-    expect(result.failed).toEqual([])
-    expect(result.passed).toBe(suite.fixtures.length)
+    yield* expect({ failed: result.failed, passed: result.passed }).toEqual({
+      failed: [],
+      passed: suite.fixtures.length,
+    })
   })
 
-  it('registers one test per fixture', async () => {
-    const suite = await generate()
+  it('registers one test per fixture', function*({ expect }) {
+    const suite = yield* Effect.promise(() => generate())
     const registered: string[] = []
 
     describeTestSuite(suite, trafficMachine, {
@@ -72,6 +92,6 @@ describe('property suites with FastCheck', () => {
       },
     })
 
-    expect(registered).toHaveLength(suite.fixtures.length)
+    yield* expect(registered.length).toEqual(suite.fixtures.length)
   })
 })

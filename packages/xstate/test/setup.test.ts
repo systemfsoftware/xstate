@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, setup, types } from '../src/index.js'
 
 describe('setup', () => {
-  it('exposes schemas', () => {
+  it('exposes schemas', function*({ expect }) {
     const schemas = {
       context: types<{ count: number }>(),
       events: {
@@ -35,11 +35,16 @@ describe('setup', () => {
 
     const s = setup({ schemas })
 
-    expect(s.schemas).toBe(schemas)
-    expect(setup().schemas).toEqual({})
+    yield* expect({
+      identity: s.schemas === schemas,
+      defaultSchemas: setup().schemas,
+    }).toEqual({
+      identity: true,
+      defaultSchemas: {},
+    })
   })
 
-  it('exposes extended schemas', () => {
+  it('exposes extended schemas', function*({ expect }) {
     const context = types<{ count: number }>()
     const inc = types<{ value: number }>()
     const reset = types<{}>()
@@ -107,24 +112,42 @@ describe('setup', () => {
       },
     })
 
-    expect(s.schemas.context).toBe(context)
-    expect(s.schemas.events.INC).toBe(inc)
-    expect(s.schemas.events.RESET).toBe(reset)
-    expect(s.schemas.actions.track.params).toBe(track)
-    expect(s.schemas.actions.notify.params).toBe(notify)
-    expect(s.schemas.guards.hasAccess.params).toBe(hasAccess)
-    expect(s.schemas.guards.canReset.params).toBe(canReset)
-    expect(s.schemas.emitted.changed).toBe(changed)
-    expect(s.schemas.emitted.notified).toBe(notified)
-    expect(s.schemas.input).toBe(input)
-    expect(s.schemas.output).toBe(output)
-    expect(s.schemas.meta).toBe(meta)
-    expect(s.schemas.tags).toBe(tags)
-    expect(s.schemas.children.child).toBe(child)
-    expect(s.schemas.children.sibling).toBe(sibling)
+    yield* expect({
+      contextIs: s.schemas.context === context,
+      incIs: s.schemas.events.INC === inc,
+      resetIs: s.schemas.events.RESET === reset,
+      trackParamsIs: s.schemas.actions.track.params === track,
+      notifyParamsIs: s.schemas.actions.notify.params === notify,
+      hasAccessParamsIs: s.schemas.guards.hasAccess.params === hasAccess,
+      canResetParamsIs: s.schemas.guards.canReset.params === canReset,
+      changedIs: s.schemas.emitted.changed === changed,
+      notifiedIs: s.schemas.emitted.notified === notified,
+      inputIs: s.schemas.input === input,
+      outputIs: s.schemas.output === output,
+      metaIs: s.schemas.meta === meta,
+      tagsIs: s.schemas.tags === tags,
+      childIs: s.schemas.children.child === child,
+      siblingIs: s.schemas.children.sibling === sibling,
+    }).toEqual({
+      contextIs: true,
+      incIs: true,
+      resetIs: true,
+      trackParamsIs: true,
+      notifyParamsIs: true,
+      hasAccessParamsIs: true,
+      canResetParamsIs: true,
+      changedIs: true,
+      notifiedIs: true,
+      inputIs: true,
+      outputIs: true,
+      metaIs: true,
+      tagsIs: true,
+      childIs: true,
+      siblingIs: true,
+    })
   })
 
-  it('exposes per-state schemas on the machine state nodes', () => {
+  it('exposes per-state schemas on the machine state nodes', function*({ expect }) {
     const rootContext = types<{ count: number }>()
     const runningContext = types<{ startedAt: number }>()
     const runningInput = types<{ timeout: number }>()
@@ -161,26 +184,32 @@ describe('setup', () => {
       throw new Error('expected a running state')
     }
 
-    expect(machine.schemas?.context).toBe(rootContext)
-    expect(runningState.schemas?.context).toBe(runningContext)
-    expect(runningState.schemas?.input).toBe(runningInput)
-
     const retryingState = runningState.states['retrying']
     if (retryingState === undefined) {
       throw new Error('expected a retrying state')
     }
-
-    expect(retryingState.schemas?.context).toBe(retryingContext)
 
     const doneState = machine.states['done']
     if (doneState === undefined) {
       throw new Error('expected a done state')
     }
 
-    expect(doneState.schemas).toBeUndefined()
+    yield* expect({
+      rootContextIs: machine.schemas?.context === rootContext,
+      runningContextIs: runningState.schemas?.context === runningContext,
+      runningInputIs: runningState.schemas?.input === runningInput,
+      retryingContextIs: retryingState.schemas?.context === retryingContext,
+      doneSchemasIsUndefined: doneState.schemas === undefined,
+    }).toEqual({
+      rootContextIs: true,
+      runningContextIs: true,
+      runningInputIs: true,
+      retryingContextIs: true,
+      doneSchemasIsUndefined: true,
+    })
   })
 
-  it('deep-merges repeated nested state contracts through extend', () => {
+  it('deep-merges repeated nested state contracts through extend', function*({ expect }) {
     const leftInput = types<{ left: number }>()
     const rightInput = types<{ right: boolean }>()
 
@@ -203,9 +232,6 @@ describe('setup', () => {
         },
       },
     })
-
-    expect(s.states.parent.states?.left.schemas?.input).toBe(leftInput)
-    expect(s.states.parent.states?.right.schemas?.input).toBe(rightInput)
 
     const machine = s.createMachine({
       initial: 'parent',
@@ -234,11 +260,20 @@ describe('setup', () => {
       throw new Error('expected a right state')
     }
 
-    expect(leftState.schemas?.input).toBe(leftInput)
-    expect(rightState.schemas?.input).toBe(rightInput)
+    yield* expect({
+      leftIs: s.states.parent.states?.left.schemas?.input === leftInput,
+      rightIs: s.states.parent.states?.right.schemas?.input === rightInput,
+      machineLeftIs: leftState.schemas?.input === leftInput,
+      machineRightIs: rightState.schemas?.input === rightInput,
+    }).toEqual({
+      leftIs: true,
+      rightIs: true,
+      machineLeftIs: true,
+      machineRightIs: true,
+    })
   })
 
-  it('uses extension state metadata while preserving base descendants', () => {
+  it('uses extension state metadata while preserving base descendants', function*({ expect }) {
     const s = setup({
       states: {
         parent: {
@@ -275,11 +310,16 @@ describe('setup', () => {
       throw new Error('expected a parent state')
     }
 
-    expect(parentState.id).toBe('extension-parent')
-    expect(parentState.config.initial).toBe('right')
+    yield* expect({
+      id: parentState.id,
+      initial: parentState.config.initial,
+    }).toEqual({
+      id: 'extension-parent',
+      initial: 'right',
+    })
   })
 
-  it('extends sources', () => {
+  it('extends sources', function*({ expect }) {
     const calls: string[] = []
 
     const machine = setup({
@@ -329,8 +369,14 @@ describe('setup', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'RUN' })
 
-    expect(calls).toEqual(['base', 'extended'])
-    expect(actor.getSnapshot().value).toBe('done')
-    expect(machine.sources.delays['short']).toBe(1)
+    yield* expect({
+      calls,
+      value: actor.getSnapshot().value,
+      shortDelay: machine.sources.delays['short'],
+    }).toEqual({
+      calls: ['base', 'extended'],
+      value: 'done',
+      shortDelay: 1,
+    })
   })
 })

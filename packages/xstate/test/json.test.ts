@@ -1,7 +1,8 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { Ajv, type SchemaObject } from 'ajv'
+import { Effect } from 'effect'
 import { readFileSync } from 'node:fs'
 import { BehaviorSubject } from 'rxjs'
-import { describe, expect, it, vi } from 'vitest'
 import { createMachineFromConfig } from '../src/createMachineFromConfig.js'
 import {
   createActor,
@@ -20,20 +21,46 @@ const machineSchema: SchemaObject = JSON.parse(
 const ajv = new Ajv()
 const validate = ajv.compile(machineSchema)
 
-const jsEvaluator = ({ source, scope }: any) => Function('scope', `with (scope) { return (${source}); }`)(scope)
-
-function expectSchemaValid(json: unknown) {
-  validate(json)
-  expect(validate.errors).toBeNull()
+type EvaluatorArgs = {
+  source: string
+  scope: Record<string, unknown>
 }
 
-function expectSchemaInvalid(json: unknown) {
-  validate(json)
-  expect(validate.errors).not.toBeNull()
+const jsEvaluator = ({ source, scope }: EvaluatorArgs) =>
+  Function('scope', `with (scope) { return (${source}); }`)(scope)
+
+const readInternal = (value: unknown, key: string): unknown => {
+  if (typeof value !== 'object' || value === null || !(key in value)) {
+    return undefined
+  }
+  return Reflect.get(value, key)
 }
+
+const isSchemaInvalid = (json: unknown): boolean => {
+  validate(json)
+  return validate.errors !== null
+}
+
+const neverResolves = <T>(): Promise<T> => Promise.withResolvers<T>().promise
+
+const waitForSnapshot = (done: () => boolean) =>
+  Effect.promise(() => {
+    const { promise, resolve } = Promise.withResolvers<void>()
+    let attempts = 0
+    const poll = () => {
+      if (done() || attempts >= 200) {
+        resolve()
+        return
+      }
+      attempts += 1
+      setTimeout(poll, 1)
+    }
+    poll()
+    return promise
+  })
 
 describe('json', () => {
-  it('should serialize the machine', () => {
+  it('should serialize the machine', function*({ expect }) {
     const machine = createMachineFromConfig(
       {
         initial: 'foo',
@@ -105,7 +132,7 @@ describe('json', () => {
       {
         actors: {
           invokeSrc: createAsyncLogic({
-            run: () => new Promise(() => {}),
+            run: () => neverResolves(),
           }),
         },
         actions: {
@@ -121,16 +148,10 @@ describe('json', () => {
 
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
 
-    try {
-      validate(json)
-    } catch (err: any) {
-      throw new Error(JSON.stringify(JSON.parse(err.message), null, 2))
-    }
-
-    expect(validate.errors).toBeNull()
+    yield* expect({ invalid: isSchemaInvalid(json) }).toEqual({ invalid: false })
   })
 
-  it('should validate serialized code expressions', () => {
+  it('should validate serialized code expressions', function*({ expect }) {
     const entry = () => {}
     const transition = () => ({ target: 'done' })
     const machine = createMachine({
@@ -155,16 +176,15 @@ describe('json', () => {
 
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
 
-    validate(json)
-
-    expect(validate.errors).toBeNull()
+    yield* expect({ invalid: isSchemaInvalid(json) }).toEqual({ invalid: false })
   })
 
-  it('revives serialized code actions and transitions with evaluators', () => {
-    const entry = ({ context }: any) => ({
+  it('revives serialized code actions and transitions with evaluators', function*({ expect }) {
+    const entry = ({ context }: { context: { count: number } }) => ({
       context: { count: context.count + 1 },
     })
-    const transition = ({ context }: any) => context.count === 1 ? { target: 'done' } : undefined
+    const transition = ({ context }: { context: { count: number } }) =>
+      context.count === 1 ? { target: 'done' } : undefined
     const machine = createMachine({
       context: { count: 0 },
       initial: 'idle',
@@ -179,9 +199,9 @@ describe('json', () => {
       },
     })
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
-    const evaluator = ({ source, scope }: any) => {
+    const evaluator = ({ source, scope }: EvaluatorArgs) => {
       const fn = Function(`return (${source});`)()
-      return fn(scope, scope.enq)
+      return fn(scope, scope['enq'])
     }
 
     const actor = createActor(
@@ -190,14 +210,17 @@ describe('json', () => {
       }),
     ).start()
 
-    expect(actor.getSnapshot().context).toEqual({ count: 1 })
+    const contextBefore = actor.getSnapshot().context
 
     actor.send({ type: 'GO' })
 
-    expect(actor.getSnapshot().value).toBe('done')
+    yield* expect({ contextBefore, valueAfter: actor.getSnapshot().value }).toEqual({
+      contextBefore: { count: 1 },
+      valueAfter: 'done',
+    })
   })
 
-  it('revives serialized code routes with evaluators', () => {
+  it('revives serialized code routes with evaluators', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
@@ -212,17 +235,12 @@ describe('json', () => {
       },
     })
     const json = JSON.parse(JSON.stringify(serializeMachine(machine)))
-    const evaluator = ({ source, scope }: any) => {
+    const evaluator = ({ source, scope }: EvaluatorArgs) => {
       const fn = Function(`return (${source});`)()
       return fn(scope)
     }
 
-    expect(json.states.blocked.route).toMatchInlineSnapshot(`
-      {
-        "@code": "() => false",
-        "@lang": "ts",
-      }
-    `)
+    const route = json.states.blocked.route
 
     const actor = createActor(
       createMachineFromConfig(json, {
@@ -232,10 +250,13 @@ describe('json', () => {
 
     actor.send({ type: 'xstate.route', to: '#blocked' })
 
-    expect(actor.getSnapshot().value).toBe('idle')
+    yield* expect({ route, value: actor.getSnapshot().value }).toEqual({
+      route: { '@code': '() => false', '@lang': 'ts' },
+      value: 'idle',
+    })
   })
 
-  it('should detect an invalid machine', () => {
+  it('should detect an invalid machine', function*({ expect }) {
     const invalidMachineConfig = {
       id: 'something',
       key: 'something',
@@ -243,11 +264,10 @@ describe('json', () => {
       states: {},
     }
 
-    validate(invalidMachineConfig)
-    expect(validate.errors).not.toBeNull()
+    yield* expect({ invalid: isSchemaInvalid(invalidMachineConfig) }).toEqual({ invalid: true })
   })
 
-  it('should not double-serialize invoke transitions', () => {
+  it('should not double-serialize invoke transitions', function*({ expect }) {
     const machine = createMachineFromConfig(
       {
         initial: 'active',
@@ -270,7 +290,7 @@ describe('json', () => {
       {
         actors: {
           someSrc: createAsyncLogic({
-            run: () => new Promise(() => {}),
+            run: () => neverResolves(),
           }),
         },
       },
@@ -283,58 +303,60 @@ describe('json', () => {
     const revivedMachine = createMachineFromConfig(machineObject, {
       actors: {
         someSrc: createAsyncLogic({
-          run: () => new Promise(() => {}),
+          run: () => neverResolves(),
         }),
       },
     })
 
-    // Invoke transitions stay on the invoke definition — not duplicated
-    // into the `on` map.
-    expect(machineObject.states.active.on).toMatchInlineSnapshot(`
-      {
-        "EVENT": {
-          "target": "foo",
-        },
-      }
-    `)
-    expect(machineObject.states.active.invoke).toMatchInlineSnapshot(`
-      {
-        "onDone": {
-          "target": "foo",
-        },
-        "onError": {
-          "target": "bar",
-        },
-        "src": "someSrc",
-      }
-    `)
+    const on = machineObject.states.active.on
+    const invoke = machineObject.states.active.invoke
 
-    // A second round-trip is byte-stable.
-    expect(JSON.stringify(serializeMachine(revivedMachine))).toBe(machineJSON)
+    const roundTrip = JSON.stringify(serializeMachine(revivedMachine))
 
     const activeState = revivedMachine.states['active']
     if (activeState === undefined) {
       throw new Error('expected an active state')
     }
     const transitions = [...activeState.transitions.values()].flat()
-    expect(transitions.filter((t) => t.eventType === 'EVENT')).toHaveLength(1)
-    expect(
-      transitions.some(
+
+    yield* expect({
+      on,
+      invoke,
+      roundTrip,
+      eventTransitionCount: transitions.filter((t) => t.eventType === 'EVENT').length,
+      hasDoneActor: transitions.some(
         (t) =>
           t.eventType === 'xstate.done.actor' &&
           t.matches?.['actorId'] === '0.active',
       ),
-    ).toBe(true)
-    expect(
-      transitions.some(
+      hasErrorActor: transitions.some(
         (t) =>
           t.eventType === 'xstate.error.actor' &&
           t.matches?.['actorId'] === '0.active',
       ),
-    ).toBe(true)
+    }).toEqual({
+      on: {
+        EVENT: {
+          target: 'foo',
+        },
+      },
+      invoke: {
+        onDone: {
+          target: 'foo',
+        },
+        onError: {
+          target: 'bar',
+        },
+        src: 'someSrc',
+      },
+      roundTrip: machineJSON,
+      eventTransitionCount: 1,
+      hasDoneActor: true,
+      hasErrorActor: true,
+    })
   })
 
-  it('round-trips transition payload matches', () => {
+  it('round-trips transition payload matches', function*({ expect }) {
     const machine = createMachineFromConfig({
       initial: 'pending',
       states: {
@@ -357,10 +379,10 @@ describe('json', () => {
 
     actor.send({ type: 'result', actorId: 'second' })
 
-    expect(actor.getSnapshot().value).toBe('second')
+    yield* expect(actor.getSnapshot().value).toBe('second')
   })
 
-  it('revives delayed transitions from JSON', () => {
+  it('revives delayed transitions from JSON', function*({ expect }) {
     const clock = new SimulatedClock()
     const actor = createActor(
       createMachineFromConfig({
@@ -378,12 +400,14 @@ describe('json', () => {
     ).start()
 
     clock.increment(9)
-    expect(actor.getSnapshot().value).toBe('waiting')
+    const atNine = actor.getSnapshot().value
     clock.increment(1)
-    expect(actor.getSnapshot().value).toBe('done')
+    const atTen = actor.getSnapshot().value
+
+    yield* expect({ atNine, atTen }).toEqual({ atNine: 'waiting', atTen: 'done' })
   })
 
-  it('revives state timeouts from JSON', () => {
+  it('revives state timeouts from JSON', function*({ expect }) {
     const clock = new SimulatedClock()
     const actor = createActor(
       createMachineFromConfig({
@@ -400,10 +424,11 @@ describe('json', () => {
     ).start()
 
     clock.increment(10)
-    expect(actor.getSnapshot().value).toBe('timedOut')
+
+    yield* expect(actor.getSnapshot().value).toBe('timedOut')
   })
 
-  it('revives state tags and final output from JSON', () => {
+  it('revives state tags and final output from JSON', function*({ expect }) {
     const actor = createActor(
       createMachineFromConfig({
         initial: 'pending',
@@ -424,17 +449,19 @@ describe('json', () => {
     ).start()
 
     actor.send({ type: 'ACTIVATE' })
-    expect(actor.getSnapshot().hasTag('complete')).toBe(true)
+    const hasComplete = actor.getSnapshot().hasTag('complete')
     actor.send({ type: 'FINISH' })
-    expect(actor.getSnapshot().output).toEqual({ ok: true })
+    const output = actor.getSnapshot().output
+
+    yield* expect({ hasComplete, output }).toEqual({ hasComplete: true, output: { ok: true } })
   })
 
-  it('revives invoke input, completion transitions, and source maps', async () => {
+  it.live('revives invoke input, completion transitions, and source maps', function*({ expect }) {
     let receivedInput: unknown
     const worker = createAsyncLogic<number, { count: number }>({
-      run: async ({ input }) => {
+      run: ({ input }) => {
         receivedInput = input
-        return input.count
+        return Promise.resolve(input.count)
       },
     })
 
@@ -461,15 +488,17 @@ describe('json', () => {
       ),
     ).start()
 
-    await vi.waitFor(() => {
-      expect(actor.getSnapshot().value).toBe('done')
+    yield* waitForSnapshot(() => actor.getSnapshot().value === 'done')
+
+    yield* expect({ value: actor.getSnapshot().value, receivedInput }).toEqual({
+      value: 'done',
+      receivedInput: { count: 42 },
     })
-    expect(receivedInput).toEqual({ count: 42 })
   })
 
-  it('revives invoke source refs when actor sources are provided', async () => {
+  it.live('revives invoke source refs when actor sources are provided', function*({ expect }) {
     const worker = createAsyncLogic({
-      run: async () => 42,
+      run: () => Promise.resolve(42),
     })
 
     const actor = createActor(
@@ -490,21 +519,21 @@ describe('json', () => {
       ),
     ).start()
 
-    await vi.waitFor(() => {
-      expect(actor.getSnapshot().value).toBe('done')
-    })
+    yield* waitForSnapshot(() => actor.getSnapshot().value === 'done')
+
+    yield* expect(actor.getSnapshot().value).toBe('done')
   })
 
-  it('rejects missing action sources', () => {
-    expect(() =>
+  it('rejects missing action sources', function*({ expect }) {
+    yield* expect(() =>
       createMachineFromConfig({
         entry: [{ type: 'track' }],
       })
     ).toThrow('Missing action source "track"')
   })
 
-  it('rejects missing guard sources', () => {
-    expect(() =>
+  it('rejects missing guard sources', function*({ expect }) {
+    yield* expect(() =>
       createMachineFromConfig({
         initial: 'idle',
         states: {
@@ -522,7 +551,7 @@ describe('json', () => {
     ).toThrow('Missing guard source "ready"')
   })
 
-  it('revives serialized numeric delays from root delay maps', () => {
+  it('revives serialized numeric delays from root delay maps', function*({ expect }) {
     const clock = new SimulatedClock()
     const actor = createActor(
       createMachineFromConfig({
@@ -543,14 +572,16 @@ describe('json', () => {
     ).start()
 
     clock.increment(9)
-    expect(actor.getSnapshot().value).toBe('waiting')
+    const atNine = actor.getSnapshot().value
     clock.increment(1)
-    expect(actor.getSnapshot().value).toBe('done')
+    const atTen = actor.getSnapshot().value
+
+    yield* expect({ atNine, atTen }).toEqual({ atNine: 'waiting', atTen: 'done' })
   })
 
-  it('revives invoke registryKey from JSON', () => {
+  it('revives invoke registryKey from JSON', function*({ expect }) {
     const worker = createAsyncLogic({
-      run: () => new Promise(() => {}),
+      run: () => neverResolves(),
     })
 
     const actor = createActor(
@@ -570,10 +601,10 @@ describe('json', () => {
       ),
     ).start()
 
-    expect(actor.system.get('workerSystem')).toBeDefined()
+    yield* expect({ registered: actor.system.get('workerSystem') !== undefined }).toEqual({ registered: true })
   })
 
-  it('revives invoke onSnapshot from JSON', async () => {
+  it.live('revives invoke onSnapshot from JSON', function*({ expect }) {
     const subject = new BehaviorSubject(0)
     const worker = createObservableLogic<number, undefined>(() => toSubscribable(subject))
     const actor = createActor(
@@ -594,12 +625,12 @@ describe('json', () => {
       ),
     ).start()
 
-    await vi.waitFor(() => {
-      expect(actor.getSnapshot().value).toBe('seen')
-    })
+    yield* waitForSnapshot(() => actor.getSnapshot().value === 'seen')
+
+    yield* expect(actor.getSnapshot().value).toBe('seen')
   })
 
-  it('revives transition input from JSON', () => {
+  it('revives transition input from JSON', function*({ expect }) {
     const actor = createActor(
       createMachineFromConfig({
         initial: 'idle',
@@ -621,13 +652,13 @@ describe('json', () => {
 
     actor.send({ type: 'GO' })
 
-    expect((actor.getSnapshot() as any)._stateInputs.active).toBe(42)
+    yield* expect(readInternal(readInternal(actor.getSnapshot(), '_stateInputs'), 'active')).toBe(42)
   })
 
-  it('revives invoke timeouts from JSON', () => {
+  it('revives invoke timeouts from JSON', function*({ expect }) {
     const clock = new SimulatedClock()
     const worker = createAsyncLogic({
-      run: () => new Promise(() => {}),
+      run: () => neverResolves(),
     })
 
     const actor = createActor(
@@ -651,11 +682,12 @@ describe('json', () => {
     ).start()
 
     clock.increment(10)
-    expect(actor.getSnapshot().value).toBe('timedOut')
+
+    yield* expect(actor.getSnapshot().value).toBe('timedOut')
   })
 
-  it('rejects missing evaluators for expressions', () => {
-    expect(() =>
+  it('rejects missing evaluators for expressions', function*({ expect }) {
+    yield* expect(() =>
       createMachineFromConfig({
         '@exprLang': 'js',
         context: {
@@ -665,8 +697,8 @@ describe('json', () => {
     ).toThrow("Missing evaluator for @lang 'js' at $.context.count")
   })
 
-  it('rejects expressions without a top-level or local language', () => {
-    expect(() =>
+  it('rejects expressions without a top-level or local language', function*({ expect }) {
+    yield* expect(() =>
       createMachineFromConfig({
         context: {
           count: { '@expr': 'input.count' },
@@ -675,8 +707,8 @@ describe('json', () => {
     ).toThrow('Missing @exprLang for expression at $.context.count')
   })
 
-  it('uses local expression language overrides and passes evaluator metadata', () => {
-    const calls: any[] = []
+  it('uses local expression language overrides and passes evaluator metadata', function*({ expect }) {
+    const calls: EvaluatorArgs[] = []
     const actor = createActor(
       createMachineFromConfig(
         {
@@ -692,7 +724,7 @@ describe('json', () => {
             },
             other: (args) => {
               calls.push(args)
-              return (args.scope['input'] as any).count
+              return readInternal(args.scope['input'], 'count')
             },
           },
         },
@@ -700,20 +732,25 @@ describe('json', () => {
       { input: { count: 7 } },
     ).start()
 
-    expect(actor.getSnapshot().context).toEqual({ count: 7 })
-    expect(calls).toHaveLength(1)
-    expect(calls[0]).toEqual(
-      expect.objectContaining({
+    yield* expect({
+      context: actor.getSnapshot().context,
+      callCount: calls.length,
+      firstCall: calls[0],
+      input: calls[0]?.scope['input'],
+    }).toEqual({
+      context: { count: 7 },
+      callCount: 1,
+      firstCall: expect.objectContaining({
         source: 'input.count',
         kind: 'expr',
         slot: 'context',
         path: '$.context.count',
       }),
-    )
-    expect(calls[0].scope.input).toEqual({ count: 7 })
+      input: { count: 7 },
+    })
   })
 
-  it('resolves expressions in delays and state timeouts', () => {
+  it('resolves expressions in delays and state timeouts', function*({ expect }) {
     const clock = new SimulatedClock()
     const actor = createActor(
       createMachineFromConfig(
@@ -746,22 +783,29 @@ describe('json', () => {
     ).start()
 
     clock.increment(9)
-    expect(actor.getSnapshot().value).toBe('waiting')
+    const atNine = actor.getSnapshot().value
     clock.increment(1)
-    expect(actor.getSnapshot().value).toBe('timed')
+    const atTen = actor.getSnapshot().value
     clock.increment(19)
-    expect(actor.getSnapshot().value).toBe('timed')
+    const atTwentyNine = actor.getSnapshot().value
     clock.increment(1)
-    expect(actor.getSnapshot().value).toBe('done')
+    const atThirty = actor.getSnapshot().value
+
+    yield* expect({ atNine, atTen, atTwentyNine, atThirty }).toEqual({
+      atNine: 'waiting',
+      atTen: 'timed',
+      atTwentyNine: 'timed',
+      atThirty: 'done',
+    })
   })
 
-  it('resolves expressions in invoke timeout and invoke input', () => {
+  it('resolves expressions in invoke timeout and invoke input', function*({ expect }) {
     const clock = new SimulatedClock()
     let receivedInput: unknown
     const worker = createAsyncLogic({
       run: ({ input }) => {
         receivedInput = input
-        return new Promise(() => {})
+        return neverResolves()
       },
     })
 
@@ -796,12 +840,14 @@ describe('json', () => {
       { clock },
     ).start()
 
-    expect(receivedInput).toEqual({ value: 42 })
+    const input = receivedInput
     clock.increment(10)
-    expect(actor.getSnapshot().value).toBe('timedOut')
+    const value = actor.getSnapshot().value
+
+    yield* expect({ input, value }).toEqual({ input: { value: 42 }, value: 'timedOut' })
   })
 
-  it('resolves expressions in transition input and final output', () => {
+  it('resolves expressions in transition input and final output', function*({ expect }) {
     const actor = createActor(
       createMachineFromConfig(
         {
@@ -832,12 +878,15 @@ describe('json', () => {
 
     actor.send({ type: 'GO', by: 3 })
 
-    expect((actor.getSnapshot() as any)._stateInputs.done).toBe(5)
-    expect(actor.getSnapshot().output).toBe(4)
+    yield* expect({
+      stateInput: readInternal(readInternal(actor.getSnapshot(), '_stateInputs'), 'done'),
+      output: actor.getSnapshot().output,
+    }).toEqual({ stateInput: 5, output: 4 })
   })
 
-  it('revives serializable choice states and expression values', () => {
-    const evaluator = ({ source, scope }: any) => Function('scope', `with (scope) { return (${source}); }`)(scope)
+  it('revives serializable choice states and expression values', function*({ expect }) {
+    const evaluator = ({ source, scope }: EvaluatorArgs) =>
+      Function('scope', `with (scope) { return (${source}); }`)(scope)
     const actor = createActor(
       createMachineFromConfig(
         {
@@ -874,15 +923,20 @@ describe('json', () => {
       { input: { tier: 'vip' } },
     ).start()
 
-    expect(actor.getSnapshot().value).toBe('vip')
-    expect(actor.getSnapshot().context).toEqual({
-      tier: 'vip',
-      count: 1,
+    yield* expect({
+      value: actor.getSnapshot().value,
+      context: actor.getSnapshot().context,
+    }).toEqual({
+      value: 'vip',
+      context: {
+        tier: 'vip',
+        count: 1,
+      },
     })
   })
 
-  it('rejects choice fallback branches before the last branch', () => {
-    expect(() =>
+  it('rejects choice fallback branches before the last branch', function*({ expect }) {
+    yield* expect(() =>
       createMachineFromConfig({
         initial: 'routing',
         states: {
@@ -902,7 +956,7 @@ describe('json', () => {
     )
   })
 
-  it('errors when a choice state has no matching branch', () => {
+  it('errors when a choice state has no matching branch', function*({ expect }) {
     const actor = createActor(
       createMachineFromConfig(
         {
@@ -923,14 +977,20 @@ describe('json', () => {
 
     actor.start()
 
-    expect(actor.getSnapshot().status).toBe('error')
-    expect((actor.getSnapshot() as any).error.message).toBe(
-      'Choice state at $.states.routing.choice did not match any branch.',
-    )
+    const snapshot = actor.getSnapshot()
+
+    yield* expect({
+      status: snapshot.status,
+      message: readInternal(readInternal(snapshot, 'error'), 'message'),
+    }).toEqual({
+      status: 'error',
+      message: 'Choice state at $.states.routing.choice did not match any branch.',
+    })
   })
 
-  it('runs declarative named actions with expression params', () => {
-    const evaluator = ({ source, scope }: any) => Function('scope', `with (scope) { return (${source}); }`)(scope)
+  it('runs declarative named actions with expression params', function*({ expect }) {
+    const evaluator = ({ source, scope }: EvaluatorArgs) =>
+      Function('scope', `with (scope) { return (${source}); }`)(scope)
     const actor = createActor(
       createMachineFromConfig(
         {
@@ -956,12 +1016,12 @@ describe('json', () => {
       ),
     ).start()
 
-    expect(actor.getSnapshot().context).toEqual({
+    yield* expect(actor.getSnapshot().context).toEqual({
       count: 2,
     })
   })
 
-  it('runs declarative named action arrays', () => {
+  it('runs declarative named action arrays', function*({ expect }) {
     const actor = createActor(
       createMachineFromConfig({
         context: {
@@ -983,11 +1043,11 @@ describe('json', () => {
       }),
     ).start()
 
-    expect(actor.getSnapshot().context).toEqual({ count: 2 })
+    yield* expect(actor.getSnapshot().context).toEqual({ count: 2 })
   })
 
-  it('rejects circular declarative named actions', () => {
-    expect(() =>
+  it('rejects circular declarative named actions', function*({ expect }) {
+    yield* expect(() =>
       createMachineFromConfig({
         actions: {
           a: { type: 'b' },
@@ -998,8 +1058,9 @@ describe('json', () => {
     ).toThrow('Circular action reference: a -> b -> a')
   })
 
-  it('runs declarative named guards', () => {
-    const evaluator = ({ source, scope }: any) => Function('scope', `with (scope) { return (${source}); }`)(scope)
+  it('runs declarative named guards', function*({ expect }) {
+    const evaluator = ({ source, scope }: EvaluatorArgs) =>
+      Function('scope', `with (scope) { return (${source}); }`)(scope)
     const actor = createActor(
       createMachineFromConfig(
         {
@@ -1032,203 +1093,205 @@ describe('json', () => {
 
     actor.send({ type: 'GO' })
 
-    expect(actor.getSnapshot().value).toBe('done')
+    yield* expect(actor.getSnapshot().value).toBe('done')
   })
 
-  it('validates JSON Schema-shaped action, guard, and actor source schemas', () => {
-    expectSchemaValid({
-      schemas: {
+  it('validates JSON Schema-shaped action, guard, and actor source schemas', function*({ expect }) {
+    yield* expect({
+      invalid: isSchemaInvalid({
+        schemas: {
+          actions: {
+            track: {
+              params: {
+                type: 'object',
+                properties: {
+                  key: { type: 'string' },
+                },
+                required: ['key'],
+              },
+            },
+          },
+          guards: {
+            allowed: {
+              params: {
+                type: 'object',
+                properties: {
+                  role: { type: 'string' },
+                },
+              },
+            },
+          },
+          actors: {
+            worker: {
+              input: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                },
+              },
+              output: {
+                type: 'object',
+                properties: {
+                  ok: { type: 'boolean' },
+                },
+              },
+              emitted: {
+                PROGRESS: {
+                  type: 'object',
+                  properties: {
+                    percent: { type: 'number' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    }).toEqual({ invalid: false })
+  })
+
+  it('rejects invalid serializable machine schema shapes', function*({ expect }) {
+    const configs = [
+      {
+        initial: 'on',
+        states: {
+          on: {
+            initial: 'active',
+            states: {
+              active: {},
+              history: { type: 'history' },
+            },
+          },
+        },
+      },
+      {
+        initial: 'on',
+        states: {
+          on: {
+            initial: 'active',
+            states: {
+              active: {},
+              history: { type: 'history', target: [] },
+            },
+          },
+        },
+      },
+      {
+        initial: 'routing',
+        states: {
+          routing: {
+            type: 'choice',
+            choice: [
+              {
+                target: 'done',
+                actions: [],
+              },
+            ],
+          },
+          done: {},
+        },
+      },
+      {
         actions: {
           track: {
-            params: {
+            params: {},
+          },
+        },
+      },
+      {
+        guards: {
+          ready: {
+            '@expr': 'true',
+          },
+        },
+      },
+      {
+        schemas: {
+          actions: {
+            track: {},
+          },
+        },
+      },
+      {
+        schemas: {
+          actors: {
+            worker: {
+              schemas: {},
+            },
+          },
+        },
+      },
+    ]
+
+    yield* expect(configs.map(isSchemaInvalid)).toEqual([true, true, true, true, true, true, true])
+  })
+
+  it('rejects event and emitted payload schemas that redeclare event type', function*({ expect }) {
+    const configs = [
+      {
+        schemas: {
+          events: {
+            SUBMIT: {
+              type: 'object',
+              properties: {
+                value: { type: 'string' },
+              },
+            },
+          },
+          emitted: {
+            TRACKED: {
               type: 'object',
               properties: {
                 key: { type: 'string' },
               },
-              required: ['key'],
             },
           },
         },
-        guards: {
-          allowed: {
-            params: {
+      },
+      {
+        schemas: {
+          events: {
+            SUBMIT: {
               type: 'object',
               properties: {
-                role: { type: 'string' },
+                type: { const: 'SUBMIT' },
+                value: { type: 'string' },
               },
             },
           },
         },
-        actors: {
-          worker: {
-            input: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-              },
-            },
-            output: {
-              type: 'object',
-              properties: {
-                ok: { type: 'boolean' },
-              },
-            },
-            emitted: {
-              PROGRESS: {
-                type: 'object',
-                properties: {
-                  percent: { type: 'number' },
+      },
+      {
+        schemas: {
+          actors: {
+            worker: {
+              emitted: {
+                PROGRESS: {
+                  type: 'object',
+                  properties: {
+                    type: { const: 'PROGRESS' },
+                    percent: { type: 'number' },
+                  },
                 },
               },
             },
           },
         },
       },
-    })
-  })
+    ]
 
-  it('rejects invalid serializable machine schema shapes', () => {
-    expectSchemaInvalid({
-      initial: 'on',
-      states: {
-        on: {
-          initial: 'active',
-          states: {
-            active: {},
-            history: { type: 'history' },
-          },
-        },
-      },
-    })
-
-    expectSchemaInvalid({
-      initial: 'on',
-      states: {
-        on: {
-          initial: 'active',
-          states: {
-            active: {},
-            history: { type: 'history', target: [] },
-          },
-        },
-      },
-    })
-
-    expectSchemaInvalid({
-      initial: 'routing',
-      states: {
-        routing: {
-          type: 'choice',
-          choice: [
-            {
-              target: 'done',
-              actions: [],
-            },
-          ],
-        },
-        done: {},
-      },
-    })
-
-    expectSchemaInvalid({
-      actions: {
-        track: {
-          params: {},
-        },
-      },
-    })
-
-    expectSchemaInvalid({
-      guards: {
-        ready: {
-          '@expr': 'true',
-        },
-      },
-    })
-
-    expectSchemaInvalid({
-      schemas: {
-        actions: {
-          track: {},
-        },
-      },
-    })
-
-    expectSchemaInvalid({
-      schemas: {
-        actors: {
-          worker: {
-            schemas: {},
-          },
-        },
-      },
-    })
-  })
-
-  it('rejects event and emitted payload schemas that redeclare event type', () => {
-    expectSchemaValid({
-      schemas: {
-        events: {
-          SUBMIT: {
-            type: 'object',
-            properties: {
-              value: { type: 'string' },
-            },
-          },
-        },
-        emitted: {
-          TRACKED: {
-            type: 'object',
-            properties: {
-              key: { type: 'string' },
-            },
-          },
-        },
-      },
-    })
-
-    expectSchemaInvalid({
-      schemas: {
-        events: {
-          SUBMIT: {
-            type: 'object',
-            properties: {
-              type: { const: 'SUBMIT' },
-              value: { type: 'string' },
-            },
-          },
-        },
-      },
-    })
-
-    expectSchemaInvalid({
-      schemas: {
-        actors: {
-          worker: {
-            emitted: {
-              PROGRESS: {
-                type: 'object',
-                properties: {
-                  type: { const: 'PROGRESS' },
-                  percent: { type: 'number' },
-                },
-              },
-            },
-          },
-        },
-      },
-    })
+    yield* expect(configs.map(isSchemaInvalid)).toEqual([false, true, true])
   })
 })
 
 describe('reserved source names', () => {
-  it("rejects source names using the reserved '@xstate.' prefix", () => {
-    expect(() =>
+  it("rejects source names using the reserved '@xstate.' prefix", function*({ expect }) {
+    yield* expect(() =>
       createMachineFromConfig({
         initial: 'a',
         states: { a: {} },
-      } as any).provide({
-        actions: { '@xstate.raise': () => {} } as any,
+      } as unknown as Record<string, unknown>).provide({
+        actions: { '@xstate.raise': () => {} } as unknown as Record<string, unknown>,
       })
     ).toThrow(
       "Invalid actions name '@xstate.raise': the '@xstate.' prefix is reserved",

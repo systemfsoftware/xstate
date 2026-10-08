@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import z from 'zod'
 import { createActor, createAsyncLogic, createMachine, SimulatedClock } from '../src/index.js'
 
 const createLightMachine = () =>
@@ -14,47 +15,69 @@ const createLightMachine = () =>
     },
   })
 
-function getTimers(persisted: unknown): Record<string, any> {
-  return (persisted as any).timers
-}
+const persistedTimers = z.record(z.string(), z.unknown())
+const persistedSnapshot = z.object({
+  timers: persistedTimers,
+  children: z.record(z.string(), z.unknown()),
+})
+const persistedMachineChild = z.object({
+  snapshot: z.object({ timers: persistedTimers }),
+})
+const persistedTimerParts = z.object({
+  event: z.unknown(),
+  target: z.unknown(),
+})
 
-describe('persisted logical timers', () => {
-  it('persists timer intent without runtime clock bookkeeping', () => {
+describe('persisted logical timers', (it) => {
+  it('persists timer intent without runtime clock bookkeeping', function*({ expect }) {
     const actor = createActor(createLightMachine(), {
       clock: new SimulatedClock(),
     }).start()
 
     const persisted = actor.getPersistedSnapshot()
-    const [timer] = Object.values(getTimers(persisted))
+    const [timer] = Object.values(persistedSnapshot.parse(persisted).timers)
+    const [roundTrippedTimer] = Object.values(
+      persistedSnapshot.parse(JSON.parse(JSON.stringify(persisted))).timers,
+    )
 
-    expect(timer).toEqual({
-      id: expect.stringMatching(/^xstate\.after/),
-      delay: 1000,
-      type: '@xstate.raise',
-      event: {
-        type: 'xstate.after',
+    yield* expect({ timer, roundTrippedTimer }).toStrictEqual({
+      timer: {
+        id: expect.stringMatching(/^xstate\.after/),
         delay: 1000,
-        stateId: '(machine).green',
+        type: '@xstate.raise',
+        event: {
+          type: 'xstate.after',
+          delay: 1000,
+          stateId: '(machine).green',
+        },
+        target: 'self',
       },
-      target: 'self',
+      roundTrippedTimer: {
+        id: expect.stringMatching(/^xstate\.after/),
+        delay: 1000,
+        type: '@xstate.raise',
+        event: {
+          type: 'xstate.after',
+          delay: 1000,
+          stateId: '(machine).green',
+        },
+        target: 'self',
+      },
     })
-    expect(timer).not.toHaveProperty('startedAt')
-    expect(timer).not.toHaveProperty('scheduledAt')
-    expect(timer).not.toHaveProperty('dueAt')
-    expect(timer).not.toHaveProperty('elapsed')
-    expect(() => JSON.stringify(persisted)).not.toThrow()
   })
 
-  it('does not persist timers that were cancelled', () => {
+  it('does not persist timers that were cancelled', function*({ expect }) {
     const actor = createActor(createLightMachine(), {
       clock: new SimulatedClock(),
     }).start()
     actor.send({ type: 'STOP' })
 
-    expect(getTimers(actor.getPersistedSnapshot())).toEqual({})
+    yield* expect(
+      persistedSnapshot.parse(actor.getPersistedSnapshot()).timers,
+    ).toEqual({})
   })
 
-  it('restarts logical timers with their declared delay when locally restored', () => {
+  it('restarts logical timers with their declared delay when locally restored', function*({ expect }) {
     const actor = createActor(createLightMachine(), {
       clock: new SimulatedClock(),
     }).start()
@@ -68,12 +91,17 @@ describe('persisted logical timers', () => {
     }).start()
 
     clock.increment(999)
-    expect(restored.getSnapshot().value).toBe('green')
+    const beforeDeclaredDelay = restored.getSnapshot().value
     clock.increment(1)
-    expect(restored.getSnapshot().value).toBe('yellow')
+    const atDeclaredDelay = restored.getSnapshot().value
+
+    yield* expect({ beforeDeclaredDelay, atDeclaredDelay }).toEqual({
+      beforeDeclaredDelay: 'green',
+      atDeclaredDelay: 'yellow',
+    })
   })
 
-  it('materializes a restored invoke timeout for the current child session', () => {
+  it('materializes a restored invoke timeout for the current child session', function*({ expect }) {
     const child = createAsyncLogic({ run: () => new Promise(() => {}) })
     const machine = createMachine({
       actors: { child },
@@ -99,13 +127,10 @@ describe('persisted logical timers', () => {
     }
     const originalSessionId = originalChild.sessionId
     const persisted = original.getPersistedSnapshot()
-    const [persistedTimer] = Object.values(getTimers(persisted))
+    const [persistedTimer] = Object.values(
+      persistedSnapshot.parse(persisted).timers,
+    )
     original.stop()
-
-    expect(persistedTimer.event).toEqual({
-      type: 'xstate.timeout.actor',
-      actorId: 'child',
-    })
 
     const clock = new SimulatedClock()
     const restored = createActor(machine, {
@@ -116,13 +141,24 @@ describe('persisted logical timers', () => {
     if (restoredChild === undefined) {
       throw new Error('expected the restored actor to have a child session')
     }
-    expect(restoredChild.sessionId).not.toBe(originalSessionId)
 
     clock.increment(100)
-    expect(restored.getSnapshot().value).toBe('timedOut')
+
+    yield* expect({
+      persistedTimerEvent: persistedTimerParts.parse(persistedTimer).event,
+      restoredChildSessionChanged: restoredChild.sessionId !== originalSessionId,
+      valueAfterTimeout: restored.getSnapshot().value,
+    }).toEqual({
+      persistedTimerEvent: {
+        type: 'xstate.timeout.actor',
+        actorId: 'child',
+      },
+      restoredChildSessionChanged: true,
+      valueAfterTimeout: 'timedOut',
+    })
   })
 
-  it('cancels a restored timer when its declaring state exits', () => {
+  it('cancels a restored timer when its declaring state exits', function*({ expect }) {
     const actor = createActor(createLightMachine(), {
       clock: new SimulatedClock(),
     }).start()
@@ -137,10 +173,11 @@ describe('persisted logical timers', () => {
 
     restored.send({ type: 'STOP' })
     clock.increment(2000)
-    expect(restored.getSnapshot().value).toBe('red')
+
+    yield* expect(restored.getSnapshot().value).toBe('red')
   })
 
-  it('round-trips timers through a restored-but-never-started actor', () => {
+  it('round-trips timers through a restored-but-never-started actor', function*({ expect }) {
     const actor = createActor(createLightMachine(), {
       clock: new SimulatedClock(),
     }).start()
@@ -149,12 +186,22 @@ describe('persisted logical timers', () => {
 
     const idle = createActor(createLightMachine(), { snapshot: persisted })
     const rePersisted = idle.getPersistedSnapshot()
-    const [timer] = Object.values(getTimers(rePersisted))
+    const [timer] = Object.values(persistedSnapshot.parse(rePersisted).timers)
 
-    expect(timer).toMatchObject({ delay: 1000, target: 'self' })
+    yield* expect(timer).toEqual({
+      id: expect.stringMatching(/^xstate\.after/),
+      delay: 1000,
+      type: '@xstate.raise',
+      event: {
+        type: 'xstate.after',
+        delay: 1000,
+        stateId: '(machine).green',
+      },
+      target: 'self',
+    })
   })
 
-  it('restores timers of rehydrated child actors', () => {
+  it('restores timers of rehydrated child actors', function*({ expect }) {
     const child = createMachine({
       initial: 'waiting',
       states: {
@@ -182,24 +229,49 @@ describe('persisted logical timers', () => {
     const persisted = actor.getPersistedSnapshot()
     actor.stop()
 
-    const [childEntry] = Object.values((persisted as any).children) as any[]
-    expect(Object.values(getTimers(childEntry.snapshot))).toHaveLength(1)
+    const childTimers = persistedMachineChild.parse(
+      Object.values(persistedSnapshot.parse(persisted).children)[0],
+    ).snapshot.timers
 
     const clock = new SimulatedClock()
     const restored = createActor(parent, {
       clock,
       snapshot: persisted,
     }).start()
-
-    expect(restored.getSnapshot().value).toBe('working')
+    const valueBeforeDelay = restored.getSnapshot().value
     clock.increment(1000)
-    expect(restored.getSnapshot().value).toBe('finished')
+    const valueAfterDelay = restored.getSnapshot().value
+
+    yield* expect({
+      childTimers: Object.values(childTimers),
+      valueBeforeDelay,
+      valueAfterDelay,
+    }).toEqual({
+      childTimers: [
+        {
+          id: expect.stringMatching(/^xstate\.after/),
+          delay: 1000,
+          type: '@xstate.raise',
+          event: {
+            type: 'xstate.after',
+            delay: 1000,
+            stateId: '(machine).waiting',
+          },
+          target: 'self',
+        },
+      ],
+      valueBeforeDelay: 'working',
+      valueAfterDelay: 'finished',
+    })
   })
 
-  it('restores the logical target of a delayed child send', () => {
-    const received = vi.fn()
+  it('restores the logical target of a delayed child send', function*({ expect }) {
+    const received: unknown[] = []
+    const recordReceived = (event: unknown) => {
+      received.push(event)
+    }
     const child = createMachine({
-      on: { PING: ({ event }, enq) => enq(received, event) },
+      on: { PING: ({ event }, enq) => enq(recordReceived, event) },
     })
     const parent = createMachine({
       actors: { child },
@@ -224,21 +296,30 @@ describe('persisted logical timers', () => {
     const persisted = actor.getPersistedSnapshot()
     actor.stop()
 
-    expect(getTimers(persisted)['ping']).toMatchObject({
-      type: '@xstate.sendTo',
-      target: 'child',
-      event: { type: 'PING' },
-    })
-
     const clock = new SimulatedClock()
     createActor(parent, { clock, snapshot: persisted }).start()
     clock.increment(100)
 
-    expect(received).toHaveBeenCalledWith({ type: 'PING' })
+    yield* expect({
+      pingTimer: persistedSnapshot.parse(persisted).timers['ping'],
+      received,
+    }).toEqual({
+      pingTimer: {
+        id: 'ping',
+        delay: 100,
+        type: '@xstate.sendTo',
+        event: { type: 'PING' },
+        target: 'child',
+      },
+      received: [{ type: 'PING' }],
+    })
   })
 
-  it('restores the logical parent target of a delayed child send', () => {
-    const received = vi.fn()
+  it('restores the logical parent target of a delayed child send', function*({ expect }) {
+    const received: unknown[] = []
+    const recordReceived = (event: unknown) => {
+      received.push(event)
+    }
     const child = createMachine({
       on: {
         SCHEDULE: ({ parent }, enq) =>
@@ -254,7 +335,7 @@ describe('persisted logical timers', () => {
       invoke: { id: 'child', src: 'child' },
       on: {
         START: ({ children }, enq) => enq.sendTo(children['child'], { type: 'SCHEDULE' }),
-        PING: ({ event }, enq) => enq(received, event),
+        PING: ({ event }, enq) => enq(recordReceived, event),
       },
     })
     const actor = createActor(parent).start()
@@ -262,19 +343,24 @@ describe('persisted logical timers', () => {
     const persisted = actor.getPersistedSnapshot()
     actor.stop()
 
-    const [childEntry] = Object.values((persisted as any).children) as any[]
-    expect(childEntry.snapshot.timers['ping-parent'].target).toEqual({
-      type: 'parent',
-    })
+    const childTimers = persistedMachineChild.parse(
+      Object.values(persistedSnapshot.parse(persisted).children)[0],
+    ).snapshot.timers
 
     const clock = new SimulatedClock()
     createActor(parent, { clock, snapshot: persisted }).start()
     clock.increment(100)
 
-    expect(received).toHaveBeenCalledWith({ type: 'PING' })
+    yield* expect({
+      parentTarget: persistedTimerParts.parse(childTimers['ping-parent']).target,
+      received,
+    }).toEqual({
+      parentTarget: { type: 'parent' },
+      received: [{ type: 'PING' }],
+    })
   })
 
-  it('does not rebind a delayed send to a replacement child with the same id', () => {
+  it('does not rebind a delayed send to a replacement child with the same id', function*({ expect }) {
     const child = createMachine({})
     const parent = createMachine({
       actors: { child },
@@ -298,7 +384,7 @@ describe('persisted logical timers', () => {
     actor.send({ type: 'SCHEDULE' })
     actor.send({ type: 'REENTER' })
 
-    expect(() => actor.getPersistedSnapshot()).toThrow(
+    yield* expect(() => actor.getPersistedSnapshot()).toThrow(
       "Unable to persist timer 'ping'",
     )
   })

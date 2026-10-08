@@ -1,9 +1,9 @@
-import { describe, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { type ActorRefFromLogic, createLogic, createMachine, setup, type Spawner } from '../src/index.js'
 
 describe('spawn inside machine', () => {
-  it('input is required when defined in actor', () => {
+  it('input is required when defined in actor', function*({ expect }) {
     const childMachine = createLogic<
       { value: number },
       string,
@@ -13,8 +13,7 @@ describe('spawn inside machine', () => {
       context: ({ input }) => input,
       run: ({ context }) => ({ context }),
     })
-    createMachine({
-      // types: {} as { context: { ref: ActorRefFrom<typeof childMachine> } },
+    const machine = createMachine({
       schemas: {
         context: z.object({
           ref: z.object({}).optional(),
@@ -68,9 +67,11 @@ describe('spawn inside machine', () => {
         enq.spawn('other')
       },
     })
+
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('types string sources added through provide and extend', () => {
+  it('types string sources added through provide and extend', function*({ expect }) {
     const childMachine = createMachine({
       schemas: {
         input: z.object({ value: z.number() }),
@@ -78,7 +79,7 @@ describe('spawn inside machine', () => {
       },
     })
 
-    createMachine({
+    const machine = createMachine({
       actors: {} as { child: typeof childMachine },
       entry: (_, enq) => {
         const child = enq.spawn('child', { input: { value: 42 } })
@@ -96,12 +97,13 @@ describe('spawn inside machine', () => {
           child satisfies ActorRefFromLogic<typeof childMachine>
         },
       })
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('input is not required when not defined in actor', () => {
+  it('input is not required when not defined in actor', function*({ expect }) {
     const childMachine = createMachine({})
-    createMachine({
-      // types: {} as { context: { ref: ActorRefFrom<typeof childMachine> } },
+    const machine = createMachine({
       schemas: {
         context: z.object({
           ref: z.object({}).optional(),
@@ -123,9 +125,11 @@ describe('spawn inside machine', () => {
         },
       },
     })
+
+    yield* expect(machine.getInitialSnapshot().status).toEqual('active')
   })
 
-  it('preserves typed trigger API on spawned actors', () => {
+  it('preserves typed trigger API on spawned actors', function*({ expect }) {
     const childMachine = createMachine({
       schemas: {
         events: {
@@ -169,7 +173,7 @@ describe('spawn inside machine', () => {
     }
     void _expectTypedSpawner
 
-    createMachine({
+    const machine = createMachine({
       entry: (_, enq) => {
         const childRef = enq.spawn(childMachine)
         const optionalPayloadRef = enq.spawn(optionalPayloadLogic)
@@ -189,5 +193,7 @@ describe('spawn inside machine', () => {
         optionalPayloadRef.trigger.SAVE()
       },
     })
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 })

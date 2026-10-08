@@ -1,12 +1,12 @@
-import { describe, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { type ActorFromLogic, type ActorRefFrom, type ActorRefFromLogic, createMachine, setup } from '../src/index.js'
 
 function expectType<T>(_v: T) {}
 
 describe('setup() source typing', () => {
-  it('rejects unknown action and guard names in transition functions', () => {
-    setup({
+  it('rejects unknown action and guard names in transition functions', function*({ expect }) {
+    const machine = setup({
       actions: { record: (_id: string) => {} },
       guards: { enabled: () => true },
     }).createMachine({
@@ -40,9 +40,11 @@ describe('setup() source typing', () => {
         },
       },
     })
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('preserves provided action result types and checks their arguments and names', () => {
+  it('preserves provided action result types and checks their arguments and names', function*({ expect }) {
     const machine = setup({
       actions: { record: (_id: string) => {} },
     }).createMachine({})
@@ -66,10 +68,12 @@ describe('setup() source typing', () => {
         },
       })
     }
+
+    yield* expect(provided.id).toEqual('(machine)')
   })
 
-  it('contextually types guards and delays from schemas', () => {
-    setup({
+  it('contextually types guards and delays from schemas', function*({ expect }) {
+    const s = setup({
       schemas: {
         context: z.object({ count: z.number() }),
         events: {
@@ -91,10 +95,12 @@ describe('setup() source typing', () => {
         fixed: 500,
       },
     })
+
+    yield* expect(Object.keys(s.schemas)).toEqual(['context', 'events'])
   })
 
-  it('accepts plain positional guards', () => {
-    setup({
+  it('accepts plain positional guards', function*({ expect }) {
+    const s = setup({
       schemas: {
         context: z.object({ count: z.number() }),
       },
@@ -102,10 +108,12 @@ describe('setup() source typing', () => {
         positional: (count: number) => count > 0,
       },
     })
+
+    yield* expect(Object.keys(s.schemas)).toEqual(['context'])
   })
 
-  it('accepts loosely-typed guards and delays without schemas', () => {
-    setup({
+  it('accepts loosely-typed guards and delays without schemas', function*({ expect }) {
+    const s = setup({
       guards: {
         anyValue: (value) => value === true,
       },
@@ -113,14 +121,17 @@ describe('setup() source typing', () => {
         slow: ({ context }) => context['ms'] ?? 1000,
       },
     })
+
+    yield* expect(Object.keys(s.schemas)).toEqual([])
   })
 
-  it('contextually types extend() guards and delays from base schemas', () => {
-    setup({
+  it('contextually types extend() guards and delays from base schemas', function*({ expect }) {
+    const base = setup({
       schemas: {
         context: z.object({ count: z.number() }),
       },
-    }).extend({
+    })
+    base.extend({
       guards: {
         isPositive: (count: number) => count > 0,
       },
@@ -131,15 +142,18 @@ describe('setup() source typing', () => {
         },
       },
     })
+
+    yield* expect(Object.keys(base.schemas)).toEqual(['context'])
   })
 
-  it('merges base and extension event schemas for extend() sources', () => {
-    setup({
+  it('merges base and extension event schemas for extend() sources', function*({ expect }) {
+    const base = setup({
       schemas: {
         context: z.object({ count: z.number() }),
         events: { A: z.object({ a: z.number() }) },
       },
-    }).extend({
+    })
+    base.extend({
       schemas: {
         events: { B: z.object({ b: z.string() }) },
       },
@@ -152,9 +166,11 @@ describe('setup() source typing', () => {
         },
       },
     })
+
+    yield* expect(Object.keys(base.schemas)).toEqual(['context', 'events'])
   })
 
-  it('checks return types of sources passed to provide()', () => {
+  it('checks return types of sources passed to provide()', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({ count: z.number() }),
@@ -199,9 +215,11 @@ describe('setup() source typing', () => {
         },
       })
     }
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('allows provide() to swap a fixed delay for a computed one and back', () => {
+  it('allows provide() to swap a fixed delay for a computed one and back', function*({ expect }) {
     const machine = setup({
       schemas: {
         context: z.object({ ms: z.number() }),
@@ -234,10 +252,12 @@ describe('setup() source typing', () => {
         },
       })
     }
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('contextually types machine-level guards from machine schemas', () => {
-    createMachine({
+  it('contextually types machine-level guards from machine schemas', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         context: z.object({ ok: z.boolean() }),
       },
@@ -248,10 +268,12 @@ describe('setup() source typing', () => {
       initial: 'a',
       states: { a: {} },
     })
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 
-  it('surfaces guards on args with their declared plain signatures', () => {
-    createMachine({
+  it('surfaces guards on args with their declared plain signatures', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         context: z.object({ count: z.number() }),
       },
@@ -284,6 +306,8 @@ describe('setup() source typing', () => {
         b: {},
       },
     })
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 })
 
@@ -298,8 +322,8 @@ describe('spawned actor refs as consumer ActorRefs', () => {
     states: { a: { on: { PING: () => {} } } },
   })
 
-  it('allows ActorRefFrom-typed refs with enq.spawn/stop/sendTo/listen/subscribeTo', () => {
-    createMachine({
+  it('allows ActorRefFrom-typed refs with enq.spawn/stop/sendTo/listen/subscribeTo', function*({ expect }) {
+    const machine = createMachine({
       schemas: {
         context: z.object({
           ref: z.custom<ActorRefFromLogic<typeof child> | undefined>(),
@@ -338,5 +362,7 @@ describe('spawned actor refs as consumer ActorRefs', () => {
         },
       },
     })
+
+    yield* expect(machine.id).toEqual('(machine)')
   })
 })

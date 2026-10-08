@@ -14,6 +14,7 @@ import {
 } from './stateUtils.js'
 import type {
   AnyAction,
+  AnyActorLogic,
   AnyActorScope,
   AnyEventObject,
   AnyInvokeDefinition,
@@ -141,6 +142,9 @@ export class StateNode<
   public schemas: SetupStateSchemas | undefined
 
   public tags: string[] = []
+
+  /** @internal */
+  public _finalStateWarnings: string[]
   public transitions!: Map<
     string,
     TransitionDefinition<any, any, TTransitionMeta>[]
@@ -163,6 +167,7 @@ export class StateNode<
     this.parent = options._parent
     this.key = options._key
     this.machine = options._machine
+    this._finalStateWarnings = options._parent?._finalStateWarnings ?? []
     this.path = this.parent ? this.parent.path.concat(this.key) : []
     const firstStateKey = this.config.states
       ? Object.keys(this.config.states)[0]
@@ -179,7 +184,10 @@ export class StateNode<
 
     validateStateNodeConfig(this)
     if (isDevelopment) {
-      warnOnFinalStateBehavior(this)
+      const warning = finalStateBehaviorWarning(this)
+      if (warning !== undefined) {
+        this._finalStateWarnings.push(warning)
+      }
     }
 
     this.order = this.machine.idMap.size
@@ -394,26 +402,39 @@ function validateStateNodeConfig(stateNode: AnyStateNode) {
 
 const FINAL_STATE_IGNORED_KEYS = ['invoke', 'on', 'after'] as const
 
-/**
- * Final states are inert: their `invoke`, `on` and `after` never run. Warn
- * instead of silently ignoring them.
- */
-function warnOnFinalStateBehavior(stateNode: AnyStateNode): void {
+function finalStateBehaviorWarning(stateNode: AnyStateNode): string | undefined {
   if (stateNode.type !== 'final') {
-    return
+    return undefined
   }
   const config = stateNode.config as Record<string, unknown>
   const declared = FINAL_STATE_IGNORED_KEYS.filter(
     (key) => config[key] !== undefined,
   )
-  if (declared.length) {
-    console.warn(
-      `State "${stateNode.id}" is final and declares ${
-        declared
-          .map((key) => `"${key}"`)
-          .join(', ')
-      }; final states cannot run actors or take transitions.`,
-    )
+  if (!declared.length) {
+    return undefined
+  }
+  return `State "${stateNode.id}" is final and declares ${
+    declared
+      .map((key) => `"${key}"`)
+      .join(', ')
+  }; final states cannot run actors or take transitions.`
+}
+
+function isStateMachineLogic(logic: unknown): logic is AnyStateMachine {
+  return typeof logic === 'object' && logic !== null && 'root' in logic &&
+    logic.root instanceof StateNode
+}
+
+/** @internal */
+export function emitFinalStateWarnings(
+  logic: AnyActorLogic,
+  warn: (message: string) => void,
+): void {
+  if (!isStateMachineLogic(logic)) {
+    return
+  }
+  for (const message of logic.root._finalStateWarnings) {
+    warn(message)
   }
 }
 

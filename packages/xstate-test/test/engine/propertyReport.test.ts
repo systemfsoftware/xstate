@@ -1,5 +1,6 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine } from '@systemfsoftware/xstate'
-import { describe, expect, it } from 'vitest'
+import { Effect } from 'effect'
 import {
   assertTestCoverage,
   formatTestCoverage,
@@ -21,88 +22,135 @@ const lightMachine = createMachine({
     yellow: {
       on: { NEXT: { target: 'green' } },
     },
-    // Never targeted: reported as unreachable.
     broken: {
       on: { NEXT: { target: 'green' } },
     },
   },
 })
 
-async function getCoverage(): Promise<TestCoverage> {
-  const { coverage } = await propertyTest(lightMachine, {
+const getCoverage = (): Promise<TestCoverage> =>
+  propertyTest(lightMachine, {
     adapter: randomAdapter({ seed: 1, numRuns: 3, maxCommands: 3 }),
     events: { NEXT: constant({}) },
     invariant: () => {},
-  })
-  return coverage
+  }).then(({ coverage }) => coverage)
+
+function thrownBy(run: () => void): Error | undefined {
+  try {
+    run()
+    return undefined
+  } catch (error) {
+    return error as Error
+  }
 }
 
+function entriesOf(dimension: TestCoverage['stateNodes']): number {
+  return (
+    dimension.covered.length +
+    dimension.uncovered.length +
+    dimension.unreachable.length +
+    dimension.unknown.length
+  )
+}
+
+const matchingLines = (text: string, match: (line: string) => boolean): string[] => text.split('\n').filter(match)
+
 describe('property coverage reports', () => {
-  it('formats coverage as text', async () => {
-    const text = formatTestCoverage(await getCoverage())
+  it('formats coverage as text', function*({ expect }) {
+    const coverage = yield* Effect.promise(() => getCoverage())
+    const text = formatTestCoverage(coverage)
 
-    expect(text).toContain('Test coverage')
-    expect(text).toMatch(/stateNodes: \d+\/\d+ covered \(\d+\.\d%\)/)
-    expect(text).toContain('unreachable stateNodes:')
-    expect(text).toContain('light.broken')
-    expect(text).toContain('exploration:')
-    expect(text).toContain('runs: configured 3, completed 3, attempted 3')
-  })
-
-  it('formats coverage as markdown tables', async () => {
-    const markdown = formatTestCoverage(await getCoverage(), {
-      format: 'markdown',
+    yield* expect({
+      header: text.split('\n')[0],
+      stateNodes: matchingLines(text, (line) => line.startsWith('stateNodes:')),
+      unreachableTitle: matchingLines(
+        text,
+        (line) => line === 'unreachable stateNodes:',
+      ),
+      unreachableNodes: matchingLines(
+        text,
+        (line) => line === '  - light.broken',
+      ),
+      explorationTitle: matchingLines(text, (line) => line === 'exploration:'),
+      explorationRuns: matchingLines(text, (line) => line.startsWith('  runs: configured')),
+    }).toEqual({
+      header: 'Test coverage',
+      stateNodes: [
+        expect.stringMatching(
+          /^stateNodes: \d+\/\d+ covered \(\d+\.\d%\), \d+ uncovered, \d+ unreachable, \d+ unknown$/,
+        ),
+      ],
+      unreachableTitle: ['unreachable stateNodes:'],
+      unreachableNodes: ['  - light.broken'],
+      explorationTitle: ['exploration:'],
+      explorationRuns: [
+        '  runs: configured 3, completed 3, attempted 3',
+      ],
     })
-
-    expect(markdown).toContain('# Test coverage')
-    expect(markdown).toContain(
-      '| Dimension | Covered | Total | Ratio | Uncovered | Unreachable | Unknown |',
-    )
-    expect(markdown).toContain('## Outstanding')
-    expect(markdown).toContain('| stateNodes | unreachable | light.broken |')
-    expect(markdown).toContain('## Exploration')
   })
 
-  it('renders transition ids readably', async () => {
-    const text = formatTestCoverage(await getCoverage())
+  it('formats coverage as markdown tables', function*({ expect }) {
+    const coverage = yield* Effect.promise(() => getCoverage())
+    const markdown = formatTestCoverage(coverage, { format: 'markdown' })
+    const lines = markdown.split('\n')
+    const exactly = (line: string) => lines.filter((candidate) => candidate === line)
 
-    expect(text).toContain('--NEXT--> #0')
+    yield* expect({
+      header: lines[0],
+      dimensionHeader: exactly(
+        '| Dimension | Covered | Total | Ratio | Uncovered | Unreachable | Unknown |',
+      ),
+      outstanding: exactly('## Outstanding'),
+      unreachableRow: exactly('| stateNodes | unreachable | light.broken |'),
+      exploration: exactly('## Exploration'),
+    }).toEqual({
+      header: '# Test coverage',
+      dimensionHeader: [
+        '| Dimension | Covered | Total | Ratio | Uncovered | Unreachable | Unknown |',
+      ],
+      outstanding: ['## Outstanding'],
+      unreachableRow: ['| stateNodes | unreachable | light.broken |'],
+      exploration: ['## Exploration'],
+    })
   })
 
-  it('produces stable JSON that round-trips', async () => {
-    const coverage = await getCoverage()
+  it('renders transition ids readably', function*({ expect }) {
+    const coverage = yield* Effect.promise(() => getCoverage())
+
+    yield* expect(formatTestCoverage(coverage)).toContain('--NEXT--> #0')
+  })
+
+  it('produces stable JSON that round-trips', function*({ expect }) {
+    const coverage = yield* Effect.promise(() => getCoverage())
     const json = testCoverageToJSON(coverage)
     const stateNodes = json.dimensions['stateNodes']
     if (stateNodes === undefined) {
       throw new Error('expected a stateNodes dimension')
     }
 
-    expect(json.formatVersion).toBe(1)
-    expect(JSON.parse(JSON.stringify(json))).toEqual(json)
-    expect(json.totals.runs).toBe(coverage.runs)
-    expect(stateNodes.total).toBe(
-      coverage.stateNodes.covered.length +
-        coverage.stateNodes.uncovered.length +
-        coverage.stateNodes.unreachable.length +
-        coverage.stateNodes.unknown.length,
-    )
-    expect(stateNodes.unreachable).toContain('light.broken')
-    expect(json.exploration.completedRuns).toBe(3)
+    yield* expect({
+      formatVersion: json.formatVersion,
+      roundTrip: JSON.parse(JSON.stringify(json)),
+      totalsRuns: json.totals.runs,
+      stateNodesTotal: stateNodes.total,
+      unreachable: stateNodes.unreachable,
+      completedRuns: json.exploration.completedRuns,
+    }).toEqual({
+      formatVersion: 1,
+      roundTrip: json,
+      totalsRuns: coverage.runs,
+      stateNodesTotal: entriesOf(coverage.stateNodes),
+      unreachable: expect.arrayContaining(['light.broken']),
+      completedRuns: 3,
+    })
   })
 
-  it('produces JUnit XML with one testcase per transition and state node', async () => {
-    const coverage = await getCoverage()
+  it('produces JUnit XML with one testcase per transition and state node', function*({ expect }) {
+    const coverage = yield* Effect.promise(() => getCoverage())
     const xml = formatTestCoverageJUnit(coverage, { suiteName: 'light' })
 
-    const expectedTests = [coverage.transitions, coverage.stateNodes].reduce(
-      (total, dimension) =>
-        total +
-        dimension.covered.length +
-        dimension.uncovered.length +
-        dimension.unreachable.length +
-        dimension.unknown.length,
-      0,
-    )
+    const expectedTests = entriesOf(coverage.transitions) +
+      entriesOf(coverage.stateNodes)
     const expectedFailures = coverage.transitions.uncovered.length +
       coverage.stateNodes.uncovered.length
     const expectedSkipped = coverage.transitions.unreachable.length +
@@ -110,37 +158,62 @@ describe('property coverage reports', () => {
       coverage.stateNodes.unreachable.length +
       coverage.stateNodes.unknown.length
 
-    expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>')
-    expect(xml).toContain(
-      `<testsuite name="light" tests="${expectedTests}" failures="${expectedFailures}" skipped="${expectedSkipped}">`,
-    )
-    expect(xml.match(/<testcase /g)!.length).toBe(expectedTests)
-    expect(xml.match(/<failure /g)?.length ?? 0).toBe(expectedFailures)
-    expect(xml.match(/<skipped /g)?.length ?? 0).toBe(expectedSkipped)
-    expect(xml).toContain('classname="stateNodes"')
-    expect(xml).toContain('<property name="exploration.0"')
-    // `>` in a transition id must be XML-escaped.
-    expect(xml).toContain('--NEXT--&gt; #0')
-    expect(xml).not.toContain('--NEXT--> #0')
-  })
-
-  it('produces self-contained HTML', async () => {
-    const html = formatTestCoverageHTML(await getCoverage(), {
-      title: 'Light coverage',
+    yield* expect({
+      declaration: xml.split('\n')[0],
+      suiteTag: xml
+        .split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.startsWith('<testsuite ')),
+      testcases: xml.match(/<testcase /g)?.length ?? 0,
+      failures: xml.match(/<failure /g)?.length ?? 0,
+      skipped: xml.match(/<skipped /g)?.length ?? 0,
+      stateNodeCases: xml.match(/classname="stateNodes"/g)?.length ?? 0,
+      explorationProperties: xml
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('<property name="exploration.')),
+      escapedTransitionIds: xml.match(/--NEXT--&gt; #0/g)?.length ?? 0,
+      rawTransitionIds: xml.match(/--NEXT--> #0/g)?.length ?? 0,
+    }).toEqual({
+      declaration: '<?xml version="1.0" encoding="UTF-8"?>',
+      suiteTag:
+        `<testsuite name="light" tests="${expectedTests}" failures="${expectedFailures}" skipped="${expectedSkipped}">`,
+      testcases: expectedTests,
+      failures: expectedFailures,
+      skipped: expectedSkipped,
+      stateNodeCases: entriesOf(coverage.stateNodes),
+      explorationProperties: expect.arrayContaining([
+        '<property name="exploration.0" value="runs: configured 3, completed 3, attempted 3" />',
+      ]),
+      escapedTransitionIds: entriesOf(coverage.transitions),
+      rawTransitionIds: 0,
     })
-
-    expect(html).toContain('<title>Light coverage</title>')
-    expect(html).toContain('<h1>Light coverage</h1>')
-    expect(html).toContain('3 runs')
-    expect(html).toContain('light.broken')
-    expect(html).not.toContain('<script')
-    expect(html).not.toContain('http://')
   })
 
-  it('passes and fails coverage thresholds', async () => {
-    const coverage = await getCoverage()
+  it('produces self-contained HTML', function*({ expect }) {
+    const coverage = yield* Effect.promise(() => getCoverage())
+    const html = formatTestCoverageHTML(coverage, { title: 'Light coverage' })
+    const matching = (match: (line: string) => boolean) => matchingLines(html, match)
 
-    expect(() => assertTestCoverage(coverage, { stateNodes: 1, transitions: 1 })).not.toThrow()
+    yield* expect({
+      title: matching((line) => line.includes('<title>')),
+      heading: matching((line) => line.includes('<h1>')),
+      runs: matching((line) => line.includes('3 runs')),
+      unreachableNode: matching((line) => line.includes('light.broken')),
+      scriptTag: matching((line) => line.includes('<script')),
+      absoluteUrl: matching((line) => line.includes('http://')),
+    }).toEqual({
+      title: ['<title>Light coverage</title>'],
+      heading: ['<h1>Light coverage</h1>'],
+      runs: [expect.stringMatching(/^<p>3 runs, \d+ steps, \d+ invariant checks<\/p>$/)],
+      unreachableNode: [expect.stringMatching(/light\.broken/)],
+      scriptTag: [],
+      absoluteUrl: [],
+    })
+  })
+
+  it('passes and fails coverage thresholds', function*({ expect }) {
+    const coverage = yield* Effect.promise(() => getCoverage())
 
     const starved: TestCoverage = {
       ...coverage,
@@ -151,11 +224,20 @@ describe('property coverage reports', () => {
       },
     }
 
-    expect(() => assertTestCoverage(starved, { stateNodes: 0.5 })).toThrow(
-      /stateNodes: 0\.0% covered, below the 50\.0% threshold/,
-    )
-    expect(() => assertTestCoverage(starved, { stateNodes: 0.5 })).toThrow(
-      /Test coverage/,
-    )
+    const satisfied = thrownBy(() => assertTestCoverage(coverage, { stateNodes: 1, transitions: 1 }))
+    const starvedFailure = thrownBy(() => assertTestCoverage(starved, { stateNodes: 0.5 }))
+
+    yield* expect({
+      satisfied,
+      starvedThresholdSection: starvedFailure?.message.split('\n\n')[0],
+      starvedReportHeader: starvedFailure?.message
+        .split('\n\n')[1]
+        ?.split('\n')[0],
+    }).toEqual({
+      satisfied: undefined,
+      starvedThresholdSection:
+        'Test coverage thresholds not met:\n  - stateNodes: 0.0% covered, below the 50.0% threshold',
+      starvedReportHeader: 'Test coverage',
+    })
   })
 })

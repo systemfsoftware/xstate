@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { createDurable } from '../src/durable/index.js'
-import { type AnyActor, createMachine, setup } from '../src/index.js'
+import { type AnyActor, type AnyStateMachine, createMachine, setup } from '../src/index.js'
 
 interface JournalEntry {
   address: string
@@ -16,24 +17,30 @@ interface PendingTimer {
 
 const timerKey = (address: string, id: string) => `${address}:${id}`
 
-function createEventJournalHost(
-  machine: ReturnType<typeof createMachine>,
+function createEventJournalHost<TMachine extends AnyStateMachine>(
+  machine: TMachine,
   journal: JournalEntry[],
 ) {
   const pending = new Map<string, PendingTimer>()
-  const armTimer = vi.fn<(timer: PendingTimer) => void>((timer) => {
+  const armTimerCalls: Array<[PendingTimer]> = []
+  const armTimer = (timer: PendingTimer) => {
+    armTimerCalls.push([timer])
     pending.set(timerKey(timer.address, timer.id), timer)
-  })
-  const cancelTimer = vi.fn<(source: AnyActor, id: string) => void>(
-    (source, id) => pending.delete(timerKey(source.address, id)),
-  )
-  const cancelAllTimers = vi.fn<(source: AnyActor) => void>((source) => {
+  }
+  const cancelTimerCalls: Array<[AnyActor, string]> = []
+  const cancelTimer = (source: AnyActor, id: string) => {
+    cancelTimerCalls.push([source, id])
+    pending.delete(timerKey(source.address, id))
+  }
+  const cancelAllTimersCalls: Array<[AnyActor]> = []
+  const cancelAllTimers = (source: AnyActor) => {
+    cancelAllTimersCalls.push([source])
     for (const [key, timer] of pending) {
       if (timer.address === source.address) {
         pending.delete(key)
       }
     }
-  })
+  }
 
   const durable = createDurable(machine, {
     executionId: 'event-journal-test',
@@ -57,23 +64,22 @@ function createEventJournalHost(
     },
   })
 
-  const replay = async () => {
-    let [snapshot, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
+  const replay = Effect.gen(function*() {
+    let [snapshot, effects] = durable.initialTransition(undefined as never)
+    yield* Effect.promise(() => durable.executeEffects(effects))
     for (const entry of journal) {
-      expect(entry.address).toBe(durable.rootAddress)
       ;[snapshot, effects] = durable.transition(snapshot, entry.event as never)
-      await durable.executeEffects(effects)
+      yield* Effect.promise(() => durable.executeEffects(effects))
     }
     return snapshot
-  }
+  })
 
   return {
     durable,
     pending,
-    armTimer,
-    cancelTimer,
-    cancelAllTimers,
+    armTimerCalls,
+    cancelTimerCalls,
+    cancelAllTimersCalls,
     replay,
   }
 }
@@ -92,41 +98,54 @@ describe('durable event-journal timers', () => {
     },
   })
 
-  it('fires a recorded timer after tearing down and replaying a fresh execution', async () => {
+  it('fires a recorded timer after tearing down and replaying a fresh execution', function*({ expect }) {
     const journal: JournalEntry[] = []
     const firstProcess = createEventJournalHost(timerMachine, journal)
-    const waiting = await firstProcess.replay()
+    const waiting = yield* firstProcess.replay
     const [pendingTimer] = firstProcess.pending.values()
     if (pendingTimer === undefined) {
       throw new Error('expected a pending timer')
     }
 
-    expect(waiting.value).toBe('waiting')
-    expect(pendingTimer).toEqual({
-      address: 'reminder',
-      id: expect.any(String),
-      delay: 5000,
-      event: { type: 'xstate.timer', id: expect.any(String) },
+    yield* expect({
+      value: waiting.value,
+      pendingTimer,
+    }).toEqual({
+      value: 'waiting',
+      pendingTimer: {
+        address: 'reminder',
+        id: 'xstate.after.5000.reminder.waiting',
+        delay: 5000,
+        event: {
+          type: 'xstate.timer',
+          id: 'xstate.after.5000.reminder.waiting',
+        },
+      },
     })
-    expect(pendingTimer.event.id).toBe(pendingTimer.id)
 
-    // The scheduler wakes a new process. Journal-first means recording the
-    // firing before replaying it through a freshly-created execution.
     journal.push({
       address: pendingTimer.address,
       event: pendingTimer.event,
     })
     const secondProcess = createEventJournalHost(timerMachine, journal)
-    const done = await secondProcess.replay()
+    const done = yield* secondProcess.replay
 
-    expect(done.value).toBe('done')
-    expect(done.status).toBe('done')
-    expect(secondProcess.pending.size).toBe(0)
+    yield* expect({
+      journalAddresses: journal.map((entry) => entry.address),
+      value: done.value,
+      status: done.status,
+      pendingSize: secondProcess.pending.size,
+    }).toEqual({
+      journalAddresses: ['reminder'],
+      value: 'done',
+      status: 'done',
+      pendingSize: 0,
+    })
   })
 
-  it('does not re-arm a timer whose firing is already journaled', async () => {
+  it('does not re-arm a timer whose firing is already journaled', function*({ expect }) {
     const firstProcess = createEventJournalHost(timerMachine, [])
-    await firstProcess.replay()
+    yield* firstProcess.replay
     const [timer] = firstProcess.pending.values()
     if (timer === undefined) {
       throw new Error('expected a pending timer')
@@ -136,28 +155,43 @@ describe('durable event-journal timers', () => {
     ]
 
     const replayProcess = createEventJournalHost(timerMachine, journal)
-    await replayProcess.replay()
+    yield* replayProcess.replay
 
-    expect(replayProcess.armTimer).not.toHaveBeenCalled()
-    expect(replayProcess.pending.size).toBe(0)
+    yield* expect({
+      journalAddresses: journal.map((entry) => entry.address),
+      armTimerCalls: replayProcess.armTimerCalls,
+      pendingSize: replayProcess.pending.size,
+    }).toEqual({
+      journalAddresses: ['reminder'],
+      armTimerCalls: [],
+      pendingSize: 0,
+    })
   })
 
-  it('cancels a pending timer when a journaled event exits its state', async () => {
+  it('cancels a pending timer when a journaled event exits its state', function*({ expect }) {
     const journal: JournalEntry[] = [
       { address: 'reminder', event: { type: 'EXIT' } },
     ]
     const process = createEventJournalHost(timerMachine, journal)
-    const cancelled = await process.replay()
+    const cancelled = yield* process.replay
 
-    expect(cancelled.value).toBe('cancelled')
-    expect(process.cancelTimer).toHaveBeenCalledWith(
-      expect.objectContaining({ address: 'reminder' }),
-      expect.any(String),
-    )
-    expect(process.pending.size).toBe(0)
+    yield* expect({
+      journalAddresses: journal.map((entry) => entry.address),
+      value: cancelled.value,
+      cancelTimerCalls: process.cancelTimerCalls,
+      pendingSize: process.pending.size,
+    }).toEqual({
+      journalAddresses: ['reminder'],
+      value: 'cancelled',
+      cancelTimerCalls: [[
+        expect.objectContaining({ address: 'reminder' }),
+        'xstate.after.5000.reminder.waiting',
+      ]],
+      pendingSize: 0,
+    })
   })
 
-  it('routes child-owned timer cleanup through the adapter', async () => {
+  it('routes child-owned timer cleanup through the adapter', function*({ expect }) {
     const child = createMachine({
       id: 'childLogic',
       initial: 'waiting',
@@ -177,15 +211,23 @@ describe('durable event-journal timers', () => {
         done: { type: 'final' },
       },
     })
-    const process = createEventJournalHost(parent, [
+    const journal: JournalEntry[] = [
       { address: 'parent', event: { type: 'EXIT' } },
-    ])
+    ]
+    const process = createEventJournalHost(parent, journal)
 
-    await process.replay()
+    yield* process.replay
 
-    expect(process.cancelAllTimers).toHaveBeenCalledWith(
-      expect.objectContaining({ address: 'parent/child' }),
-    )
-    expect(process.pending.size).toBe(0)
+    yield* expect({
+      journalAddresses: journal.map((entry) => entry.address),
+      cancelAllTimersCalls: process.cancelAllTimersCalls,
+      pendingSize: process.pending.size,
+    }).toEqual({
+      journalAddresses: ['parent'],
+      cancelAllTimersCalls: [[
+        expect.objectContaining({ address: 'parent/child' }),
+      ]],
+      pendingSize: 0,
+    })
   })
 })

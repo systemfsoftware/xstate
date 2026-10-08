@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine, getInitialMicrosteps, getMicrosteps } from '../src/index.js'
 import { createInertActorScope } from '../src/inertActorScope.js'
 
 describe('machine.microstep()', () => {
-  it('should return an array of states from all microsteps', () => {
+  it('should return an array of states from all microsteps', function*({ expect }) {
     const machine = createMachine({
       initial: 'start',
       states: {
@@ -39,10 +39,10 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual(['a', 'b', 'c', 'd'])
+    yield* expect(states.map((s) => s.value)).toEqual(['a', 'b', 'c', 'd'])
   })
 
-  it('should return the states from microstep (transient)', () => {
+  it('should return the states from microstep (transient)', function*({ expect }) {
     const machine = createMachine({
       initial: 'first',
       states: {
@@ -65,10 +65,10 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual(['second', 'third'])
+    yield* expect(states.map((s) => s.value)).toEqual(['second', 'third'])
   })
 
-  it('should return the states from microstep (raised event)', () => {
+  it('should return the states from microstep (raised event)', function*({ expect }) {
     const machine = createMachine({
       initial: 'first',
       states: {
@@ -100,10 +100,10 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual(['second', 'third'])
+    yield* expect(states.map((s) => s.value)).toEqual(['second', 'third'])
   })
 
-  it('should return a single-item array for normal transitions', () => {
+  it('should return a single-item array for normal transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'first',
       states: {
@@ -123,10 +123,10 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual(['second'])
+    yield* expect(states.map((s) => s.value)).toEqual(['second'])
   })
 
-  it('each state should preserve their internal queue', () => {
+  it('each state should preserve their internal queue', function*({ expect }) {
     const machine = createMachine({
       initial: 'first',
       states: {
@@ -171,7 +171,7 @@ describe('machine.microstep()', () => {
       actorScope,
     )
 
-    expect(states.map((s) => s.value)).toEqual([
+    yield* expect(states.map((s) => s.value)).toEqual([
       'second',
       'third',
       'fourth',
@@ -181,7 +181,7 @@ describe('machine.microstep()', () => {
 })
 
 describe('getMicrosteps', () => {
-  it('should return microsteps with actions', () => {
+  it('should return microsteps with actions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -209,8 +209,6 @@ describe('getMicrosteps', () => {
 
     const microsteps = getMicrosteps(machine, initialSnapshot, { type: 'GO' })
 
-    expect(microsteps).toHaveLength(2)
-
     const firstMicrostep = microsteps[0]
     if (firstMicrostep === undefined) {
       throw new Error('expected a first microstep')
@@ -220,16 +218,22 @@ describe('getMicrosteps', () => {
       throw new Error('expected a second microstep')
     }
 
-    // First microstep: a -> b
-    expect(firstMicrostep[0].value).toEqual('b')
-    expect(firstMicrostep[1]).toHaveLength(2) // transition action + entry action
-
-    // Second microstep: b -> c (always)
-    expect(secondMicrostep[0].value).toEqual('c')
-    expect(secondMicrostep[1]).toHaveLength(1) // always transition action
+    yield* expect({
+      microstepCount: microsteps.length,
+      firstValue: firstMicrostep[0].value,
+      firstActionCount: firstMicrostep[1].length,
+      secondValue: secondMicrostep[0].value,
+      secondActionCount: secondMicrostep[1].length,
+    }).toEqual({
+      microstepCount: 2,
+      firstValue: 'b',
+      firstActionCount: 2,
+      secondValue: 'c',
+      secondActionCount: 1,
+    })
   })
 
-  it('should capture actions from raised events', () => {
+  it('should capture actions from raised events', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -268,11 +272,17 @@ describe('getMicrosteps', () => {
       throw new Error('expected a second microstep')
     }
 
-    expect(microsteps).toHaveLength(2)
-    expect(firstMicrostep[0].value).toEqual('b')
-    expect(secondMicrostep[0].value).toEqual('c')
+    yield* expect({
+      microstepCount: microsteps.length,
+      firstValue: firstMicrostep[0].value,
+      secondValue: secondMicrostep[0].value,
+    }).toEqual({
+      microstepCount: 2,
+      firstValue: 'b',
+      secondValue: 'c',
+    })
   })
-  it('should return the transitions taken in each microstep', () => {
+  it('should return the transitions taken in each microstep', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -299,17 +309,16 @@ describe('getMicrosteps', () => {
 
     const microsteps = getMicrosteps(machine, initialSnapshot, { type: 'GO' })
 
-    expect(microsteps.map(([snapshot]) => snapshot.value)).toEqual([
-      'b',
-      'c',
-      'd',
-    ])
-    expect(
-      microsteps.map(([, , transitions]) => transitions.map((t) => [t.source.key, t.eventType])),
-    ).toEqual([[['a', 'GO']], [['b', 'NEXT']], [['c', '']]])
+    yield* expect({
+      values: microsteps.map(([snapshot]) => snapshot.value),
+      transitions: microsteps.map(([, , transitions]) => transitions.map((t) => [t.source.key, t.eventType])),
+    }).toEqual({
+      values: ['b', 'c', 'd'],
+      transitions: [[['a', 'GO']], [['b', 'NEXT']], [['c', '']]],
+    })
   })
 
-  it('should return the transition taken by a single-transition fast path', () => {
+  it('should return the transition taken by a single-transition fast path', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -332,13 +341,16 @@ describe('getMicrosteps', () => {
       throw new Error('expected state a')
     }
 
-    expect(microsteps).toHaveLength(1)
-    expect(firstMicrostep[2]).toEqual([
-      stateA.transitions.get('GO')![0],
-    ])
+    yield* expect({
+      microstepCount: microsteps.length,
+      transitions: firstMicrostep[2],
+    }).toEqual({
+      microstepCount: 1,
+      transitions: [stateA.transitions.get('GO')![0]],
+    })
   })
 
-  it('should return no transitions for an unhandled event', () => {
+  it('should return no transitions for an unhandled event', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: { a: {} },
@@ -351,12 +363,12 @@ describe('getMicrosteps', () => {
       type: 'UNKNOWN',
     } as never)
 
-    expect(microsteps.flatMap(([, , transitions]) => transitions)).toEqual([])
+    yield* expect(microsteps.flatMap(([, , transitions]) => transitions)).toEqual([])
   })
 })
 
 describe('getInitialMicrosteps', () => {
-  it('should return initial microsteps with entry actions', () => {
+  it('should return initial microsteps with entry actions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -373,12 +385,18 @@ describe('getInitialMicrosteps', () => {
       throw new Error('expected a first microstep')
     }
 
-    expect(microsteps).toHaveLength(1)
-    expect(firstMicrostep[0].value).toEqual('a')
-    expect(firstMicrostep[1]).toHaveLength(1) // entry action
+    yield* expect({
+      microstepCount: microsteps.length,
+      firstValue: firstMicrostep[0].value,
+      firstActionCount: firstMicrostep[1].length,
+    }).toEqual({
+      microstepCount: 1,
+      firstValue: 'a',
+      firstActionCount: 1,
+    })
   })
 
-  it('should capture actions from initial always transitions', () => {
+  it('should capture actions from initial always transitions', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -410,17 +428,26 @@ describe('getInitialMicrosteps', () => {
       throw new Error('expected state a')
     }
 
-    expect(microsteps).toHaveLength(2)
-    expect(firstMicrostep[0].value).toEqual('a')
-    expect(firstMicrostep[1]).toHaveLength(1) // entry action for 'a'
-    expect(secondMicrostep[0].value).toEqual('b')
-    expect(secondMicrostep[1]).toHaveLength(2) // always action + entry action for 'b'
-    // The first microstep enters the initial states; the second takes `always`
-    expect(firstMicrostep[2]).toEqual([])
-    expect(secondMicrostep[2]).toEqual([stateA.always![0]])
+    yield* expect({
+      microstepCount: microsteps.length,
+      firstValue: firstMicrostep[0].value,
+      firstActionCount: firstMicrostep[1].length,
+      secondValue: secondMicrostep[0].value,
+      secondActionCount: secondMicrostep[1].length,
+      firstTransitions: firstMicrostep[2],
+      secondTransitions: secondMicrostep[2],
+    }).toEqual({
+      microstepCount: 2,
+      firstValue: 'a',
+      firstActionCount: 1,
+      secondValue: 'b',
+      secondActionCount: 2,
+      firstTransitions: [],
+      secondTransitions: [stateA.always![0]],
+    })
   })
 
-  it('should work with nested initial states', () => {
+  it('should work with nested initial states', function*({ expect }) {
     const machine = createMachine({
       initial: 'parent',
       states: {
@@ -443,12 +470,18 @@ describe('getInitialMicrosteps', () => {
       throw new Error('expected a first microstep')
     }
 
-    expect(microsteps).toHaveLength(1)
-    expect(firstMicrostep[0].value).toEqual({ parent: 'child' })
-    expect(firstMicrostep[1]).toHaveLength(2) // parent entry + child entry
+    yield* expect({
+      microstepCount: microsteps.length,
+      firstValue: firstMicrostep[0].value,
+      firstActionCount: firstMicrostep[1].length,
+    }).toEqual({
+      microstepCount: 1,
+      firstValue: { parent: 'child' },
+      firstActionCount: 2,
+    })
   })
 
-  it('should pass input to context function', () => {
+  it('should pass input to context function', function*({ expect }) {
     const machine = createMachine({
       context: (({ input }: { input: { value: number } }) => ({
         count: input.value,
@@ -466,6 +499,6 @@ describe('getInitialMicrosteps', () => {
       throw new Error('expected a first microstep')
     }
 
-    expect(firstMicrostep[0].context).toEqual({ count: 42 })
+    yield* expect(firstMicrostep[0].context).toEqual({ count: 42 })
   })
 })

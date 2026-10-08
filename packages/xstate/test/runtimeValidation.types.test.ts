@@ -1,13 +1,13 @@
-import { describe, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { type AnySetupConfig, createCallbackLogic, createSystem, setup } from '../src/index.js'
 import { standardSchemaValidator } from '../src/validation/index.js'
 
 describe('runtime validation types', () => {
-  it('rejects type-changing schemas only when validation is installed', () => {
+  it('rejects type-changing schemas only when validation is installed', function*({ expect }) {
     const transforming = z.string().transform((value) => value.length)
 
-    setup({ schemas: { input: transforming } })
+    const plain = setup({ schemas: { input: transforming } })
 
     if (false) {
       setup({
@@ -16,12 +16,14 @@ describe('runtime validation types', () => {
         schemas: { input: transforming },
       })
     }
+
+    yield* expect(plain.schemas.input).toBe(transforming)
   })
 
-  it('checks validated schema maps and nested state schemas', () => {
+  it('checks validated schema maps and nested state schemas', function*({ expect }) {
     const transforming = z.string().transform((value) => value.length)
 
-    setup({
+    const s = setup({
       validator: standardSchemaValidator(),
       schemas: {
         actions: { track: { params: transforming } },
@@ -53,18 +55,32 @@ describe('runtime validation types', () => {
         },
       })
     }
-  })
 
-  it('allows same-type transforms as a documented generic limitation', () => {
-    setup({
-      validator: standardSchemaValidator(),
-      schemas: {
-        input: z.string().transform((value) => value.trim()),
-      },
+    yield* expect({
+      metaIs: s.schemas.meta === transforming,
+      paramsIs: s.schemas.actions.track.params === transforming,
+      guardParamsIs: s.schemas.guards.allowed.params === transforming,
+    }).toEqual({
+      metaIs: true,
+      paramsIs: true,
+      guardParamsIs: true,
     })
   })
 
-  it('inherits validation across extend unless explicitly disabled', () => {
+  it('allows same-type transforms as a documented generic limitation', function*({ expect }) {
+    const sameType = z.string().transform((value) => value.trim())
+
+    const s = setup({
+      validator: standardSchemaValidator(),
+      schemas: {
+        input: sameType,
+      },
+    })
+
+    yield* expect(s.schemas.input).toBe(sameType)
+  })
+
+  it('inherits validation across extend unless explicitly disabled', function*({ expect }) {
     const transforming = z.string().transform((value) => value.length)
     const validated = setup({ validator: standardSchemaValidator() })
 
@@ -102,12 +118,19 @@ describe('runtime validation types', () => {
     unvalidated.createMachine({
       schemas: { output: transforming },
     })
+
+    yield* expect({
+      inputIs: unvalidated.schemas.input === transforming,
+    }).toEqual({
+      inputIs: true,
+    })
   })
 
-  it('can install validation on a compatible derived setup', () => {
+  it('can install validation on a compatible derived setup', function*({ expect }) {
     const transforming = z.string().transform((value) => value.length)
+    const inputSchema = z.string()
     setup().extend({ validator: standardSchemaValidator() })
-    const validated = setup({ schemas: { input: z.string() } }).extend({
+    const validated = setup({ schemas: { input: inputSchema } }).extend({
       validator: standardSchemaValidator(),
     })
 
@@ -136,9 +159,11 @@ describe('runtime validation types', () => {
       // @ts-expect-error - inherited state schema transforms cannot be validated
       incompatibleState.extend({ validator: standardSchemaValidator() })
     }
+
+    yield* expect(validated.schemas.input).toBe(inputSchema)
   })
 
-  it('preserves runtime validation types through createSystem().setup()', () => {
+  it('preserves runtime validation types through createSystem().setup()', function*({ expect }) {
     const transforming = z.string().transform((value) => value.length)
     const receiver = createCallbackLogic<{ type: 'HELLO' }>(() => {})
     const system = createSystem({ registry: { receiver } })
@@ -182,5 +207,7 @@ describe('runtime validation types', () => {
         },
       },
     })
+
+    yield* expect(validated.schemas).toEqual({})
   })
 })

@@ -26,6 +26,7 @@ import type { createMachine } from './createMachine.js'
 let executingCustomAction: boolean = false
 
 import { refreshSnapshotActorRefRoot, setSnapshotActorRef } from './snapshotActorRef.js'
+import { emitFinalStateWarnings } from './StateNode.js'
 import { finalizeTransitionResult } from './transitionActions.js'
 import type {
   ActorLogicTransitionResult,
@@ -312,6 +313,9 @@ export class Actor<TLogic extends AnyActorLogic> implements
     })
     this.logger = options?.logger ?? this.system._logger
     this.warn = options?.warn ?? this.system._warn
+    if (isDevelopment && !options?._inert) {
+      emitFinalStateWarnings(logic, this.warn)
+    }
     this.clock = options?.clock ?? this.system._clock
     this.wallClock = options?.wallClock ?? this.system._wallClock
     this._parent = parent

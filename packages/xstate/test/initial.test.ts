@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine } from '../src/index.js'
 
-describe('Initial states', () => {
-  it('should support object syntax for initial', () => {
+describe('Initial states', (it) => {
+  it('should support object syntax for initial', function*({ expect }) {
     const machine = createMachine({
       initial: { target: 'a' },
       states: {
@@ -10,10 +10,10 @@ describe('Initial states', () => {
         b: {},
       },
     })
-    expect(createActor(machine).getSnapshot().value).toEqual('a')
+    yield* expect(createActor(machine).getSnapshot().value).toEqual('a')
   })
 
-  it('should support nested object syntax for initial', () => {
+  it('should support nested object syntax for initial', function*({ expect }) {
     const machine = createMachine({
       initial: { target: 'a' },
       states: {
@@ -27,10 +27,10 @@ describe('Initial states', () => {
         b: {},
       },
     })
-    expect(createActor(machine).getSnapshot().value).toEqual({ a: 'a1' })
+    yield* expect(createActor(machine).getSnapshot().value).toEqual({ a: 'a1' })
   })
 
-  it('should return the correct initial state', () => {
+  it('should return the correct initial state', function*({ expect }) {
     const machine = createMachine({
       initial: 'a',
       states: {
@@ -48,12 +48,12 @@ describe('Initial states', () => {
         leaf: {},
       },
     })
-    expect(createActor(machine).getSnapshot().value).toEqual({
+    yield* expect(createActor(machine).getSnapshot().value).toEqual({
       a: { b: 'c' },
     })
   })
 
-  it('should return the correct initial state (parallel)', () => {
+  it('should return the correct initial state (parallel)', function*({ expect }) {
     const machine = createMachine({
       type: 'parallel',
       states: {
@@ -93,13 +93,13 @@ describe('Initial states', () => {
         },
       },
     })
-    expect(createActor(machine).getSnapshot().value).toEqual({
+    yield* expect(createActor(machine).getSnapshot().value).toEqual({
       foo: { a: { b: 'c' } },
       bar: { a: { b: 'c' } },
     })
   })
 
-  it('should return the correct initial state (deep parallel)', () => {
+  it('should return the correct initial state (deep parallel)', function*({ expect }) {
     const machine = createMachine({
       initial: 'one',
       states: {
@@ -183,7 +183,7 @@ describe('Initial states', () => {
         },
       },
     })
-    expect(createActor(machine).getSnapshot().value).toEqual({
+    yield* expect(createActor(machine).getSnapshot().value).toEqual({
       one: {
         foo: { a: { b: 'c' } },
         bar: { a: { b: 'c' } },

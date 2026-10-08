@@ -1,24 +1,10 @@
-import { describe, expect, it } from 'vitest'
-/**
- * "First ten minutes" DX benchmark (see V6_REVIEW.md §3.1).
- *
- * The five most common beginner tasks, written in v6 exactly as the docs
- * (migration.md) teach them — no internal knowledge assumed, no `any` casts.
- * Each test is the complete program a newcomer would write. This suite must
- * both PASS at runtime and TYPECHECK (`pnpm typecheck`); if an API change
- * breaks either, the first-ten-minutes experience regressed.
- *
- * Line counts / concept counts in V6_REVIEW.md are derived from these
- * definitions; if you change one, update the table.
- */
-import { setTimeout as sleep } from 'node:timers/promises'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import { createActor, createAsyncLogic, createMachine, waitFor } from '../src/index.js'
 
 describe('first ten minutes (v6)', () => {
-  // Task 1 — toggle.
-  // Concepts: createMachine, initial/states/on, createActor, send, getSnapshot
-  it('toggle', () => {
+  it('toggle', function*({ expect }) {
     const toggleMachine = createMachine({
       initial: 'inactive',
       states: {
@@ -30,17 +16,16 @@ describe('first ten minutes (v6)', () => {
     const actor = createActor(toggleMachine).start()
     actor.send({ type: 'toggle' })
 
-    expect(actor.getSnapshot().value).toBe('active')
+    yield* expect(actor.getSnapshot().value).toBe('active')
   })
 
-  // Task 2 — fetch with loading/error.
-  // Concepts: + context, createAsyncLogic, invoke (src/input/onDone/onError),
-  // event.output, returning { target, context }
-  it('fetch with loading/error states', async () => {
+  it('fetch with loading/error states', function*({ expect }) {
     const fetchUser = createAsyncLogic({
-      run: async ({ input }: { input: { id: number } }) => {
-        if (input.id < 0) throw new Error('bad id')
-        return { id: input.id, name: 'Ada' }
+      run: ({ input }: { input: { id: number } }) => {
+        if (input.id < 0) {
+          return Promise.reject(new Error('bad id'))
+        }
+        return Promise.resolve({ id: input.id, name: 'Ada' })
       },
     })
 
@@ -67,14 +52,12 @@ describe('first ten minutes (v6)', () => {
 
     const actor = createActor(userMachine).start()
     actor.send({ type: 'load' })
-    const final = await waitFor(actor, (s) => s.matches('loaded'))
+    const final = yield* Effect.promise(() => waitFor(actor, (s) => s.matches('loaded')))
 
-    expect(final.context.user).toEqual({ id: 1, name: 'Ada' })
+    yield* expect(final.context.user).toEqual({ id: 1, name: 'Ada' })
   })
 
-  // Task 3 — multi-step form.
-  // Concepts: + schemas.events (typed payloads), actor.trigger
-  it('multi-step form', () => {
+  it('multi-step form', function*({ expect }) {
     const formMachine = createMachine({
       schemas: {
         events: {
@@ -110,16 +93,19 @@ describe('first ten minutes (v6)', () => {
     actor.trigger.next({ value: 'Ada' })
     actor.trigger.next({ value: 'ada@example.com' })
 
-    expect(actor.getSnapshot().value).toBe('done')
-    expect(actor.getSnapshot().context).toEqual({
-      name: 'Ada',
-      email: 'ada@example.com',
+    yield* expect({
+      value: actor.getSnapshot().value,
+      context: actor.getSnapshot().context,
+    }).toEqual({
+      value: 'done',
+      context: {
+        name: 'Ada',
+        email: 'ada@example.com',
+      },
     })
   })
 
-  // Task 4 — debounced input.
-  // Concepts: + enq, enq.raise with delay + id, enq.cancel
-  it('debounced input', async () => {
+  it('debounced input', function*({ expect }) {
     const searches: string[] = []
 
     const searchMachine = createMachine({
@@ -142,18 +128,37 @@ describe('first ten minutes (v6)', () => {
       },
     })
 
-    const actor = createActor(searchMachine).start()
+    let pendingDebounce: (() => void) | undefined
+    let nextTimerId = 0
+    let currentTimerId = -1
+    const clock = {
+      setTimeout: (fn: () => void) => {
+        const id = nextTimerId++
+        currentTimerId = id
+        pendingDebounce = fn
+        return id
+      },
+      clearTimeout: (id: number) => {
+        if (id === currentTimerId) {
+          pendingDebounce = undefined
+        }
+      },
+    }
+
+    const actor = createActor(searchMachine, { clock }).start()
     actor.trigger.type({ value: 'a' })
     actor.trigger.type({ value: 'ab' })
     actor.trigger.type({ value: 'abc' })
-    await sleep(30)
+    const fireDebounce = pendingDebounce
+    if (fireDebounce === undefined) {
+      throw new Error('expected a pending debounce timer')
+    }
+    fireDebounce()
 
-    expect(searches).toEqual(['abc'])
+    yield* expect(searches).toEqual(['abc'])
   })
 
-  // Task 5 — parent-child actors.
-  // Concepts: + enq.spawn, children, enq.sendTo, parent
-  it('parent-child actors', () => {
+  it('parent-child actors', function*({ expect }) {
     const counterMachine = createMachine({
       context: { count: 0 },
       on: {
@@ -189,6 +194,6 @@ describe('first ten minutes (v6)', () => {
     actor.send({ type: 'ping' })
     actor.send({ type: 'ping' })
 
-    expect(actor.getSnapshot().value).toBe('finished')
+    yield* expect(actor.getSnapshot().value).toBe('finished')
   })
 })

@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import {
   type AnyActor,
   type AnyMachineSnapshot,
+  type AnyStateMachine,
   createMachine,
   type ExecutableActionObject,
   type Snapshot,
@@ -38,7 +39,7 @@ type DurableRecord = {
 }
 
 function commitTransition(
-  machine: ReturnType<typeof createMachine>,
+  machine: AnyStateMachine,
   snapshot: AnyMachineSnapshot,
   effects: ExecutableActionObject[],
   transitionId: string,
@@ -242,7 +243,7 @@ class IdempotentRuntime {
 }
 
 describe('durable interpreter adapter', () => {
-  it('commits terminal actor lifecycle to the durable outbox', () => {
+  it('commits terminal actor lifecycle to the durable outbox', function*({ expect }) {
     const machine = createMachine({
       initial: 'active',
       states: {
@@ -255,15 +256,20 @@ describe('durable interpreter adapter', () => {
 
     const record = commitTransition(machine, done, effects, 'finish', 0)
 
-    expect(record.outbox.at(-1)).toMatchObject({
-      type: 'terminate',
-      actorKey: 'root',
-      status: 'done',
+    yield* expect({
+      outboxTail: record.outbox.at(-1),
+      serialized: JSON.stringify(record),
+    }).toEqual({
+      outboxTail: expect.objectContaining({
+        type: 'terminate',
+        actorKey: 'root',
+        status: 'done',
+      }),
+      serialized: expect.any(String),
     })
-    expect(() => JSON.stringify(record)).not.toThrow()
   })
 
-  it('can recover an outbox without duplicate effects or resetting timers', () => {
+  it('can recover an outbox without duplicate effects or resetting timers', function*({ expect }) {
     const fiveMinutes = 5 * 60 * 1000
     const startedAt = 1_000_000
     const worker = createMachine({ on: { PING: {} } })
@@ -299,21 +305,10 @@ describe('durable interpreter adapter', () => {
       (command) => command.type === 'schedule',
     )!
 
-    expect(timer.dueAt).toBe(startedAt + fiveMinutes)
-    expect(timer).not.toHaveProperty('event')
-    expect(timer).not.toHaveProperty('targetKey')
-    expect(
-      (initialRecord.snapshot as any).timers[timer.timerId!],
-    ).toMatchObject({
-      delay: fiveMinutes,
-      type: '@xstate.raise',
-      target: 'self',
-      event: { type: expect.stringMatching(/^xstate\.after/) },
-    })
-    expect(() => JSON.stringify(initialRecord)).not.toThrow()
+    const omittedTimerKeys = Object.keys(timer).filter(
+      (key) => key === 'event' || key === 'targetKey',
+    )
 
-    // Crash after the external runtime applied two effects but before the
-    // workflow acknowledged either outbox item.
     const firstRuntime = new IdempotentRuntime()
     firstRuntime.execute(initialRecord.outbox.slice(0, 2))
 
@@ -321,14 +316,10 @@ describe('durable interpreter adapter', () => {
     const resumedRuntime = new IdempotentRuntime(firstRuntime.persist())
     resumedRuntime.execute(persistedRecord.outbox)
 
-    expect(resumedRuntime.operations.map(({ type }) => type)).toEqual([
-      'spawn',
-      'schedule',
-      'start',
-    ])
-    expect(
-      resumedRuntime.operations.find(({ type }) => type === 'schedule')?.dueAt,
-    ).toBe(startedAt + fiveMinutes)
+    const resumedOperationTypes = resumedRuntime.operations.map(({ type }) => type)
+    const resumedScheduleDueAt = resumedRuntime.operations.find(
+      ({ type }) => type === 'schedule',
+    )?.dueAt
 
     const restoredSnapshot = machine.restoreSnapshot(
       persistedRecord.snapshot as Snapshot<unknown>,
@@ -338,7 +329,7 @@ describe('durable interpreter adapter', () => {
       {
         type: 'xstate.timer',
         id: timer.timerId!,
-      } as any,
+      } as never,
     )
     const timerRecord = commitTransition(
       machine,
@@ -349,12 +340,9 @@ describe('durable interpreter adapter', () => {
       persistedRecord.bindings,
     )
 
-    expect(timedOutSnapshot.value).toBe('timedOut')
-    expect(timedOutSnapshot.timers).toEqual({})
-    expect(timerRecord.outbox.map(({ type }) => type)).toEqual([
-      'cancel',
-      'stop',
-    ])
+    const timedOutValue = timedOutSnapshot.value
+    const timedOutTimers = timedOutSnapshot.timers
+    const timerRecordOutboxTypes = timerRecord.outbox.map(({ type }) => type)
 
     const [nextSnapshot, nextEffects] = machine.transition(restoredSnapshot, {
       type: 'PING',
@@ -368,14 +356,13 @@ describe('durable interpreter adapter', () => {
       persistedRecord.bindings,
     )
     const send = nextRecord.outbox.find((command) => command.type === 'send')!
-
-    expect(send.targetKey).toBe(spawn.actorKey)
+    const sendTargetKey = send.targetKey
 
     resumedRuntime.execute(nextRecord.outbox)
     resumedRuntime.execute(roundTrip(nextRecord.outbox))
-    expect(
-      resumedRuntime.operations.filter(({ type }) => type === 'send'),
-    ).toHaveLength(1)
+    const sendOperationTypes = resumedRuntime.operations
+      .filter(({ type }) => type === 'send')
+      .map(({ type }) => type)
 
     const [reenteredSnapshot, reentryEffects] = machine.transition(
       nextSnapshot,
@@ -393,16 +380,49 @@ describe('durable interpreter adapter', () => {
       (command) => command.type === 'spawn',
     )!
 
-    expect(reentryRecord.outbox.map(({ type }) => type)).toEqual([
-      'cancel',
-      'stop',
-      'spawn',
-      'schedule',
-      'start',
-    ])
-    expect(
-      reentryRecord.outbox.find(({ type }) => type === 'stop')?.actorKey,
-    ).toBe(spawn.actorKey)
-    expect(nextSpawn.actorKey).not.toBe(spawn.actorKey)
+    yield* expect({
+      timerDueAt: timer.dueAt,
+      omittedTimerKeys,
+      persistedSnapshot: initialRecord.snapshot,
+      serializedInitial: JSON.stringify(initialRecord),
+      resumedOperationTypes,
+      resumedScheduleDueAt,
+      timedOutValue,
+      timedOutTimers,
+      timerRecordOutboxTypes,
+      spawnActorKey: spawn.actorKey,
+      sendTargetKey,
+      sendOperationTypes,
+      reentryOutboxTypes: reentryRecord.outbox.map(({ type }) => type),
+      reentryStopActorKey: reentryRecord.outbox.find(
+        ({ type }) => type === 'stop',
+      )?.actorKey,
+      nextSpawnDiffersFromSpawn: nextSpawn.actorKey !== spawn.actorKey,
+    }).toEqual({
+      timerDueAt: startedAt + fiveMinutes,
+      omittedTimerKeys: [],
+      persistedSnapshot: expect.objectContaining({
+        timers: expect.objectContaining({
+          [timer.timerId!]: expect.objectContaining({
+            delay: fiveMinutes,
+            type: '@xstate.raise',
+            target: 'self',
+            event: expect.objectContaining({ type: 'xstate.after' }),
+          }),
+        }),
+      }),
+      serializedInitial: expect.any(String),
+      resumedOperationTypes: ['spawn', 'schedule', 'start'],
+      resumedScheduleDueAt: startedAt + fiveMinutes,
+      timedOutValue: 'timedOut',
+      timedOutTimers: {},
+      timerRecordOutboxTypes: ['cancel', 'stop'],
+      spawnActorKey: 'transition-0:0',
+      sendTargetKey: 'transition-0:0',
+      sendOperationTypes: ['send'],
+      reentryOutboxTypes: ['cancel', 'stop', 'spawn', 'schedule', 'start'],
+      reentryStopActorKey: 'transition-0:0',
+      nextSpawnDiffersFromSpawn: true,
+    })
   })
 })

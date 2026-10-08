@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
 import { createActor, createMachine } from '../src/index.js'
 
@@ -71,7 +71,7 @@ const createCounterMachine = (context: Partial<CounterContext> = {}) =>
   })
 
 describe('assigning to context', () => {
-  it('applies the assignment to context (property assignment)', () => {
+  it('applies the assignment to context (property assignment)', function*({ expect }) {
     const counterMachine = createCounterMachine()
 
     const actorRef = createActor(counterMachine).start()
@@ -80,17 +80,23 @@ describe('assigning to context', () => {
     })
     const oneState = actorRef.getSnapshot()
 
-    expect(oneState.value).toEqual('counting')
-    expect(oneState.context).toEqual({ count: -1, foo: 'bar' })
-
     actorRef.send({ type: 'DEC' })
     const twoState = actorRef.getSnapshot()
 
-    expect(twoState.value).toEqual('counting')
-    expect(twoState.context).toEqual({ count: -2, foo: 'bar' })
+    yield* expect({
+      oneValue: oneState.value,
+      oneContext: oneState.context,
+      twoValue: twoState.value,
+      twoContext: twoState.context,
+    }).toEqual({
+      oneValue: 'counting',
+      oneContext: { count: -1, foo: 'bar' },
+      twoValue: 'counting',
+      twoContext: { count: -2, foo: 'bar' },
+    })
   })
 
-  it('applies the assignment to context', () => {
+  it('applies the assignment to context', function*({ expect }) {
     const counterMachine = createCounterMachine()
 
     const actorRef = createActor(counterMachine).start()
@@ -99,70 +105,70 @@ describe('assigning to context', () => {
     })
     const oneState = actorRef.getSnapshot()
 
-    expect(oneState.value).toEqual('counting')
-    expect(oneState.context).toEqual({ count: 1, foo: 'bar' })
-
     actorRef.send({ type: 'INC' })
     const twoState = actorRef.getSnapshot()
 
-    expect(twoState.value).toEqual('counting')
-    expect(twoState.context).toEqual({ count: 2, foo: 'bar' })
+    yield* expect({
+      oneValue: oneState.value,
+      oneContext: oneState.context,
+      twoValue: twoState.value,
+      twoContext: twoState.context,
+    }).toEqual({
+      oneValue: 'counting',
+      oneContext: { count: 1, foo: 'bar' },
+      twoValue: 'counting',
+      twoContext: { count: 2, foo: 'bar' },
+    })
   })
 
-  it('applies the assignment to multiple properties (property assignment)', () => {
+  it('applies the assignment to multiple properties (property assignment)', function*({ expect }) {
     const counterMachine = createCounterMachine()
     const actorRef = createActor(counterMachine).start()
     actorRef.send({
       type: 'WIN_PROP',
     })
 
-    expect(actorRef.getSnapshot().context).toEqual({ count: 100, foo: 'win' })
+    yield* expect(actorRef.getSnapshot().context).toEqual({ count: 100, foo: 'win' })
   })
 
-  it('applies the assignment to multiple properties (static)', () => {
+  it('applies the assignment to multiple properties (static)', function*({ expect }) {
     const counterMachine = createCounterMachine()
     const actorRef = createActor(counterMachine).start()
     actorRef.send({
       type: 'WIN_STATIC',
     })
 
-    expect(actorRef.getSnapshot().context).toEqual({ count: 100, foo: 'win' })
+    yield* expect(actorRef.getSnapshot().context).toEqual({ count: 100, foo: 'win' })
   })
 
-  it('applies the assignment to multiple properties (static + prop assignment)', () => {
+  it('applies the assignment to multiple properties (static + prop assignment)', function*({ expect }) {
     const counterMachine = createCounterMachine()
     const actorRef = createActor(counterMachine).start()
     actorRef.send({
       type: 'WIN_MIX',
     })
 
-    expect(actorRef.getSnapshot().context).toEqual({ count: 100, foo: 'win' })
+    yield* expect(actorRef.getSnapshot().context).toEqual({ count: 100, foo: 'win' })
   })
 
-  it('applies the assignment to multiple properties', () => {
+  it('applies the assignment to multiple properties', function*({ expect }) {
     const counterMachine = createCounterMachine()
     const actorRef = createActor(counterMachine).start()
     actorRef.send({
       type: 'WIN',
     })
 
-    expect(actorRef.getSnapshot().context).toEqual({ count: 100, foo: 'win' })
+    yield* expect(actorRef.getSnapshot().context).toEqual({ count: 100, foo: 'win' })
   })
 
-  it('applies the assignment to the explicit external state (property assignment)', () => {
+  it('applies the assignment to the explicit external state (property assignment)', function*({ expect }) {
     const machine = createCounterMachine({ count: 50, foo: 'bar' })
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'DEC' })
     const oneState = actorRef.getSnapshot()
 
-    expect(oneState.value).toEqual('counting')
-    expect(oneState.context).toEqual({ count: 49, foo: 'bar' })
-
     actorRef.send({ type: 'DEC' })
     const twoState = actorRef.getSnapshot()
-
-    expect(twoState.value).toEqual('counting')
-    expect(twoState.context).toEqual({ count: 48, foo: 'bar' })
 
     const machine2 = createCounterMachine({ count: 100, foo: 'bar' })
 
@@ -170,24 +176,31 @@ describe('assigning to context', () => {
     actorRef2.send({ type: 'DEC' })
     const threeState = actorRef2.getSnapshot()
 
-    expect(threeState.value).toEqual('counting')
-    expect(threeState.context).toEqual({ count: 99, foo: 'bar' })
+    yield* expect({
+      oneValue: oneState.value,
+      oneContext: oneState.context,
+      twoValue: twoState.value,
+      twoContext: twoState.context,
+      threeValue: threeState.value,
+      threeContext: threeState.context,
+    }).toEqual({
+      oneValue: 'counting',
+      oneContext: { count: 49, foo: 'bar' },
+      twoValue: 'counting',
+      twoContext: { count: 48, foo: 'bar' },
+      threeValue: 'counting',
+      threeContext: { count: 99, foo: 'bar' },
+    })
   })
 
-  it('applies the assignment to the explicit external state', () => {
+  it('applies the assignment to the explicit external state', function*({ expect }) {
     const machine = createCounterMachine({ count: 50, foo: 'bar' })
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'INC' })
     const oneState = actorRef.getSnapshot()
 
-    expect(oneState.value).toEqual('counting')
-    expect(oneState.context).toEqual({ count: 51, foo: 'bar' })
-
     actorRef.send({ type: 'INC' })
     const twoState = actorRef.getSnapshot()
-
-    expect(twoState.value).toEqual('counting')
-    expect(twoState.context).toEqual({ count: 52, foo: 'bar' })
 
     const machine2 = createCounterMachine({ count: 102, foo: 'bar' })
 
@@ -195,11 +208,24 @@ describe('assigning to context', () => {
     actorRef2.send({ type: 'INC' })
     const threeState = actorRef2.getSnapshot()
 
-    expect(threeState.value).toEqual('counting')
-    expect(threeState.context).toEqual({ count: 103, foo: 'bar' })
+    yield* expect({
+      oneValue: oneState.value,
+      oneContext: oneState.context,
+      twoValue: twoState.value,
+      twoContext: twoState.context,
+      threeValue: threeState.value,
+      threeContext: threeState.context,
+    }).toEqual({
+      oneValue: 'counting',
+      oneContext: { count: 51, foo: 'bar' },
+      twoValue: 'counting',
+      twoContext: { count: 52, foo: 'bar' },
+      threeValue: 'counting',
+      threeContext: { count: 103, foo: 'bar' },
+    })
   })
 
-  it('should maintain state after unhandled event', () => {
+  it('should maintain state after unhandled event', function*({ expect }) {
     const counterMachine = createCounterMachine()
     const actorRef = createActor(counterMachine).start()
 
@@ -208,11 +234,13 @@ describe('assigning to context', () => {
     })
     const nextState = actorRef.getSnapshot()
 
-    expect(nextState.context).toBeDefined()
-    expect(nextState.context).toEqual({ count: 0, foo: 'bar' })
+    yield* expect({ defined: nextState.context !== undefined, context: nextState.context }).toEqual({
+      defined: true,
+      context: { count: 0, foo: 'bar' },
+    })
   })
 
-  it('sets undefined properties', () => {
+  it('sets undefined properties', function*({ expect }) {
     const counterMachine = createCounterMachine()
     const actorRef = createActor(counterMachine).start()
 
@@ -222,15 +250,17 @@ describe('assigning to context', () => {
 
     const nextState = actorRef.getSnapshot()
 
-    expect(nextState.context.maybe).toBeDefined()
-    expect(nextState.context).toEqual({
-      count: 0,
-      foo: 'bar',
+    yield* expect({ maybe: nextState.context.maybe, context: nextState.context }).toEqual({
       maybe: 'defined',
+      context: {
+        count: 0,
+        foo: 'bar',
+        maybe: 'defined',
+      },
     })
   })
 
-  it('can assign from event', () => {
+  it('can assign from event', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -260,6 +290,6 @@ describe('assigning to context', () => {
     const actorRef = createActor(machine).start()
     actorRef.send({ type: 'INC', value: 30 })
 
-    expect(actorRef.getSnapshot().context.count).toEqual(30)
+    yield* expect(actorRef.getSnapshot().context).toEqual({ count: 30 })
   })
 })
