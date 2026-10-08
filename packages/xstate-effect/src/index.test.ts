@@ -9,7 +9,7 @@ import {
 } from '@systemfsoftware/xstate'
 import { standardSchemaValidator } from '@systemfsoftware/xstate/validation'
 import { Context, Deferred, Effect, Layer, ManagedRuntime, Option, Ref, Schema, Scope, Stream } from 'effect'
-import { until } from '../tests/untilCondition.js'
+import { until } from '../tests/__fixtures__/untilCondition.js'
 import { createEffectActor, fromEffect, fromEffectEventStream, fromEffectStream, setupEffect } from './index.js'
 
 const rejects = (schema: StandardSchemaV1, value: unknown): boolean => {

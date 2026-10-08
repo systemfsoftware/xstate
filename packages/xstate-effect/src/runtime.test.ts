@@ -2,7 +2,7 @@ import { describe } from '@systemfsoftware/vitest'
 import { type AnyActorRef, createActor, createMachine, type EventRejection, setup } from '@systemfsoftware/xstate'
 import { Context, Deferred, Duration, Effect, Fiber, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
-import { until } from '../tests/untilCondition.js'
+import { until } from '../tests/__fixtures__/untilCondition.js'
 import {
   createEffectActor,
   deadLetters,

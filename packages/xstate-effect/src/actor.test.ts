@@ -1,7 +1,7 @@
 import { describe, expectTypeOf, it } from '@systemfsoftware/vitest'
 import { type AnyActorRef, createMachine, type SnapshotFrom, types } from '@systemfsoftware/xstate'
 import { Cause, Deferred, Duration, Effect, Fiber, Stream } from 'effect'
-import { until } from '../tests/untilCondition.js'
+import { until } from '../tests/__fixtures__/untilCondition.js'
 import {
   ActorFailedError,
   ActorStoppedError,
