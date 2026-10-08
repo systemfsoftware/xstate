@@ -943,8 +943,8 @@ function formatShare(share: number): string {
  * Formats the distribution of generated data: how executed events split
  * across event cases, and the share of runs that recorded each label. Shrink
  * attempts are not counted. Pass `statistics: true` to `propertyTest()` or
- * `testPaths()` to print it after a passing campaign, or
- * `statistics: (report) => void` to receive the same string instead.
+ * `testPaths()` to print it after a passing campaign, or a function,
+ * `(report) => void | Promise<void>`, to receive the same string instead.
  * @experimental
  */
 export function formatTestStatistics(coverage: TestCoverage): string {

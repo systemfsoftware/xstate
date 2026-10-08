@@ -1,7 +1,7 @@
-import { describe, it } from '@systemfsoftware/vitest'
+import { describe } from '@systemfsoftware/vitest'
 import { createMachine, types } from '@systemfsoftware/xstate'
 import * as Effect from 'effect/Effect'
-import { propertyTest, testPaths } from '../src/engine/index.js'
+import { propertyTest, testPaths, type TestSutCompleteContext } from '../src/engine/index.js'
 import { constant, randomAdapter } from './engine/propertyTestAdapter.js'
 
 const counterMachine = createMachine({
@@ -15,6 +15,30 @@ const counterMachine = createMachine({
     RESET: () => ({ context: { count: 0 } }),
   },
 })
+
+const failingCampaign = (
+  statistics: (report: string) => void | Promise<void>,
+): Effect.Effect<{ readonly failure: unknown; readonly completions: readonly TestSutCompleteContext[] }> =>
+  Effect.gen(function*() {
+    const completions: TestSutCompleteContext[] = []
+    const failure = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        adapter: randomAdapter({ seed: 1, numRuns: 1, maxCommands: 1 }),
+        events: { INC: constant({}) },
+        sut: {
+          create: () => ({ send: () => {} }),
+          complete: (result) => {
+            completions.push(result)
+          },
+        },
+        statistics,
+      }).then(
+        () => 'the campaign passed',
+        (error: unknown) => error,
+      )
+    )
+    return { failure, completions }
+  })
 
 describe('statistics sink', (it) => {
   it('delivers the formatted report to a callback after a passing propertyTest campaign', function*({ expect }) {
@@ -68,4 +92,35 @@ describe('statistics sink', (it) => {
       ].join('\n'),
     ])
   })
+
+  it('fails the campaign with the error a callback throws, after the completion hook ran', function*({ expect }) {
+    const sinkError = new Error('statistics sink threw')
+
+    const outcome = yield* failingCampaign(() => {
+      throw sinkError
+    })
+
+    yield* expect(outcome).toStrictEqual({
+      failure: sinkError,
+      completions: [{ passed: false, failure: sinkError }],
+    })
+  })
+
+  it(
+    'awaits a callback and fails the campaign with the error it rejects with, after the completion hook ran',
+    function*({ expect }) {
+      const sinkError = new Error('statistics sink rejected')
+
+      const outcome = yield* failingCampaign(() =>
+        Promise.resolve().then(() => {
+          throw sinkError
+        })
+      )
+
+      yield* expect(outcome).toStrictEqual({
+        failure: sinkError,
+        completions: [{ passed: false, failure: sinkError }],
+      })
+    },
+  )
 })

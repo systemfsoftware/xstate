@@ -3196,10 +3196,12 @@ export interface TestOptions<
    * Reports `formatTestStatistics(coverage)` after a passing campaign: the
    * distribution of executed event cases and the share of runs per label.
    * `true` prints it through the package's console logger; a function
-   * receives the same string once, instead of the print; `false`, or leaving
-   * it out, reports nothing.
+   * receives the same string once, instead of the print, and is awaited when
+   * it returns a promise; `false`, or leaving it out, reports nothing. A
+   * function that throws or rejects fails the campaign with that error, after
+   * the system under test's `complete` hook ran.
    */
-  readonly statistics?: boolean | ((report: string) => void)
+  readonly statistics?: boolean | ((report: string) => void | Promise<void>)
   /**
    * Projects a snapshot onto the value printed for each step of a failure
    * trace. Defaults to `{ value, context }` for machine snapshots.
@@ -4487,7 +4489,19 @@ const propertyTestProgram = <
     }
 
     if (typeof options.statistics === 'function') {
-      options.statistics(formatTestStatistics(finalCoverage))
+      const deliverReport = options.statistics
+      const delivery = yield* Effect.promise(() =>
+        Promise.resolve()
+          .then(() => deliverReport(formatTestStatistics(finalCoverage)))
+          .then(
+            (): { readonly failed: false } => ({ failed: false }),
+            (error: unknown) => ({ failed: true as const, error }),
+          )
+      )
+      if (delivery.failed) {
+        yield* complete({ passed: false, failure: delivery.error })
+        throw delivery.error
+      }
     } else if (options.statistics === true) {
       logTestStatistics(finalCoverage)
     }

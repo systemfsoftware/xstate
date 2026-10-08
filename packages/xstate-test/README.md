@@ -978,6 +978,20 @@ object. Runs started while fast-check shrinks a counterexample are left out
 of the labels and the event cases; `coverage.exploration.shrinkRuns` counts
 them.
 
+Pass a function instead of `true` to receive the same text rather than print
+it, for example to attach it to a test report. The campaign awaits it when it
+returns a promise. If it throws or rejects, the campaign fails with that error
+after the `sut.complete` hook ran:
+
+```ts
+await propertyTest(cartMachine, {
+  events,
+  statistics: async (report) => {
+    await writeFile('statistics.txt', report)
+  },
+})
+```
+
 ### Replay a failure
 
 A `ModelTestFailure` carries a `fixture`: a JSON-safe record of the sequence
@@ -1332,7 +1346,7 @@ Replay, reporting, suites, and linearizability:
 | `ModelTestFailure`, `ReplayNotReproducedError`                                                           | Error classes.                                                                 |
 | `serializeTestTrace(trace)`                                                                              | Renders a trace as JSON-safe data.                                             |
 | `formatTestCoverage`, `formatTestCoverageJUnit`, `formatTestCoverageHTML`, `testCoverageToJSON`          | Coverage reports.                                                              |
-| `formatTestStatistics(coverage)`                                                                         | The event-case and label distribution `statistics: true` prints.               |
+| `formatTestStatistics(coverage)`                                                                         | The event-case and label distribution `statistics` reports.                    |
 | `TestCampaignError`                                                                                      | Thrown when a `sometimes` property or a `reachable` target is never satisfied. |
 | `assertTestCoverage(coverage, thresholds)`                                                               | Throws when coverage is below thresholds.                                      |
 | `replayTestSuite`, `replayTestSuiteFixture`, `describeTestSuite`, `serializeTestSuite`, `parseTestSuite` | Offline suites.                                                                |
@@ -1362,7 +1376,7 @@ Subpath entrypoints:
 | `temporal`     | `[]`     | Temporal properties. See [Temporal properties](#temporal-properties).                                           |
 | `reachable`    | none     | State values, `'#id'` state node ids, or tags that at least one run must enter.                                 |
 | `failures`     | none     | Saves failing fixtures and replays them first. `true`, `{ dir?, replay?, key? }`, or a `TestFailureStore`.      |
-| `statistics`   | `false`  | Prints `formatTestStatistics(coverage)` after a passing campaign.                                               |
+| `statistics`   | `false`  | `true` prints `formatTestStatistics(coverage)` after a passing campaign; a function receives it instead.        |
 | `reference`    | none     | A second implementation compared with the model.                                                                |
 | `mode`         | `'pure'` | `'pure'` or `'executed'`. See [Modes](#modes).                                                                  |
 | `actors`       | none     | Logic substituted for named actor sources. Executed mode only.                                                  |
