@@ -320,7 +320,7 @@ export class StateNode<
     const descriptorKey = getEventDescriptorKey(event)
     let candidates = this._candidateCache?.get(descriptorKey)
     if (!candidates) {
-      candidates = getCandidates(this, event)
+      candidates = getCandidates(this, event, (message) => actorScope.warn(message))
       ;(this._candidateCache ??= new Map()).set(descriptorKey, candidates)
     }
 

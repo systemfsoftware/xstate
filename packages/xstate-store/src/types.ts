@@ -325,6 +325,7 @@ export type StoreConfig<
 > = {
   context: ResolveStoreContext<TContext, TContextSchema>
   schemas?: StoreSchemas<TContextSchema, TEventSchemaMap, TEmittedSchemaMap>
+  warn?: (message: string) => void
   on: TEventSchemaMap extends StandardSchemaMap ? {
       [
         K in
@@ -366,6 +367,7 @@ export type SpecificStoreConfig<
 > = {
   context: ResolveStoreContext<TContext, TContextSchema>
   schemas?: StoreSchemas<TContextSchema, TEventSchemaMap, TEmittedSchemaMap>
+  warn?: (message: string) => void
   on: {
     [E in TEvent as E['type']]?: StoreAssigner<
       ResolveStoreContext<TContext, TContextSchema>,
@@ -669,6 +671,7 @@ export type StoreLogic<
 > = {
   eventTypes?: readonly string[] | undefined
   schemas?: StoreSchemas<any, any, any> | undefined
+  warn?: ((message: string) => void) | undefined
   getInitialSnapshot: () => TSnapshot
   transition: (
     snapshot: TSnapshot,

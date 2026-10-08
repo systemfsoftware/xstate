@@ -324,6 +324,7 @@ export type StoreAssigner<TContext extends StoreContext, TEvent extends EventObj
 export type StoreConfig<TContext extends StoreContext, TEventPayloadMap extends EventPayloadMap, TEmittedPayloadMap extends EventPayloadMap = {}, TContextSchema extends StandardSchemaV1 | undefined = undefined, TEventSchemaMap extends StandardSchemaMap | undefined = undefined, TEmittedSchemaMap extends StandardSchemaMap | undefined = undefined> = {
     context: ResolveStoreContext<TContext, TContextSchema>;
     schemas?: StoreSchemas<TContextSchema, TEventSchemaMap, TEmittedSchemaMap>;
+    warn?: (message: string) => void;
     on: TEventSchemaMap extends StandardSchemaMap ? { [K in keyof ResolveStoreEventPayloadMap<TEventPayloadMap, TEventSchemaMap> & string]?: StoreAssigner<ResolveStoreContext<TContext, TContextSchema>, {
             type: K;
         } & ResolveStoreEventPayloadMap<TEventPayloadMap, TEventSchemaMap>[K], ExtractEvents<ResolveStoreEmittedPayloadMap<TEmittedPayloadMap, TEmittedSchemaMap>>, ResolveStoreEventPayloadMap<TEventPayloadMap, TEventSchemaMap>>; } : { [K in keyof TEventPayloadMap & string]: StoreAssigner<ResolveStoreContext<TContext, TContextSchema>, {
@@ -436,7 +437,7 @@ export type ValueFromAtomConfig<TConfig extends AnyAtomConfig> = TConfig extends
 
 // Warnings were encountered during analysis:
 //
-// dist/types-DuSowEJ9.d.ts:123:3 - (ae-forgotten-export) The symbol "EmitterFunction" needs to be exported by the entry point index.d.ts
+// dist/types-BkeiRnGO.d.ts:123:3 - (ae-forgotten-export) The symbol "EmitterFunction" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

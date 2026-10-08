@@ -499,7 +499,7 @@ export function allocateChildId(
   localAllocation?: SpawnAllocation,
 ): { id: string; counters: Record<string, number> } {
   if (isDevelopment && !spawnAllocations.get(actorScope)) {
-    console.warn(
+    actorScope.warn(
       'A child id was generated outside a spawn-allocation transaction; ids may repeat across enqueue objects. Transition entry points must call beginSpawnAllocation().',
     )
   }

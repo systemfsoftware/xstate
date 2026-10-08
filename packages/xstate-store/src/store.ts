@@ -534,6 +534,7 @@ export function createStore(definitionOrLogic: any): any {
   const logic: AnyStoreLogic = {
     eventTypes,
     schemas: definitionOrLogic.schemas,
+    warn: definitionOrLogic.warn,
     getInitialSnapshot: () => ({
       status: 'active' as const,
       context: definitionOrLogic.context,

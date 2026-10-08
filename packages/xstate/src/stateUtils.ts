@@ -374,6 +374,7 @@ function normalizeLegacyInternalEvent(
 export function getCandidates<TEvent extends EventObject>(
   stateNode: StateNode<any, TEvent>,
   event: TEvent,
+  warn: (message: string) => void,
 ): Array<TransitionDefinition<any, TEvent>> {
   const eventTypes = getEventTypeAliases(event)
   const exactMatches = eventTypes.flatMap(
@@ -383,7 +384,7 @@ export function getCandidates<TEvent extends EventObject>(
     .filter(
       (eventDescriptor) =>
         !eventTypes.includes(eventDescriptor) &&
-        eventTypes.some((eventType) => matchesEventDescriptor(eventType, eventDescriptor)),
+        eventTypes.some((eventType) => matchesEventDescriptor(eventType, eventDescriptor, warn)),
     )
     .sort((a, b) => b.length - a.length)
     .flatMap((key) => stateNode.transitions.get(key)!)
@@ -1704,6 +1705,7 @@ function microstep(
               nextState.context,
               event,
               actorScope.self,
+              actorScope.warn,
               stateInputMap[rootCompletionNode.id],
             )
         } else if (rootCompletionNode.type === 'parallel') {
@@ -1726,6 +1728,7 @@ function microstep(
           nextState.context,
           createDoneStateEvent(rootCompletionNode.id, completionOutput),
           actorScope.self,
+          actorScope.warn,
         )
       }
 
@@ -2082,6 +2085,7 @@ function microstep(
                   nextState.context,
                   event,
                   actorScope.self,
+                  actorScope.warn,
                   stateInput,
                 )
                 : undefined,
@@ -2104,6 +2108,7 @@ function microstep(
                   nextState.context,
                   event,
                   actorScope.self,
+                  actorScope.warn,
                   stateInputMap[region.id],
                 )
                 : undefined
@@ -2129,6 +2134,7 @@ function microstep(
                 nextState.context,
                 event,
                 actorScope.self,
+                actorScope.warn,
                 stateInputMap[finalChild.id],
               )
               : undefined

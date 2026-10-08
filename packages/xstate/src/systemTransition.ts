@@ -17,6 +17,7 @@ import type {
   InputFrom,
 } from './types.js'
 import { matchesEventDescriptor } from './utils.js'
+import { defaultWarn } from './warnSink.js'
 
 /** Immutable definitions for a pure actor system. @experimental */
 export interface SystemLogic<TLogic extends AnyActorLogic = AnyActorLogic> {
@@ -588,6 +589,7 @@ class SystemReduction {
           throw new Error('Timers must be canceled as logical effects.')
         },
       },
+      _wallClock: { now: () => this.snapshot.now },
     }
   }
 
@@ -603,6 +605,7 @@ class SystemReduction {
       id: self.id,
       sessionId: self.sessionId,
       logger: systemLogger,
+      warn: defaultWarn,
       defer: () => {},
       emit: () => {
         throw new Error('Emit events through enqueue operations.')

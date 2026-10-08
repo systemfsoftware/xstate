@@ -167,6 +167,7 @@ export type {
   DeadLetterDetail,
   EventRejection,
   EventRejectionReason,
+  WallClock,
 } from './system.js'
 export { toPromise } from './toPromise.js'
 export {
