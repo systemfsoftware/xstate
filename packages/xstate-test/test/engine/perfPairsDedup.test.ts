@@ -1,13 +1,19 @@
-import { createMachine, type EventObject } from '@systemfsoftware/xstate'
+import { describe, it } from '@systemfsoftware/vitest'
+import { createMachine, type EventObject, type Snapshot } from '@systemfsoftware/xstate'
 import type { StatePath } from '@systemfsoftware/xstate/graph'
-import { describe, expect, it } from 'vitest'
-import { createTestCoverage, finalizeTestCoverage, recordPropertyTransitions } from '../../src/engine/coverage.js'
+import {
+  createTestCoverage,
+  finalizeTestCoverage,
+  type MutableTestCoverage,
+  recordPropertyTransitions,
+} from '../../src/engine/coverage.js'
 import { deduplicatePaths } from '../../src/engine/deduplicatePaths.js'
 import { simpleStringify } from '../../src/engine/utils.js'
 
-type AnyPath = StatePath<any, EventObject>
+type AnyPath = StatePath<Snapshot<unknown>, EventObject>
 
-/** The previous O(n^2 * L) implementation, kept as an oracle. */
+const dummyState = {} as unknown as Snapshot<unknown>
+
 function deduplicatePathsOracle(
   paths: AnyPath[],
   serializeEvent: (event: EventObject) => string = simpleStringify,
@@ -47,24 +53,24 @@ function randomPaths(
   alphabet: number,
 ): AnyPath[] {
   return Array.from({ length: count }, (_, index) => ({
-    state: { index } as any,
+    state: { index } as unknown as Snapshot<unknown>,
     weight: 0,
     steps: Array.from(
       { length: Math.floor(random() * (maxLength + 1)) },
       () => ({
-        state: {} as any,
+        state: dummyState,
         event: { type: `E${Math.floor(random() * alphabet)}` },
       }),
     ),
   }))
 }
 
-function getPairUniverse(coverage: ReturnType<typeof createTestCoverage>) {
+function getPairUniverse(coverage: MutableTestCoverage) {
   return finalizeTestCoverage(coverage).transitionPairs
 }
 
 describe('transition pair universe', () => {
-  it('does not declare pairs involving dynamic transitions', () => {
+  it('does not declare pairs involving dynamic transitions', function*({ expect }) {
     const machine = createMachine({
       id: 'dyn',
       initial: 'a',
@@ -87,38 +93,61 @@ describe('transition pair universe', () => {
     const declared = [...coverage.transitionPairs.declarations.keys()]
     const jump = [...coverage.transitions.declarations.keys()].find((id) => id.includes('JUMP'))!
 
-    expect(jump).toBeDefined()
-    expect(declared.length).toBeGreaterThan(0)
-    expect(declared.some((id) => id.includes(jump))).toBe(false)
-    expect(pairs.unknown).toEqual([])
-    expect(pairs.truncated).toBe(false)
-    // a -GO-> b -BACK-> a -GO-> b: every static ordering is declared.
-    expect(declared).toHaveLength(2)
-
-    // Observed pairs involving the dynamic transition still count as covered.
     const a = machine.root.states['a']
     if (a === undefined) {
       throw new Error('expected state node "a"')
     }
-    const goTransitions = a.transitions.get('GO')
-    const goTransition = goTransitions?.[0]
+    const b = machine.root.states['b']
+    if (b === undefined) {
+      throw new Error('expected state node "b"')
+    }
+    const goTransition = a.transitions.get('GO')?.[0]
     if (goTransition === undefined) {
       throw new Error('expected a GO transition')
     }
-    recordPropertyTransitions(coverage, { type: 'GO' }, [goTransition])
-    const jumpTransitions = a.transitions.get('JUMP')
-    const jumpTransition = jumpTransitions?.[0]
+    const jumpTransition = a.transitions.get('JUMP')?.[0]
     if (jumpTransition === undefined) {
       throw new Error('expected a JUMP transition')
     }
+    const backTransition = b.transitions.get('BACK')?.[0]
+    if (backTransition === undefined) {
+      throw new Error('expected a BACK transition')
+    }
+
+    const idOf = (transition: { source: { id: string } }, event: string) =>
+      JSON.stringify(['transition', transition.source.id, event, 0])
+    const goId = idOf(goTransition, 'GO')
+    const jumpId = idOf(jumpTransition, 'JUMP')
+    const backId = idOf(backTransition, 'BACK')
+
+    recordPropertyTransitions(coverage, { type: 'GO' }, [goTransition])
     recordPropertyTransitions(coverage, { type: 'JUMP' }, [jumpTransition])
     const observed = getPairUniverse(coverage)
-    expect(observed.covered).toHaveLength(1)
-    expect(observed.covered[0]).toContain(jump)
-    expect(observed.unknown).toEqual([])
+
+    yield* expect({
+      jump,
+      declaredCount: declared.length,
+      declaresJump: declared.some((id) => id.includes(jump)),
+      declared: [...declared].sort(),
+      pairsUnknown: pairs.unknown,
+      pairsTruncated: pairs.truncated,
+      observedCoveredCount: observed.covered.length,
+      observedCovered: observed.covered,
+      observedUnknown: observed.unknown,
+    }).toEqual({
+      jump: jumpId,
+      declaredCount: 2,
+      declaresJump: false,
+      declared: [`${goId} -> ${backId}`, `${backId} -> ${goId}`].sort(),
+      pairsUnknown: [],
+      pairsTruncated: false,
+      observedCoveredCount: 1,
+      observedCovered: [`${goId} -> ${jumpId}`],
+      observedUnknown: [],
+    })
   })
 
-  it('caps the declared universe and reports truncation', () => {
+  it('caps the declared universe and reports truncation', function*({ expect }) {
     const size = 60
     const states: Record<string, { on: Record<string, { target: string }> }> = {}
     for (let i = 0; i < size; i++) {
@@ -133,17 +162,25 @@ describe('transition pair universe', () => {
     const coverage = createTestCoverage(machine)
     const pairs = getPairUniverse(coverage)
 
-    expect(pairs.truncated).toBe(true)
-    expect(coverage.transitionPairs.declarations.size).toBeLessThanOrEqual(
-      2000,
-    )
-    expect(coverage.transitionPairs.declarations.size).toBeGreaterThan(0)
+    yield* expect({
+      truncated: pairs.truncated,
+      declaredSize: coverage.transitionPairs.declarations.size,
+      declaredSizePositive: coverage.transitionPairs.declarations.size > 0,
+      declaredSizeWithinLimit: coverage.transitionPairs.declarations.size <= 2000,
+    }).toEqual({
+      truncated: true,
+      declaredSize: 2000,
+      declaredSizePositive: true,
+      declaredSizeWithinLimit: true,
+    })
   })
 })
 
 describe('deduplicatePaths', () => {
-  it('matches the previous implementation on random path sets', () => {
+  it('matches the previous implementation on random path sets', function*({ expect }) {
     const random = createRandom(42)
+    const actuals: AnyPath[][] = []
+    const expecteds: AnyPath[][] = []
     for (let round = 0; round < 200; round++) {
       const paths = randomPaths(
         random,
@@ -151,43 +188,68 @@ describe('deduplicatePaths', () => {
         Math.floor(random() * 6),
         1 + Math.floor(random() * 3),
       )
-      expect(deduplicatePaths(paths)).toEqual(deduplicatePathsOracle(paths))
-      // Identity, not just structure: the same path objects in the same order.
-      const actual = deduplicatePaths(paths)
-      const expected = deduplicatePathsOracle(paths)
-      expect(actual.length).toBe(expected.length)
-      actual.forEach((path, index) => expect(path).toBe(expected[index]))
+      actuals.push(deduplicatePaths(paths))
+      expecteds.push(deduplicatePathsOracle(paths))
     }
+
+    yield* expect({
+      actuals,
+      actualRounds: actuals.length,
+      sameReferences: actuals.every((actual, round) => {
+        const expected = expecteds[round]
+        if (expected === undefined) {
+          return false
+        }
+        return (
+          actual.length === expected.length &&
+          actual.every((path, index) => path === expected[index])
+        )
+      }),
+    }).toEqual({
+      actuals: expecteds,
+      actualRounds: expecteds.length,
+      sameReferences: true,
+    })
   })
 
-  it('honors a custom event serializer', () => {
+  it('honors a custom event serializer', function*({ expect }) {
     const random = createRandom(7)
     const paths = randomPaths(random, 100, 5, 4)
     const serialize = (event: EventObject) => event.type.slice(0, 1)
     const actual = deduplicatePaths(paths, serialize)
     const expected = deduplicatePathsOracle(paths, serialize)
-    actual.forEach((path, index) => expect(path).toBe(expected[index]))
-    expect(actual).toHaveLength(1)
+
+    yield* expect({
+      actualCount: actual.length,
+      sameReferences: actual.length === expected.length &&
+        actual.every((path, index) => path === expected[index]),
+    }).toEqual({ actualCount: 1, sameReferences: true })
   })
 
-  it('handles empty inputs and empty paths', () => {
-    expect(deduplicatePaths([])).toEqual([])
+  it('handles empty inputs and empty paths', function*({ expect }) {
+    const emptyInput = deduplicatePaths([])
     const empty: AnyPath[] = [
-      { state: {} as any, weight: 0, steps: [] },
-      { state: {} as any, weight: 0, steps: [] },
+      { state: dummyState, weight: 0, steps: [] },
+      { state: dummyState, weight: 0, steps: [] },
     ]
     const result = deduplicatePaths(empty)
-    expect(result).toHaveLength(1)
-    expect(result[0]).toBe(empty[0])
+
+    yield* expect({
+      emptyInput,
+      resultCount: result.length,
+      keepsFirstReference: result[0] === empty[0],
+    }).toEqual({ emptyInput: [], resultCount: 1, keepsFirstReference: true })
   })
 
-  it('deduplicates thousands of paths quickly', () => {
+  it('deduplicates thousands of paths quickly', function*({ expect }) {
     const paths = randomPaths(createRandom(1), 5000, 20, 3)
     const start = performance.now()
     const result = deduplicatePaths(paths)
     const elapsed = performance.now() - start
 
-    expect(result.length).toBeGreaterThan(0)
-    expect(elapsed).toBeLessThan(1000)
+    yield* expect({
+      hasPaths: result.length > 0,
+      withinBudget: elapsed < 1000,
+    }).toEqual({ hasPaths: true, withinBudget: true })
   })
 })

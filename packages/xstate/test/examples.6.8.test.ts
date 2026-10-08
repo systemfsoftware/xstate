@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine } from '../src/index.js'
 import { testAll } from './utils.js'
 
@@ -68,13 +68,13 @@ describe('Example 6.8', () => {
 
   testAll(machine, expected)
 
-  it('should respect the history mechanism', () => {
+  it('should respect the history mechanism', function*({ expect }) {
     const actorRef = createActor(machine).start()
 
     actorRef.send({ type: '1' })
     actorRef.send({ type: '6' })
     actorRef.send({ type: '5' })
 
-    expect(actorRef.getSnapshot().value).toEqual({ A: 'C' })
+    yield* expect(actorRef.getSnapshot().value).toEqual({ A: 'C' })
   })
 })

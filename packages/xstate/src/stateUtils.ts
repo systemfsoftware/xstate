@@ -1705,6 +1705,7 @@ function microstep(
               nextState.context,
               event,
               actorScope.self,
+              actorScope.warn,
               stateInputMap[rootCompletionNode.id],
             )
         } else if (rootCompletionNode.type === 'parallel') {
@@ -1727,6 +1728,7 @@ function microstep(
           nextState.context,
           createDoneStateEvent(rootCompletionNode.id, completionOutput),
           actorScope.self,
+          actorScope.warn,
         )
       }
 
@@ -2083,6 +2085,7 @@ function microstep(
                   nextState.context,
                   event,
                   actorScope.self,
+                  actorScope.warn,
                   stateInput,
                 )
                 : undefined,
@@ -2105,6 +2108,7 @@ function microstep(
                   nextState.context,
                   event,
                   actorScope.self,
+                  actorScope.warn,
                   stateInputMap[region.id],
                 )
                 : undefined
@@ -2130,6 +2134,7 @@ function microstep(
                 nextState.context,
                 event,
                 actorScope.self,
+                actorScope.warn,
                 stateInputMap[finalChild.id],
               )
               : undefined

@@ -1,6 +1,7 @@
+import { describe } from '@systemfsoftware/vitest'
 import { createMachine, types } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import * as fc from 'fast-check'
-import { describe, expect, it } from 'vitest'
 import { fastCheckAdapter, ModelTestFailure, propertyTest } from '../src/index.js'
 import type { TestCoverage } from '../src/index.js'
 
@@ -47,129 +48,171 @@ function transitionRatio(coverage: TestCoverage): number {
   return covered.length / (covered.length + uncovered.length)
 }
 
-describe('stop conditions', () => {
-  it('stops as soon as every transition is covered', async () => {
-    const { coverage } = await propertyTest(ringMachine, {
-      seed: 7,
-      maxCommands: 6,
-      events: { NEXT: fc.constant({}) },
-      invariant: () => {},
-      until: { transitions: 1 },
-      batchRuns: 5,
-      maxRuns: 500,
-    })
+describe('stop conditions', (it) => {
+  it('stops as soon as every transition is covered', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(ringMachine, {
+        seed: 7,
+        maxCommands: 6,
+        events: { NEXT: fc.constant({}) },
+        invariant: () => {},
+        until: { transitions: 1 },
+        batchRuns: 5,
+        maxRuns: 500,
+      })
+    )
 
-    expect(transitionRatio(coverage)).toBe(1)
-    expect(coverage.exploration.stoppedBecause).toBe('until')
-    expect(coverage.exploration.configuredRuns).toBe(500)
-    expect(coverage.exploration.completedRuns).toBeLessThan(500)
+    yield* expect({
+      ratio: transitionRatio(coverage),
+      stoppedBecause: coverage.exploration.stoppedBecause,
+      configuredRuns: coverage.exploration.configuredRuns,
+      completedRunsBelowConfigured: coverage.exploration.completedRuns < 500,
+    }).toEqual({
+      ratio: 1,
+      stoppedBecause: 'until',
+      configuredRuns: 500,
+      completedRunsBelowConfigured: true,
+    })
   })
 
-  it('stops on a predicate', async () => {
-    const { coverage } = await propertyTest(ringMachine, {
-      seed: 7,
-      maxCommands: 2,
-      events: { NEXT: fc.constant({}) },
-      invariant: () => {},
-      until: (current) => current.stateNodes.covered.includes('exploration-ring.c'),
-      batchRuns: 3,
-      maxRuns: 60,
-    })
+  it('stops on a predicate', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(ringMachine, {
+        seed: 7,
+        maxCommands: 2,
+        events: { NEXT: fc.constant({}) },
+        invariant: () => {},
+        until: (current) => current.stateNodes.covered.includes('exploration-ring.c'),
+        batchRuns: 3,
+        maxRuns: 60,
+      })
+    )
 
-    expect(coverage.stateNodes.covered).toContain('exploration-ring.c')
-    expect(coverage.exploration.stoppedBecause).toBe('until')
+    yield* expect({
+      covered: coverage.stateNodes.covered,
+      stoppedBecause: coverage.exploration.stoppedBecause,
+    }).toEqual({
+      covered: expect.arrayContaining(['exploration-ring.c']),
+      stoppedBecause: 'until',
+    })
   })
 
-  it('keeps the single-campaign behavior when `until` is absent', async () => {
-    const { coverage } = await propertyTest(ringMachine, {
-      seed: 7,
-      numRuns: 12,
-      maxCommands: 3,
-      events: { NEXT: fc.constant({}) },
-      invariant: () => {},
-    })
+  it('keeps the single-campaign behavior when `until` is absent', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(ringMachine, {
+        seed: 7,
+        numRuns: 12,
+        maxCommands: 3,
+        events: { NEXT: fc.constant({}) },
+        invariant: () => {},
+      })
+    )
 
-    expect(coverage.exploration.configuredRuns).toBe(12)
-    expect(coverage.exploration.completedRuns).toBe(12)
-    expect(coverage.exploration.stoppedBecause).toBe('budget')
+    yield* expect({
+      configuredRuns: coverage.exploration.configuredRuns,
+      completedRuns: coverage.exploration.completedRuns,
+      stoppedBecause: coverage.exploration.stoppedBecause,
+    }).toEqual({
+      configuredRuns: 12,
+      completedRuns: 12,
+      stoppedBecause: 'budget',
+    })
   })
 })
 
-describe('coverage-guided frontiers', () => {
-  it('covers a deep branch that unguided runs miss', async () => {
-    const guided = await propertyTest(deepMachine, {
-      seed: 21,
-      maxCommands: 4,
-      events: { GO: fc.constant({}), DEEP: fc.constant({}) },
-      invariant: () => {},
-      frontiers: 'auto',
-      until: { transitions: 1 },
-      batchRuns: 10,
-      maxRuns: 40,
-    })
-    const unguided = await propertyTest(deepMachine, {
-      seed: 21,
-      maxCommands: 4,
-      events: { GO: fc.constant({}), DEEP: fc.constant({}) },
-      invariant: () => {},
-      until: { transitions: 1 },
-      batchRuns: 10,
-      maxRuns: 40,
-    })
+describe('coverage-guided frontiers', (it) => {
+  it('covers a deep branch that unguided runs miss', function*({ expect }) {
+    const guided = yield* Effect.promise(() =>
+      propertyTest(deepMachine, {
+        seed: 21,
+        maxCommands: 4,
+        events: { GO: fc.constant({}), DEEP: fc.constant({}) },
+        invariant: () => {},
+        frontiers: 'auto',
+        until: { transitions: 1 },
+        batchRuns: 10,
+        maxRuns: 40,
+      })
+    )
+    const unguided = yield* Effect.promise(() =>
+      propertyTest(deepMachine, {
+        seed: 21,
+        maxCommands: 4,
+        events: { GO: fc.constant({}), DEEP: fc.constant({}) },
+        invariant: () => {},
+        until: { transitions: 1 },
+        batchRuns: 10,
+        maxRuns: 40,
+      })
+    )
 
-    expect(unguided.coverage.stateNodes.covered).not.toContain(
-      'exploration-deep.s5',
-    )
-    expect(guided.coverage.stateNodes.covered).toContain('exploration-deep.s5')
-    expect(transitionRatio(guided.coverage)).toBeGreaterThan(
-      transitionRatio(unguided.coverage),
-    )
+    yield* expect({
+      unguidedReachesDeep: unguided.coverage.stateNodes.covered.includes('exploration-deep.s5'),
+      guidedReachesDeep: guided.coverage.stateNodes.covered.includes('exploration-deep.s5'),
+      guidedRatioAboveUnguided: transitionRatio(guided.coverage) > transitionRatio(unguided.coverage),
+    }).toEqual({
+      unguidedReachesDeep: false,
+      guidedReachesDeep: true,
+      guidedRatioAboveUnguided: true,
+    })
   })
 
-  it('shrinks only the generated continuation of a frontier', async () => {
-    const failure = await propertyTest(deepMachine, {
-      seed: 3,
-      maxCommands: 4,
-      events: { GO: fc.constant({}), DEEP: fc.constant({}) },
-      invariant: ({ snapshot }) => {
-        if (snapshot.matches('done')) {
-          throw new Error('reached done')
-        }
-      },
-      frontiers: 'auto',
-      until: { transitions: 1 },
-      batchRuns: 10,
-      maxRuns: 40,
-    }).then(
-      () => undefined,
-      (cause: unknown) => cause as ModelTestFailure,
+  it('shrinks only the generated continuation of a frontier', function*({ expect }) {
+    const failure = yield* Effect.promise(() =>
+      propertyTest(deepMachine, {
+        seed: 3,
+        maxCommands: 4,
+        events: { GO: fc.constant({}), DEEP: fc.constant({}) },
+        invariant: ({ snapshot }) => {
+          if (snapshot.matches('done')) {
+            throw new Error('reached done')
+          }
+        },
+        frontiers: 'auto',
+        until: { transitions: 1 },
+        batchRuns: 10,
+        maxRuns: 40,
+      }).then(
+        () => undefined,
+        (cause: unknown) => cause as ModelTestFailure,
+      )
     )
 
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    // The prefix that walks the chain is replayed verbatim; shrinking only
-    // removes generated commands, leaving the step that reaches `done`.
-    const prefix = failure!.trace.prefixEvents
-    expect(prefix.length).toBeGreaterThan(0)
-    expect(prefix.every((event) => event.type === 'GO')).toBe(true)
-    expect(failure!.trace.events.at(-1)).toEqual({ type: 'DEEP' })
-    expect(prefix.length + failure!.trace.events.length).toBe(6)
-    expect(failure!.message).toContain('1. prefix GO')
+    const trace = failure!.trace
+    const prefix = trace.prefixEvents
+    yield* expect({
+      isModelTestFailure: failure instanceof ModelTestFailure,
+      prefixIsNonEmpty: prefix.length > 0,
+      prefixIsAllGo: prefix.every((event) => event.type === 'GO'),
+      lastEvent: trace.events.at(-1),
+      totalSteps: prefix.length + trace.events.length,
+      message: failure!.message,
+    }).toEqual({
+      isModelTestFailure: true,
+      prefixIsNonEmpty: true,
+      prefixIsAllGo: true,
+      lastEvent: { type: 'DEEP' },
+      totalSteps: 6,
+      message: expect.stringContaining('1. prefix GO'),
+    })
   })
 })
 
-describe('labels', () => {
-  it('records labels and enforces `expectLabels`', async () => {
-    const { coverage } = await propertyTest(counterMachine, {
-      seed: 5,
-      numRuns: 20,
-      maxCommands: 4,
-      events: { INC: fc.constant({}) },
-      invariant: ({ snapshot, label, classify }) => {
-        label('count', snapshot.context.count)
-        classify(snapshot.context.count > 1, 'above one')
-      },
-      expectLabels: { count: { min: 1 } },
-    })
+describe('labels', (it) => {
+  it('records labels and enforces `expectLabels`', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 5,
+        numRuns: 20,
+        maxCommands: 4,
+        events: { INC: fc.constant({}) },
+        invariant: ({ snapshot, label, classify }) => {
+          label('count', snapshot.context.count)
+          classify(snapshot.context.count > 1, 'above one')
+        },
+        expectLabels: { count: { min: 1 } },
+      })
+    )
 
     const countLabel = coverage.labels['count']
     if (countLabel === undefined) {
@@ -179,28 +222,42 @@ describe('labels', () => {
     if (aboveOneLabel === undefined) {
       throw new Error('expected an above-one label')
     }
-    expect(countLabel.share).toBe(1)
-    expect(countLabel.values['0']).toBe(20)
-    expect(aboveOneLabel.count).toBeGreaterThan(0)
+    yield* expect({
+      share: countLabel.share,
+      zeroCount: countLabel.values['0'],
+      aboveOneCountAboveZero: aboveOneLabel.count > 0,
+    }).toEqual({
+      share: 1,
+      zeroCount: 20,
+      aboveOneCountAboveZero: true,
+    })
   })
 
-  it('reports label shortfalls with the coverage attached', async () => {
-    const error = await propertyTest(counterMachine, {
-      seed: 5,
-      numRuns: 5,
-      maxCommands: 2,
-      events: { INC: fc.constant({}) },
-      invariant: ({ snapshot, classify }) => {
-        classify(snapshot.context.count > 50, 'huge')
-      },
-      expectLabels: { huge: { min: 0.25 } },
-    }).then(
-      () => undefined,
-      (cause: unknown) => cause as Error & { coverage: TestCoverage },
+  it('reports label shortfalls with the coverage attached', function*({ expect }) {
+    const error = yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 5,
+        numRuns: 5,
+        maxCommands: 2,
+        events: { INC: fc.constant({}) },
+        invariant: ({ snapshot, classify }) => {
+          classify(snapshot.context.count > 50, 'huge')
+        },
+        expectLabels: { huge: { min: 0.25 } },
+      }).then(
+        () => undefined,
+        (cause: unknown) => cause as Error & { coverage: TestCoverage },
+      )
     )
 
-    expect(error!.name).toBe('PropertyLabelExpectationError')
-    expect(error!.message).toContain('huge: share 0.000 is below 0.25')
-    expect(error!.coverage.exploration.completedRuns).toBe(5)
+    yield* expect({
+      name: error!.name,
+      message: error!.message,
+      completedRuns: error!.coverage.exploration.completedRuns,
+    }).toEqual({
+      name: 'PropertyLabelExpectationError',
+      message: expect.stringContaining('huge: share 0.000 is below 0.25'),
+      completedRuns: 5,
+    })
   })
 })

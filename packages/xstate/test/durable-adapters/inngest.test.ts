@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { createDurable, type DurableExecutionAdapter } from '../../src/durable/index.js'
-import { createLogic, createMachine } from '../../src/index.js'
+import { type ActorSystemRuntime, createLogic, createMachine } from '../../src/index.js'
 import type { AnyActorLogic, EventFromLogic } from '../../src/types.js'
 
 interface InngestStepTools {
@@ -9,6 +10,39 @@ interface InngestStepTools {
     id: string,
     options: { event: string; timeout: string },
   ): Promise<unknown | null>
+}
+
+interface ThrownSummary {
+  readonly name: string
+  readonly message: string
+}
+
+const settledError = (
+  promise: PromiseLike<unknown>,
+): Effect.Effect<ThrownSummary | undefined> =>
+  Effect.promise(() =>
+    promise.then(
+      () => undefined,
+      (error: unknown) =>
+        error instanceof Error
+          ? { name: error.name, message: error.message }
+          : { name: typeof error, message: String(error) },
+    )
+  )
+
+const stepMessageEvent = <TEvent>(message: unknown): TEvent => {
+  if (
+    typeof message !== 'object' || message === null || !('data' in message)
+  ) {
+    throw new Error('The host step resolved a value without a data payload')
+  }
+  const { data } = message
+  if (typeof data !== 'object' || data === null || !('event' in data)) {
+    throw new Error(
+      'The host step resolved a value without a data.event payload',
+    )
+  }
+  return data.event as TEvent
 }
 
 function createInngestPoc<TLogic extends AnyActorLogic>(
@@ -21,8 +55,10 @@ function createInngestPoc<TLogic extends AnyActorLogic>(
   },
 ) {
   return createDurable(logic, {
-    async executeAction(action, metadata, runtime) {
-      await options.step.run(metadata.id, async () => action.exec(runtime))
+    executeAction(action, metadata, runtime) {
+      return options.step.run(metadata.id, () => action.exec(runtime)).then(
+        () => {},
+      )
     },
     runtime(metadata, effect) {
       const runtime = options.runtime?.(metadata, effect) ?? {}
@@ -33,30 +69,29 @@ function createInngestPoc<TLogic extends AnyActorLogic>(
         return runtime
       }
 
-      // This bounded-workflow PoC only supports root completion.
       return {
         ...runtime,
-        async terminateActor() {
-          await options.step.run(metadata.id, async () => {})
+        terminateActor() {
+          return options.step.run(metadata.id, () => undefined).then(() => {})
         },
       }
     },
-    async waitForEvent(metadata) {
-      const received = await options.step.waitForEvent(metadata.id, {
+    waitForEvent(metadata) {
+      return options.step.waitForEvent(metadata.id, {
         event: options.event,
         timeout: options.timeout,
+      }).then((received) => {
+        if (received === null) {
+          throw new Error(`Timed out waiting in step "${metadata.id}"`)
+        }
+        return stepMessageEvent<EventFromLogic<TLogic>>(received)
       })
-      if (received === null) {
-        throw new Error(`Timed out waiting in step "${metadata.id}"`)
-      }
-      return (received as { data: { event: EventFromLogic<TLogic> } }).data
-        .event
     },
   })
 }
 
 describe('Inngest durable execution PoC', () => {
-  it('runs actions as steps and resumes from an event wait', async () => {
+  it('runs actions as steps and resumes from an event wait', function*({ expect }) {
     const calls: string[] = []
     const machine = createMachine({
       output: 'complete',
@@ -76,27 +111,37 @@ describe('Inngest durable execution PoC', () => {
     const events = [
       { name: 'machine/event', data: { event: { type: 'FINISH' } } },
     ]
-    const step = {
-      run: vi.fn(async (_id: string, run: () => unknown) => run()),
-      waitForEvent: vi.fn(async () => events.shift() ?? null),
+    const waitForEventCalls: unknown[][] = []
+    const step: InngestStepTools = {
+      run: (_id, run) => Promise.resolve(run()),
+      waitForEvent: (id, options) => {
+        waitForEventCalls.push([id, options])
+        return Promise.resolve(events.shift() ?? null)
+      },
     }
 
-    await expect(
+    const output = yield* Effect.promise(() =>
       createInngestPoc(machine, {
         step,
         event: 'machine/event',
         timeout: '1 day',
-      }).run(undefined),
-    ).resolves.toBe('complete')
+      }).run(undefined)
+    )
 
-    expect(calls).toEqual(['finished'])
-    expect(step.waitForEvent).toHaveBeenCalledWith('event:0', {
-      event: 'machine/event',
-      timeout: '1 day',
+    yield* expect({
+      output,
+      calls,
+      waitForEventCalls,
+    }).toEqual({
+      output: 'complete',
+      calls: ['finished'],
+      waitForEventCalls: [
+        ['event:0', { event: 'machine/event', timeout: '1 day' }],
+      ],
     })
   })
 
-  it('exposes built-in effects to host runtime mappings', async () => {
+  it('exposes built-in effects to host runtime mappings', function*({ expect }) {
     const effects: unknown[] = []
     const machine = createMachine({
       initial: 'waiting',
@@ -107,28 +152,33 @@ describe('Inngest durable execution PoC', () => {
     })
     const durable = createInngestPoc(machine, {
       step: {
-        run: vi.fn(async (_id: string, run: () => unknown) => run()),
-        waitForEvent: vi.fn(),
+        run: (_id: string, run: () => unknown) => Promise.resolve(run()),
+        waitForEvent: () => Promise.resolve(null),
       },
       event: 'machine/event',
       timeout: '1 day',
       runtime: (_metadata, effect) => {
         effects.push(effect)
-        return { scheduleTimer: vi.fn() }
+        return { scheduleTimer: () => {} }
       },
     })
     const [, initialEffects] = durable.initialTransition(undefined)
 
-    await durable.executeEffects(initialEffects)
+    yield* Effect.promise(() => durable.executeEffects(initialEffects))
 
-    expect(effects).toEqual([
+    yield* expect(effects).toEqual([
       expect.objectContaining({ type: '@xstate.raise', delay: 10 }),
     ])
   })
 
-  it('forwards the host runtime to custom effects', async () => {
-    const runtime = { sendEvent: vi.fn() }
-    let providedRuntime: unknown
+  it('forwards the host runtime to custom effects', function*({ expect }) {
+    const sendEventCalls: unknown[][] = []
+    const runtime = {
+      sendEvent: (...args: unknown[]) => {
+        sendEventCalls.push(args)
+      },
+    }
+    let providedRuntime: Partial<ActorSystemRuntime> | undefined
     const logic = createLogic({
       context: undefined,
       run: ({ event }, enq) => {
@@ -141,8 +191,8 @@ describe('Inngest durable execution PoC', () => {
     })
     const durable = createInngestPoc(logic, {
       step: {
-        run: vi.fn(async (_id: string, run: () => unknown) => run()),
-        waitForEvent: vi.fn(),
+        run: (_id: string, run: () => unknown) => Promise.resolve(run()),
+        waitForEvent: () => Promise.resolve(null),
       },
       event: 'machine/event',
       timeout: '1 day',
@@ -150,29 +200,34 @@ describe('Inngest durable execution PoC', () => {
     })
     const [, effects] = durable.initialTransition(undefined)
 
-    await durable.executeEffects(effects)
+    yield* Effect.promise(() => durable.executeEffects(effects))
 
     const target = { address: 'elsewhere' } as never
     const event = { type: 'X' }
-    await (
-      providedRuntime as { sendEvent(...args: unknown[]): PromiseLike<void> }
-    ).sendEvent(undefined, target, event)
-    expect(runtime.sendEvent).toHaveBeenCalledWith(undefined, target, event)
+    const effectRuntime = providedRuntime
+    if (effectRuntime === undefined) {
+      throw new Error('The custom effect received no runtime')
+    }
+    yield* Effect.promise(() => Promise.resolve(effectRuntime.sendEvent!(undefined, target, event)))
+    yield* expect(sendEventCalls).toEqual([
+      [undefined, target, event],
+    ])
   })
 
-  it('reports an expired wait explicitly', async () => {
+  it('reports an expired wait explicitly', function*({ expect }) {
     const durable = createInngestPoc(createMachine({}), {
       step: {
-        run: vi.fn(),
-        waitForEvent: vi.fn().mockResolvedValue(null),
+        run: () => Promise.resolve(undefined),
+        waitForEvent: () => Promise.resolve(null),
       },
       event: 'machine/event',
       timeout: '1 second',
     })
 
     durable.initialTransition(undefined)
-    await expect(durable.waitForEvent()).rejects.toThrow(
-      'Timed out waiting in step "event:0"',
-    )
+    yield* expect(yield* settledError(durable.waitForEvent())).toEqual({
+      name: 'Error',
+      message: 'Timed out waiting in step "event:0"',
+    })
   })
 })

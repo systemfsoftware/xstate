@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createMachine, type StateValue } from '../src/index.js'
 import { testMultiTransition } from './utils.js'
 
@@ -70,10 +70,10 @@ describe('Example 6.17', () => {
             toState,
           )
         } on ${eventTypes}`,
-        () => {
+        function*({ expect }) {
           const resultState = testMultiTransition(machine, fromState, eventTypes)
 
-          expect(resultState.value).toEqual(toState)
+          yield* expect(resultState.value).toEqual(toState)
         },
       )
     })
@@ -144,10 +144,10 @@ describe('Jump to ID', () => {
             toState,
           )
         } on ${eventTypes}`,
-        () => {
+        function*({ expect }) {
           const resultState = testMultiTransition(machine, fromState, eventTypes)
 
-          expect(resultState.value).toEqual(toState)
+          yield* expect(resultState.value).toEqual(toState)
         },
       )
     })

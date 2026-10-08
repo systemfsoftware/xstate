@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { createDurable } from '../src/durable/index.js'
 import {
   type AnyActor,
@@ -6,6 +7,7 @@ import {
   createAsyncLogic,
   createCallbackLogic,
   createMachine,
+  createSystem,
   deliverEvent,
   getEffectDescriptor,
   initialTransition,
@@ -14,6 +16,57 @@ import {
   transition,
   waitFor,
 } from '../src/index.js'
+
+function thrownMessage(run: () => unknown): string {
+  try {
+    run()
+    return 'did not throw'
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
+const createManualTime = (initial: number) => {
+  let now = initial
+  const pending: Array<{
+    readonly id: number
+    readonly at: number
+    readonly fn: () => void
+  }> = []
+  let nextId = 0
+  const clock = {
+    setTimeout(fn: () => void, delay: number) {
+      const id = nextId
+      nextId += 1
+      pending.push({ id, at: now + delay, fn })
+      return id
+    },
+    clearTimeout(id: number) {
+      const index = pending.findIndex((timer) => timer.id === id)
+      if (index !== -1) {
+        pending.splice(index, 1)
+      }
+    },
+  }
+  return {
+    clock,
+    wallClock: { now: () => now },
+    advance(delay: number) {
+      now += delay
+      for (;;) {
+        const index = pending.findIndex((timer) => timer.at <= now)
+        if (index === -1) {
+          return
+        }
+        const [timer] = pending.splice(index, 1)
+        if (timer === undefined) {
+          continue
+        }
+        timer.fn()
+      }
+    },
+  }
+}
 
 const workerMachine = createMachine({
   id: 'worker',
@@ -27,18 +80,20 @@ const workerMachine = createMachine({
 })
 
 describe('deterministic actor ids', () => {
-  it('root actors are named after their logic', () => {
+  it('root actors are named after their logic', function*({ expect }) {
     const machine = createMachine({
       id: 'order',
       initial: 'a',
       states: { a: {} },
     })
     const actor = createActor(machine).start()
-    expect(actor.id).toBe('order')
-    expect(actor.address).toBe('order')
+    yield* expect({ id: actor.id, address: actor.address }).toEqual({
+      id: 'order',
+      address: 'order',
+    })
   })
 
-  it('generated child ids are src-keyed counters', () => {
+  it('generated child ids are src-keyed counters', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -53,14 +108,14 @@ describe('deterministic actor ids', () => {
     })
 
     const actor = createActor(machine).start()
-    expect(Object.keys(actor.getSnapshot().children).sort()).toEqual([
+    yield* expect(Object.keys(actor.getSnapshot().children).sort()).toEqual([
       'named',
       'worker:0',
       'worker:1',
     ])
   })
 
-  it('generated ids are identical across pure replays', () => {
+  it('generated ids are identical across pure replays', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -75,11 +130,16 @@ describe('deterministic actor ids', () => {
 
     const [first] = initialTransition(machine)
     const [second] = initialTransition(machine)
-    expect(Object.keys(first.children)).toEqual(['worker:0', 'worker:1'])
-    expect(Object.keys(second.children)).toEqual(['worker:0', 'worker:1'])
+    yield* expect({
+      first: Object.keys(first.children),
+      second: Object.keys(second.children),
+    }).toEqual({
+      first: ['worker:0', 'worker:1'],
+      second: ['worker:0', 'worker:1'],
+    })
   })
 
-  it('restore reserves generated ids so later spawns do not collide', () => {
+  it('restore reserves generated ids so later spawns do not collide', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -106,7 +166,7 @@ describe('deterministic actor ids', () => {
 
     const restored = createActor(machine, { snapshot: persisted }).start()
     restored.send({ type: 'MORE' })
-    expect(Object.keys(restored.getSnapshot().children).sort()).toEqual([
+    yield* expect(Object.keys(restored.getSnapshot().children).sort()).toEqual([
       'worker:0',
       'worker:1',
       'worker:2',
@@ -115,7 +175,7 @@ describe('deterministic actor ids', () => {
 })
 
 describe('actor addresses', () => {
-  it('uses the first registered source for transition-spawned aliases', () => {
+  it('uses the first registered source for transition-spawned aliases', function*({ expect }) {
     const machine = setup({
       actors: { first: workerMachine, second: workerMachine },
     }).createMachine({
@@ -127,11 +187,13 @@ describe('actor addresses', () => {
 
     const [snapshot] = initialTransition(machine)
     const persisted = machine.getPersistedSnapshot(snapshot) as any
-    expect(persisted.children.one.src).toBe('first')
-    expect(persisted.children.two.src).toBe('first')
+    yield* expect({
+      one: persisted.children.one.src,
+      two: persisted.children.two.src,
+    }).toEqual({ one: 'first', two: 'first' })
   })
 
-  it('uses the first registered source for context-spawned aliases', () => {
+  it('uses the first registered source for context-spawned aliases', function*({ expect }) {
     const machine = setup({
       actors: { first: workerMachine, second: workerMachine },
     }).createMachine({
@@ -144,11 +206,13 @@ describe('actor addresses', () => {
 
     const [snapshot] = initialTransition(machine)
     const persisted = machine.getPersistedSnapshot(snapshot) as any
-    expect(persisted.children.one.src).toBe('first')
-    expect(persisted.children.two.src).toBe('first')
+    yield* expect({
+      one: persisted.children.one.src,
+      two: persisted.children.two.src,
+    }).toEqual({ one: 'first', two: 'first' })
   })
 
-  it('addresses are the /-joined id path from the root', () => {
+  it('addresses are the /-joined id path from the root', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -162,10 +226,10 @@ describe('actor addresses', () => {
 
     const actor = createActor(machine).start()
     const child = actor.getSnapshot().children['worker:0'] as AnyActor
-    expect(child.address).toBe('order/worker:0')
+    yield* expect(child.address).toBe('order/worker:0')
   })
 
-  it('addresses are stable across restore while sessionIds are not', () => {
+  it('addresses are stable across restore while sessionIds are not', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -186,13 +250,15 @@ describe('actor addresses', () => {
     const restoredChild = restored.getSnapshot().children[
       'worker:0'
     ] as AnyActor
-    expect(restoredChild.address).toBe(child.address)
-    expect(restoredChild.sessionId).not.toBe(child.sessionId)
+    yield* expect({
+      sameAddress: restoredChild.address === child.address,
+      sameSessionId: restoredChild.sessionId === child.sessionId,
+    }).toEqual({ sameAddress: true, sameSessionId: false })
   })
 })
 
 describe('effect descriptors', () => {
-  it('spawn and sendTo effects serialize to addresses and src keys', () => {
+  it('spawn and sendTo effects serialize to addresses and src keys', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -216,35 +282,61 @@ describe('effect descriptors', () => {
     const spawnDescriptor = initialEffects
       .map(getEffectDescriptor)
       .find((d) => d.type === '@xstate.spawn')
-    expect(spawnDescriptor).toEqual({
-      kind: 'builtin',
-      type: '@xstate.spawn',
-      source: 'order',
-      actor: 'order/worker:0',
-      id: 'worker:0',
-      src: 'worker',
-      input: undefined,
-    })
 
     const [, effects] = transition(machine, snapshot, { type: 'KICK' })
     const sendDescriptor = effects
       .map(getEffectDescriptor)
       .find((d) => d.type === '@xstate.sendTo')
-    expect(sendDescriptor).toEqual({
-      kind: 'builtin',
-      type: '@xstate.sendTo',
-      source: 'order',
-      target: 'order/worker:0',
-      event: { type: 'PING' },
-      id: undefined,
-      delay: undefined,
-    })
 
-    // Descriptors are JSON-safe: no live refs, no functions.
-    for (const effect of [...initialEffects, ...effects]) {
-      const descriptor = getEffectDescriptor(effect)
-      expect(JSON.parse(JSON.stringify(descriptor))).toEqual(descriptor)
-    }
+    const roundTrips = [...initialEffects, ...effects].map((effect) =>
+      JSON.parse(JSON.stringify(getEffectDescriptor(effect)))
+    )
+
+    yield* expect({ spawnDescriptor, sendDescriptor, roundTrips }).toEqual({
+      spawnDescriptor: {
+        kind: 'builtin',
+        type: '@xstate.spawn',
+        source: 'order',
+        actor: 'order/worker:0',
+        id: 'worker:0',
+        src: 'worker',
+        input: undefined,
+      },
+      sendDescriptor: {
+        kind: 'builtin',
+        type: '@xstate.sendTo',
+        source: 'order',
+        target: 'order/worker:0',
+        incarnation: undefined,
+        event: { type: 'PING' },
+        id: undefined,
+        delay: undefined,
+      },
+      roundTrips: [
+        {
+          kind: 'builtin',
+          type: '@xstate.spawn',
+          source: 'order',
+          actor: 'order/worker:0',
+          id: 'worker:0',
+          src: 'worker',
+        },
+        {
+          kind: 'builtin',
+          type: '@xstate.start',
+          source: 'order',
+          actor: 'order/worker:0',
+          id: 'worker:0',
+        },
+        {
+          kind: 'builtin',
+          type: '@xstate.sendTo',
+          source: 'order',
+          target: 'order/worker:0',
+          event: { type: 'PING' },
+        },
+      ],
+    })
   })
 })
 
@@ -266,7 +358,7 @@ describe('sessionId as incarnation id', () => {
     },
   })
 
-  it('drops completions from a previous incarnation after restore', () => {
+  it('drops completions from a previous incarnation after restore', function*({ expect }) {
     const actor = createActor(invokeMachine).start()
     const staleSessionId = (actor.getSnapshot().children['w'] as AnyActor)
       .sessionId
@@ -281,10 +373,10 @@ describe('sessionId as incarnation id', () => {
       output: undefined,
       sessionId: staleSessionId,
     } as never)
-    expect(restored.getSnapshot().value).toBe('working')
+    yield* expect(restored.getSnapshot().value).toBe('working')
   })
 
-  it('accepts completions from the current incarnation', () => {
+  it('accepts completions from the current incarnation', function*({ expect }) {
     const actor = createActor(invokeMachine).start()
     const persisted = actor.getPersistedSnapshot()
     actor.stop()
@@ -299,8 +391,10 @@ describe('sessionId as incarnation id', () => {
       output: undefined,
       sessionId: currentSessionId,
     } as never)
-    expect(restored.getSnapshot().value).toBe('finished')
-    expect(restored.getSnapshot().status).toBe('done')
+    yield* expect({
+      value: restored.getSnapshot().value,
+      status: restored.getSnapshot().status,
+    }).toEqual({ value: 'finished', status: 'done' })
   })
 })
 
@@ -324,18 +418,18 @@ describe('children-by-address persistence', () => {
     },
   })
 
-  it('persisted children carry their logical address', () => {
+  it('persisted children carry their logical address', function*({ expect }) {
     const actor = createActor(coordinatorMachine).start()
     const persisted = actor.getPersistedSnapshot() as unknown as {
       children: Record<string, { address: string; src: string }>
     }
-    expect(persisted.children['worker:0']).toMatchObject({
+    yield* expect(persisted.children['worker:0']).toMatchObject({
       address: 'coordinator/worker:0',
       src: 'worker',
     })
   })
 
-  it('an actor owns its id counters in its own persisted snapshot', () => {
+  it('an actor owns its id counters in its own persisted snapshot', function*({ expect }) {
     const orderMachine = setup({
       actors: { coordinator: coordinatorMachine },
     }).createMachine({
@@ -352,24 +446,23 @@ describe('children-by-address persistence', () => {
       'coordinator:0'
     ] as AnyActor
     coordinator.send({ type: 'MORE' })
-    // Persist ONLY the subtree; its counters must travel with it.
     const persistedSubtree = coordinator.getPersistedSnapshot() as {
       _nextActorIds?: Record<string, number>
     }
-    expect(persistedSubtree._nextActorIds).toEqual({ worker: 2 })
+    const persistedCounters = persistedSubtree._nextActorIds
     root.stop()
 
-    // Restore the subtree standalone (a different placement) and keep
-    // spawning: numbering continues with no shared system state.
     const restored = createActor(coordinatorMachine, {
       snapshot: persistedSubtree as never,
     }).start()
     restored.send({ type: 'MORE' })
-    expect(Object.keys(restored.getSnapshot().children).sort()).toEqual([
-      'worker:0',
-      'worker:1',
-      'worker:2',
-    ])
+    yield* expect({
+      persistedCounters,
+      restoredChildren: Object.keys(restored.getSnapshot().children).sort(),
+    }).toEqual({
+      persistedCounters: { worker: 2 },
+      restoredChildren: ['worker:0', 'worker:1', 'worker:2'],
+    })
   })
 })
 
@@ -392,12 +485,12 @@ describe('detached children (remote handles)', () => {
     },
   })
 
-  it('persists children by address only when not embedding', () => {
+  it('persists children by address only when not embedding', function*({ expect }) {
     const actor = createActor(invokeMachine).start()
     const persisted = actor.getPersistedSnapshot({
       embedChildren: false,
     }) as unknown as { children: Record<string, unknown> }
-    expect(persisted.children['w']).toEqual({
+    yield* expect(persisted.children['w']).toEqual({
       address: 'order/w',
       remote: true,
       src: 'worker',
@@ -407,7 +500,7 @@ describe('detached children (remote handles)', () => {
     actor.stop()
   })
 
-  it('restores address-only children as location-transparent handles', () => {
+  it('restores address-only children as location-transparent handles', function*({ expect }) {
     const actor = createActor(invokeMachine).start()
     const persisted = actor.getPersistedSnapshot({
       embedChildren: false,
@@ -418,11 +511,7 @@ describe('detached children (remote handles)', () => {
       snapshot: persisted,
     }).start()
     const handle = restored.getSnapshot().children['w'] as AnyActor
-    expect(handle.address).toBe('order/w')
-    expect(handle.sessionId).toBeUndefined()
-    expect(handle.getSnapshot().status).toBe('active')
 
-    // Remote state round-trips by address, never re-embedding.
     const again = restored.getPersistedSnapshot() as unknown as {
       children: Record<string, { address: string; snapshot?: unknown }>
     }
@@ -430,11 +519,22 @@ describe('detached children (remote handles)', () => {
     if (persistedChild === undefined) {
       throw new Error('expected a persisted child')
     }
-    expect(persistedChild.address).toBe('order/w')
-    expect(persistedChild.snapshot).toBeUndefined()
+    yield* expect({
+      address: handle.address,
+      sessionId: handle.sessionId,
+      status: handle.getSnapshot().status,
+      childAddress: persistedChild.address,
+      childSnapshot: persistedChild.snapshot,
+    }).toEqual({
+      address: 'order/w',
+      sessionId: undefined,
+      status: 'active',
+      childAddress: 'order/w',
+      childSnapshot: undefined,
+    })
   })
 
-  it('co-located-only members throw a descriptive error on a remote handle', () => {
+  it('co-located-only members throw a descriptive error on a remote handle', function*({ expect }) {
     const actor = createActor(invokeMachine).start()
     const persisted = actor.getPersistedSnapshot({ embedChildren: false })
     actor.stop()
@@ -444,13 +544,19 @@ describe('detached children (remote handles)', () => {
     }).start()
     const handle = restored.getSnapshot().children['w'] as AnyActor
 
-    expect(() => handle.stop()).toThrow(/co-located/)
-    expect(() => handle.select((s) => s)).toThrow(/remote actor/i)
-    expect(() => handle.trigger).toThrow(/co-located/)
+    yield* expect({
+      stop: thrownMessage(() => handle.stop()),
+      select: thrownMessage(() => handle.select((s) => s)),
+      trigger: thrownMessage(() => handle.trigger),
+    }).toEqual({
+      stop: expect.stringMatching(/co-located/),
+      select: expect.stringMatching(/remote actor/i),
+      trigger: expect.stringMatching(/co-located/),
+    })
     restored.stop()
   })
 
-  it('accepts completions for remote children from any incarnation', () => {
+  it('accepts completions for remote children from any incarnation', function*({ expect }) {
     const actor = createActor(invokeMachine).start()
     const persisted = actor.getPersistedSnapshot({
       embedChildren: false,
@@ -466,12 +572,12 @@ describe('detached children (remote handles)', () => {
       output: undefined,
       sessionId: 'some-other-runtime:7',
     } as never)
-    expect(restored.getSnapshot().value).toBe('finished')
+    yield* expect(restored.getSnapshot().value).toBe('finished')
   })
 })
 
 describe('review findings: allocation across a macrostep', () => {
-  it('spawns of one source across microsteps get distinct ids', () => {
+  it('spawns of one source across microsteps get distinct ids', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -493,13 +599,13 @@ describe('review findings: allocation across a macrostep', () => {
     })
 
     const actor = createActor(machine).start()
-    expect(Object.keys(actor.getSnapshot().children).sort()).toEqual([
+    yield* expect(Object.keys(actor.getSnapshot().children).sort()).toEqual([
       'worker:0',
       'worker:1',
     ])
   })
 
-  it('context spawns and entry spawns of one source do not collide', () => {
+  it('context spawns and entry spawns of one source do not collide', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -516,14 +622,13 @@ describe('review findings: allocation across a macrostep', () => {
 
     const actor = createActor(machine).start()
     const ids = Object.keys(actor.getSnapshot().children)
-    expect(ids).toHaveLength(2)
-    expect(new Set(ids).size).toBe(2)
+    yield* expect({ idCount: ids.length, distinctIds: new Set(ids).size })
+      .toEqual({ idCount: 2, distinctIds: 2 })
   })
 })
 
 describe('review findings: identity edge cases', () => {
-  it('parentless actors of one machine in a shared system get distinct addresses', async () => {
-    const { createSystem } = await import('../src/index.js')
+  it('parentless actors of one machine in a shared system get distinct addresses', function*({ expect }) {
     const system = createSystem()
     const machine = createMachine({
       id: 'order',
@@ -532,11 +637,13 @@ describe('review findings: identity edge cases', () => {
     })
     const first = system.createActor(machine)
     const second = system.createActor(machine)
-    expect(first.address).toBe('order')
-    expect(second.address).not.toBe(first.address)
+    yield* expect({
+      firstAddress: first.address,
+      sameAddress: second.address === first.address,
+    }).toEqual({ firstAddress: 'order', sameAddress: false })
   })
 
-  it('re-persisting a restored snapshot with a context-held remote child does not recurse', () => {
+  it('re-persisting a restored snapshot with a context-held remote child does not recurse', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -556,12 +663,12 @@ describe('review findings: identity edge cases', () => {
     const again = restored.getPersistedSnapshot() as unknown as {
       children: Record<string, { address: string; snapshot?: unknown }>
     }
-    expect(Object.values(again.children)[0]?.address).toMatch(/^order\//)
+    yield* expect(Object.values(again.children)[0]?.address).toMatch(/^order\//)
   })
 })
 
 describe('review findings: second round', () => {
-  it('records sent[] inspection for sends delivered by a host runtime', () => {
+  it('records sent[] inspection for sends delivered by a host runtime', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -598,10 +705,10 @@ describe('review findings: second round', () => {
     }
     actor.start()
     actor.send({ type: 'KICK' })
-    expect(sent).toContain('w:PING')
+    yield* expect(sent).toContain('w:PING')
   })
 
-  it('explicit generated-shaped ids reserve numbering for live runs and replays', () => {
+  it('explicit generated-shaped ids reserve numbering for live runs and replays', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -621,28 +728,23 @@ describe('review findings: second round', () => {
       },
     })
 
-    // Live run.
     const live = createActor(machine).start()
     live.send({ type: 'MORE' })
-    expect(Object.keys(live.getSnapshot().children).sort()).toEqual([
-      'worker:5',
-      'worker:6',
-    ])
-    const persisted = live.getPersistedSnapshot()
+    const liveIds = Object.keys(live.getSnapshot().children).sort()
     live.stop()
 
-    // Pure replay from the checkpoint taken before MORE must allocate the
-    // same id even in a fresh process (fresh system counters).
     const [initial] = initialTransition(machine)
     const [afterMore] = transition(machine, initial, { type: 'MORE' })
-    expect(Object.keys(afterMore.children).sort()).toEqual([
-      'worker:5',
-      'worker:6',
-    ])
-    void persisted
+    yield* expect({
+      liveIds,
+      replayIds: Object.keys(afterMore.children).sort(),
+    }).toEqual({
+      liveIds: ['worker:5', 'worker:6'],
+      replayIds: ['worker:5', 'worker:6'],
+    })
   })
 
-  it('address-only restore keeps registryKey lookups and syncSnapshot', () => {
+  it('address-only restore keeps registryKey lookups and syncSnapshot', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -664,8 +766,6 @@ describe('review findings: second round', () => {
 
     const restored = createActor(machine, { snapshot: persisted }).start()
     const handle = restored.system.get('theWorker' as never) as AnyActor
-    expect(handle).toBeDefined()
-    expect(handle.address).toBe('order/w')
 
     const again = restored.getPersistedSnapshot({
       embedChildren: false,
@@ -676,12 +776,20 @@ describe('review findings: second round', () => {
     if (persistedChild === undefined) {
       throw new Error('expected a persisted child')
     }
-    expect(persistedChild.syncSnapshot).toBe(true)
+    yield* expect({
+      handleDefined: handle !== undefined,
+      handleAddress: handle.address,
+      syncSnapshot: persistedChild.syncSnapshot,
+    }).toEqual({
+      handleDefined: true,
+      handleAddress: 'order/w',
+      syncSnapshot: true,
+    })
   })
 })
 
 describe('review findings: third round', () => {
-  it('context-spawn allocations persist so freed ids are not reused after restore', () => {
+  it('context-spawn allocations persist so freed ids are not reused after restore', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -705,21 +813,22 @@ describe('review findings: third round', () => {
     })
 
     const actor = createActor(machine).start()
-    expect(Object.keys(actor.getSnapshot().children)).toEqual(['worker:0'])
+    const beforeIds = Object.keys(actor.getSnapshot().children)
     actor.send({ type: 'STOP' })
     const persisted = actor.getPersistedSnapshot()
     actor.stop()
 
-    // Fresh process: system counters are empty; the snapshot's own counters
-    // must prevent the freed id from being handed out again.
     const restored = createActor(machine, { snapshot: persisted }).start()
     restored.send({ type: 'MORE' })
-    expect(Object.keys(restored.getSnapshot().children)).toEqual(['worker:1'])
+    yield* expect({
+      beforeIds,
+      afterIds: Object.keys(restored.getSnapshot().children),
+    }).toEqual({ beforeIds: ['worker:0'], afterIds: ['worker:1'] })
   })
 })
 
 describe('review findings: fourth round', () => {
-  it('encodes the path delimiter in address segments', () => {
+  it('encodes the path delimiter in address segments', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -728,17 +837,22 @@ describe('review findings: fourth round', () => {
       states: { 'a/b': { invoke: { src: 'worker' } } },
     })
 
-    // A slash in a state name reaches the generated invoke id; the machine
-    // still starts, and the address stays an unambiguous path.
     const actor = createActor(machine).start()
-    expect(actor.getSnapshot().status).toBe('active')
     const child = Object.values(actor.getSnapshot().children)[0] as AnyActor
-    expect(child.id).toContain('/')
-    expect(child.address).toBe(`order/${child.id.replaceAll('/', '%2F')}`)
-    expect(child.address.split('/')).toHaveLength(2)
+    yield* expect({
+      status: actor.getSnapshot().status,
+      childIdHasSlash: child.id.includes('/'),
+      address: child.address,
+      addressSegments: child.address.split('/').length,
+    }).toEqual({
+      status: 'active',
+      childIdHasSlash: true,
+      address: `order/${child.id.replaceAll('/', '%2F')}`,
+      addressSegments: 2,
+    })
   })
 
-  it('restoring a remote child without a registered source key fails loudly', () => {
+  it('restoring a remote child without a registered source key fails loudly', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -755,21 +869,20 @@ describe('review findings: fourth round', () => {
       embedChildren: false,
     }) as unknown as { children: Record<string, { src?: unknown }> }
     actor.stop()
-    // Simulate a production-persisted inline child: non-string src.
     const persistedChild = persisted.children['w']
     if (persistedChild === undefined) {
       throw new Error('expected a persisted child')
     }
     persistedChild.src = {}
 
-    expect(() => machine.restoreSnapshot(persisted as never)).toThrow(
+    yield* expect(() => machine.restoreSnapshot(persisted as never)).toThrow(
       /requires a registered source key/,
     )
   })
 })
 
 describe('review findings: sixth round', () => {
-  it('an explicit low id does not lower later generated allocations', () => {
+  it('an explicit low id does not lower later generated allocations', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -789,10 +902,7 @@ describe('review findings: sixth round', () => {
               enq.stop(children['worker:2'])
             },
             REUSE: ({ actors }, enq) => {
-              // An explicit id the machine asks for by name, below the
-              // parent's persisted counter...
               enq.spawn(actors.worker, { id: 'worker:0' })
-              // ...must not drag generated numbering back onto freed ids.
               enq.spawn(actors.worker)
             },
           },
@@ -803,7 +913,7 @@ describe('review findings: sixth round', () => {
     const actor = createActor(machine).start()
     actor.send({ type: 'CLEAR' })
     actor.send({ type: 'REUSE' })
-    expect(Object.keys(actor.getSnapshot().children).sort()).toEqual([
+    yield* expect(Object.keys(actor.getSnapshot().children).sort()).toEqual([
       'worker:0',
       'worker:3',
     ])
@@ -811,7 +921,7 @@ describe('review findings: sixth round', () => {
 })
 
 describe('review findings: seventh round', () => {
-  it('gives internal helper actors their own id namespace', () => {
+  it('gives internal helper actors their own id namespace', function*({ expect }) {
     const emitter = createCallbackLogic(() => {})
     const anonymous = createMachine({ initial: 'i', states: { i: {} } })
     let listener: AnyActor | undefined
@@ -830,19 +940,22 @@ describe('review findings: seventh round', () => {
     const childAddresses = Object.values(actor.getSnapshot().children).map(
       (child) => (child as AnyActor).address,
     )
-    expect(childAddresses).not.toContain(listener!.address)
-    expect(listener!.address).toBe('order/xstate.listener:0')
+    yield* expect({
+      containsListener: childAddresses.includes(listener!.address),
+      listenerAddress: listener!.address,
+    }).toEqual({
+      containsListener: false,
+      listenerAddress: 'order/xstate.listener:0',
+    })
   })
 })
 
 describe('review findings: eighth round', () => {
-  it('address encoding stays injective for ids containing % and /', () => {
+  it('address encoding stays injective for ids containing % and /', function*({ expect }) {
     const machine = createMachine({
       id: 'order',
       initial: 'a',
       entry: (_: any, enq: any) => {
-        // Without escaping '%', these two ids would collide on the same
-        // address 'order/a%2Fb'.
         enq.spawn(workerMachine, { id: 'a/b' })
         enq.spawn(workerMachine, { id: 'a%2Fb' })
       },
@@ -851,11 +964,13 @@ describe('review findings: eighth round', () => {
 
     const actor = createActor(machine).start()
     const children = actor.getSnapshot().children
-    expect(children['a/b']!.address).toBe('order/a%2Fb')
-    expect(children['a%2Fb']!.address).toBe('order/a%252Fb')
+    yield* expect({
+      slashId: children['a/b']!.address,
+      percentId: children['a%2Fb']!.address,
+    }).toEqual({ slashId: 'order/a%2Fb', percentId: 'order/a%252Fb' })
   })
 
-  it('persisting an inline child by address fails loudly', () => {
+  it('persisting an inline child by address fails loudly', function*({ expect }) {
     const machine = createMachine({
       id: 'order',
       initial: 'a',
@@ -866,9 +981,7 @@ describe('review findings: eighth round', () => {
     })
 
     const actor = createActor(machine).start()
-    // By-address persistence needs a registered source key to restore from;
-    // an inline child has none, so persisting must fail, not restore.
-    expect(() =>
+    yield* expect(() =>
       actor.getPersistedSnapshot({
         embedChildren: false,
         __unsafeAllowInlineActors: true,
@@ -876,7 +989,7 @@ describe('review findings: eighth round', () => {
     ).toThrow(/requires a registered source key/)
   })
 
-  it('drops the legacy _nextActorId field on restore', () => {
+  it('drops the legacy _nextActorId field on restore', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -891,21 +1004,19 @@ describe('review findings: eighth round', () => {
     const actor = createActor(machine).start()
     const persisted = actor.getPersistedSnapshot() as any
     actor.stop()
-    // Simulate a snapshot persisted before per-snapshot counters existed.
     persisted._nextActorId = 42
 
     const restored = createActor(machine, { snapshot: persisted }).start()
     const repersisted = restored.getPersistedSnapshot() as any
-    expect('_nextActorId' in repersisted).toBe(false)
-    expect(repersisted._nextActorIds).toEqual({ worker: 1 })
+    yield* expect({
+      hasLegacyId: '_nextActorId' in repersisted,
+      nextActorIds: repersisted._nextActorIds,
+    }).toEqual({ hasLegacyId: false, nextActorIds: { worker: 1 } })
   })
 })
 
 describe('reserved id namespace', () => {
-  it('rejects user sources that would number in the internal helper namespace', () => {
-    // Internal helpers (enq.listen/enq.subscribeTo) number from system-level
-    // counters; snapshot-owned children from per-snapshot counters. The
-    // spaces stay collision-free only because their prefixes are disjoint.
+  it('rejects user sources that would number in the internal helper namespace', function*({ expect }) {
     const impostor = createMachine({
       id: 'xstate.listener',
       initial: 'a',
@@ -923,13 +1034,18 @@ describe('reserved id namespace', () => {
     const actor = createActor(machine)
     actor.subscribe({ error: () => {} })
     actor.start()
-    expect(actor.getSnapshot().status).toBe('error')
-    expect(actor.getSnapshot().error).toMatchObject({
-      message: expect.stringMatching(/reserved for internal actors/),
+    yield* expect({
+      status: actor.getSnapshot().status,
+      error: actor.getSnapshot().error,
+    }).toEqual({
+      status: 'error',
+      error: expect.objectContaining({
+        message: expect.stringMatching(/reserved for internal actors/),
+      }),
     })
   })
 
-  it('rejects explicit generated-shaped ids in the reserved namespace', () => {
+  it('rejects explicit generated-shaped ids in the reserved namespace', function*({ expect }) {
     const machine = createMachine({
       id: 'order',
       initial: 'a',
@@ -942,12 +1058,12 @@ describe('reserved id namespace', () => {
     const actor = createActor(machine)
     actor.subscribe({ error: () => {} })
     actor.start()
-    expect(actor.getSnapshot().status).toBe('error')
+    yield* expect(actor.getSnapshot().status).toBe('error')
   })
 })
 
 describe('unique child ids per parent', () => {
-  it('throws when an explicit spawn id is already claimed in the same transition', () => {
+  it('throws when an explicit spawn id is already claimed in the same transition', function*({ expect }) {
     const machine = createMachine({
       id: 'p',
       initial: 'a',
@@ -960,13 +1076,18 @@ describe('unique child ids per parent', () => {
     const actor = createActor(machine)
     actor.subscribe({ error: () => {} })
     actor.start()
-    expect(actor.getSnapshot().status).toBe('error')
-    expect(actor.getSnapshot().error).toMatchObject({
-      message: expect.stringMatching(/already in use by another child of 'p'/),
+    yield* expect({
+      status: actor.getSnapshot().status,
+      error: actor.getSnapshot().error,
+    }).toEqual({
+      status: 'error',
+      error: expect.objectContaining({
+        message: expect.stringMatching(/already in use by another child of 'p'/),
+      }),
     })
   })
 
-  it('throws when an explicit spawn id collides with a live child', () => {
+  it('throws when an explicit spawn id collides with a live child', function*({ expect }) {
     const machine = createMachine({
       id: 'p',
       initial: 'a',
@@ -987,10 +1108,10 @@ describe('unique child ids per parent', () => {
     actor.subscribe({ error: () => {} })
     actor.start()
     actor.send({ type: 'AGAIN' })
-    expect(actor.getSnapshot().status).toBe('error')
+    yield* expect(actor.getSnapshot().status).toBe('error')
   })
 
-  it('throws for duplicate invoke ids across parallel regions', () => {
+  it('throws for duplicate invoke ids across parallel regions', function*({ expect }) {
     const machine = setup({ actors: { worker: workerMachine } }).createMachine({
       id: 'p',
       type: 'parallel',
@@ -1002,10 +1123,10 @@ describe('unique child ids per parent', () => {
     const actor = createActor(machine)
     actor.subscribe({ error: () => {} })
     actor.start()
-    expect(actor.getSnapshot().status).toBe('error')
+    yield* expect(actor.getSnapshot().status).toBe('error')
   })
 
-  it('allows stop-then-spawn of the same id in one transition', () => {
+  it('allows stop-then-spawn of the same id in one transition', function*({ expect }) {
     const machine = createMachine({
       id: 'p',
       initial: 'a',
@@ -1027,12 +1148,14 @@ describe('unique child ids per parent', () => {
     const first = actor.getSnapshot().children['w']
     actor.send({ type: 'RESTART' })
     const second = actor.getSnapshot().children['w']
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(second).not.toBe(first)
-    expect(second!.address).toBe('p/w')
+    yield* expect({
+      status: actor.getSnapshot().status,
+      replaced: second !== first,
+      address: second!.address,
+    }).toEqual({ status: 'active', replaced: true, address: 'p/w' })
   })
 
-  it('allows an invoke to restart with its id on reentry', () => {
+  it('allows an invoke to restart with its id on reentry', function*({ expect }) {
     const machine = setup({ actors: { worker: workerMachine } }).createMachine({
       id: 'p',
       initial: 'a',
@@ -1046,13 +1169,15 @@ describe('unique child ids per parent', () => {
     const actor = createActor(machine).start()
     const first = actor.getSnapshot().children['inv']
     actor.send({ type: 'REENTER' })
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(actor.getSnapshot().children['inv']).not.toBe(first)
+    yield* expect({
+      status: actor.getSnapshot().status,
+      replaced: actor.getSnapshot().children['inv'] !== first,
+    }).toEqual({ status: 'active', replaced: true })
   })
 })
 
 describe('history reentry stops the previous invoke', () => {
-  it('restoring the source through a history state exits it first', () => {
+  it('restoring the source through a history state exits it first', function*({ expect }) {
     const machine = setup({ actors: { worker: workerMachine } }).createMachine({
       id: 'p',
       initial: 'running',
@@ -1068,11 +1193,11 @@ describe('history reentry stops the previous invoke', () => {
     const first = actor.getSnapshot().children['inv'] as AnyActor
     actor.send({ type: 'PING' })
     const second = actor.getSnapshot().children['inv'] as AnyActor
-    expect(second).not.toBe(first)
-    // The previous incarnation must be stopped, not leaked at the same
-    // address as the new one.
-    expect(first.getSnapshot().status).toBe('stopped')
-    expect(second.getSnapshot().status).toBe('active')
+    yield* expect({
+      replaced: second !== first,
+      firstStatus: first.getSnapshot().status,
+      secondStatus: second.getSnapshot().status,
+    }).toEqual({ replaced: true, firstStatus: 'stopped', secondStatus: 'active' })
   })
 })
 
@@ -1100,31 +1225,31 @@ describe('incarnation tokens on remote handles', () => {
     return persisted
   }
 
-  it('round-trips a host-supplied incarnation verbatim', () => {
+  it('round-trips a host-supplied incarnation verbatim', function*({ expect }) {
     const restored = createActor(invokeMachine, {
       snapshot: persistedWithIncarnation('runtime-b:7'),
     }).start()
     const handle = restored.getSnapshot().children['w'] as any
-    // The token IS the handle's sessionId: one incarnation identity, one field.
-    expect(handle.sessionId).toBe('runtime-b:7')
     const repersisted = restored.getPersistedSnapshot({
       embedChildren: false,
     }) as any
-    expect(repersisted.children.w.incarnation).toBe('runtime-b:7')
+    yield* expect({
+      sessionId: handle.sessionId,
+      incanation: repersisted.children.w.incarnation,
+    }).toEqual({ sessionId: 'runtime-b:7', incanation: 'runtime-b:7' })
     restored.stop()
   })
 
-  it('never stamps a token itself', () => {
+  it('never stamps a token itself', function*({ expect }) {
     const actor = createActor(invokeMachine).start()
     const persisted = actor.getPersistedSnapshot({
       embedChildren: false,
     }) as any
     actor.stop()
-    // A local sessionId in the snapshot would break replay determinism.
-    expect(persisted.children.w.incarnation).toBeUndefined()
+    yield* expect(persisted.children.w.incarnation).toEqual(undefined)
   })
 
-  it('drops completions from a different incarnation when a token is present', () => {
+  it('drops completions from a different incarnation when a token is present', function*({ expect }) {
     const restored = createActor(invokeMachine, {
       snapshot: persistedWithIncarnation('runtime-b:7'),
     }).start()
@@ -1134,21 +1259,27 @@ describe('incarnation tokens on remote handles', () => {
       output: undefined,
       sessionId: 'runtime-b:3',
     } as never)
-    expect(restored.getSnapshot().value).toBe('a')
-    // The stale completion must not remove the still-running child either:
-    // the parent keeps its handle until the real completion arrives.
-    expect(restored.getSnapshot().children['w']).toBeDefined()
+    const valueAfterStale = restored.getSnapshot().value
+    const childAfterStale = restored.getSnapshot().children['w']
     restored.send({
       type: 'xstate.done.actor',
       actorId: 'w',
       output: undefined,
       sessionId: 'runtime-b:7',
     } as never)
-    expect(restored.getSnapshot().value).toBe('finished')
+    yield* expect({
+      valueAfterStale,
+      childAfterStalePresent: childAfterStale !== undefined,
+      valueAfterCompletion: restored.getSnapshot().value,
+    }).toEqual({
+      valueAfterStale: 'a',
+      childAfterStalePresent: true,
+      valueAfterCompletion: 'finished',
+    })
     restored.stop()
   })
 
-  it('journals the target incarnation on sendTo descriptors', () => {
+  it('journals the target incarnation on sendTo descriptors', function*({ expect }) {
     const machine = setup({ actors: { worker: workerMachine } }).createMachine({
       id: 'order',
       initial: 'a',
@@ -1175,14 +1306,18 @@ describe('incarnation tokens on remote handles', () => {
       type: 'KICK',
     })
     const descriptor = getEffectDescriptor(effects[0]!) as any
-    expect(descriptor.type).toBe('@xstate.sendTo')
-    expect(descriptor.incarnation).toBe('runtime-b:7')
+    yield* expect({
+      type: descriptor.type,
+      incarnation: descriptor.incarnation,
+    }).toEqual({ type: '@xstate.sendTo', incarnation: 'runtime-b:7' })
   })
 })
 
 describe('dead letters', () => {
-  it('routes undeliverable events to the runtime deadLetter operation', () => {
-    const deadLetters: Array<{ target: string; type: string; reason: string }> = []
+  it('routes undeliverable events to the runtime deadLetter operation', function*({ expect }) {
+    const deadLetters: Array<
+      { target: string; type: string; reason: string }
+    > = []
     const machine = createMachine({ id: 'p', initial: 'a', states: { a: {} } })
     const actor = createActor(machine)
     actor.system.runtime = {
@@ -1193,12 +1328,12 @@ describe('dead letters', () => {
     actor.start()
     actor.stop()
     actor.send({ type: 'LATE' })
-    expect(deadLetters).toEqual([
+    yield* expect(deadLetters).toEqual([
       { target: 'p', type: 'LATE', reason: 'stopped' },
     ])
   })
 
-  it('reports a dead letter to onRejectedEvent, not inspection', () => {
+  it('reports a dead letter to onRejectedEvent, not inspection', function*({ expect }) {
     const seen: string[] = []
     const inspected: string[] = []
     const machine = createMachine({ id: 'p', initial: 'a', states: { a: {} } })
@@ -1213,12 +1348,12 @@ describe('dead letters', () => {
     actor.start()
     actor.stop()
     actor.send({ type: 'LATE' })
-    expect(seen).toEqual(['LATE:stopped'])
-    expect(
-      inspected.every(
-        (type) => type === '@xstate.actor' || type === '@xstate.transition',
+    yield* expect({
+      seen,
+      inspectedAllActorOrTransition: inspected.every((type) =>
+        type === '@xstate.actor' || type === '@xstate.transition'
       ),
-    ).toBe(true)
+    }).toEqual({ seen: ['LATE:stopped'], inspectedAllActorOrTransition: true })
   })
 })
 
@@ -1232,158 +1367,174 @@ describe('timer restore honors wall-clock deadlines', () => {
     },
   })
 
-  it('persists startedAt from a live runtime and resumes the remaining delay', () => {
-    vi.useFakeTimers()
-    try {
-      const actor = createActor(timerMachine).start()
-      vi.advanceTimersByTime(600)
-      const persisted = actor.getPersistedSnapshot() as any
-      actor.stop()
-      const [timer] = Object.values(persisted.timers) as any[]
-      expect(timer.startedAt).toBe(Date.now() - 600)
+  it('persists startedAt from a live runtime and resumes the remaining delay', function*({ expect }) {
+    const time = createManualTime(5_000)
+    const actor = createActor(timerMachine, {
+      clock: time.clock,
+      wallClock: time.wallClock,
+    }).start()
+    time.advance(600)
+    const persisted = actor.getPersistedSnapshot() as any
+    actor.stop()
+    const [timer] = Object.values(persisted.timers) as any[]
 
-      const restored = createActor(timerMachine, {
-        snapshot: persisted,
-      }).start()
-      vi.advanceTimersByTime(399)
-      expect(restored.getSnapshot().value).toBe('waiting')
-      vi.advanceTimersByTime(1)
-      expect(restored.getSnapshot().value).toBe('fired')
-      restored.stop()
-    } finally {
-      vi.useRealTimers()
-    }
+    const restored = createActor(timerMachine, {
+      clock: time.clock,
+      wallClock: time.wallClock,
+      snapshot: persisted,
+    }).start()
+    time.advance(399)
+    const valueAt399 = restored.getSnapshot().value
+    time.advance(1)
+    yield* expect({
+      startedAt: timer.startedAt,
+      valueAt399,
+      valueAfter400: restored.getSnapshot().value,
+    }).toEqual({
+      startedAt: 5_000,
+      valueAt399: 'waiting',
+      valueAfter400: 'fired',
+    })
+    restored.stop()
   })
 
-  it('keeps the same deadline across repeated persist/restore cycles', () => {
-    vi.useFakeTimers()
-    try {
-      const actor = createActor(timerMachine).start()
-      vi.advanceTimersByTime(300)
-      const first = actor.getPersistedSnapshot() as any
-      actor.stop()
+  it('keeps the same deadline across repeated persist/restore cycles', function*({ expect }) {
+    const time = createManualTime(5_000)
+    const actor = createActor(timerMachine, {
+      clock: time.clock,
+      wallClock: time.wallClock,
+    }).start()
+    time.advance(300)
+    const first = actor.getPersistedSnapshot() as any
+    actor.stop()
 
-      const second = createActor(timerMachine, { snapshot: first }).start()
-      vi.advanceTimersByTime(300)
-      const repersisted = second.getPersistedSnapshot() as any
-      second.stop()
-      // startedAt stays anchored to the original deadline, not re-derived
-      // from the latest scheduling moment with the full declared delay.
-      const [timer] = Object.values(repersisted.timers) as any[]
-      expect(timer.startedAt + timer.delay).toBe(Date.now() + 400)
+    const second = createActor(timerMachine, {
+      clock: time.clock,
+      wallClock: time.wallClock,
+      snapshot: first,
+    }).start()
+    time.advance(300)
+    const repersisted = second.getPersistedSnapshot() as any
+    second.stop()
+    const [timer] = Object.values(repersisted.timers) as any[]
 
-      const third = createActor(timerMachine, {
-        snapshot: repersisted,
-      }).start()
-      vi.advanceTimersByTime(400)
-      expect(third.getSnapshot().value).toBe('fired')
-      third.stop()
-    } finally {
-      vi.useRealTimers()
-    }
+    const third = createActor(timerMachine, {
+      clock: time.clock,
+      wallClock: time.wallClock,
+      snapshot: repersisted,
+    }).start()
+    time.advance(400)
+    yield* expect({
+      deadline: timer.startedAt + timer.delay,
+      valueAfter400: third.getSnapshot().value,
+    }).toEqual({ deadline: 6_000, valueAfter400: 'fired' })
+    third.stop()
   })
 
-  it('a timer already past due fires immediately on restore', () => {
-    vi.useFakeTimers()
-    try {
-      const actor = createActor(timerMachine).start()
-      const persisted = actor.getPersistedSnapshot() as any
-      actor.stop()
-      // Simulate a long gap while no process was running.
-      vi.advanceTimersByTime(5000)
+  it('a timer already past due fires immediately on restore', function*({ expect }) {
+    const time = createManualTime(5_000)
+    const actor = createActor(timerMachine, {
+      clock: time.clock,
+      wallClock: time.wallClock,
+    }).start()
+    const persisted = actor.getPersistedSnapshot() as any
+    actor.stop()
+    time.advance(5_000)
 
-      const restored = createActor(timerMachine, {
-        snapshot: persisted,
-      }).start()
-      vi.advanceTimersByTime(0)
-      expect(restored.getSnapshot().value).toBe('fired')
-      restored.stop()
-    } finally {
-      vi.useRealTimers()
-    }
+    const restored = createActor(timerMachine, {
+      clock: time.clock,
+      wallClock: time.wallClock,
+      snapshot: persisted,
+    }).start()
+    time.advance(0)
+    yield* expect(restored.getSnapshot().value).toBe('fired')
+    restored.stop()
   })
 
-  it('pure-transition snapshots persist no timestamp', () => {
+  it('pure-transition snapshots persist no timestamp', function*({ expect }) {
     const [snapshot] = initialTransition(timerMachine)
     const persisted = timerMachine.getPersistedSnapshot(snapshot) as any
     const [timer] = Object.values(persisted.timers) as any[]
-    // No local schedule ran, so replayed persists stay byte-deterministic;
-    // restoring falls back to the declared delay.
-    expect(timer.startedAt).toBeUndefined()
+    yield* expect(timer.startedAt).toEqual(undefined)
   })
 })
 
 describe('runStep runtime operation', () => {
-  it('a host runStep owns the step journal instead of the snapshot', async () => {
+  it('a host runStep owns the step journal instead of the snapshot', function*({ expect }) {
     const journal = new Map<string, unknown>()
     const calls: string[] = []
     const logic = createAsyncLogic({
-      run: async (_: any, enq: any) => {
-        const a = await enq.step('a', async () => 1)
-        const b = await enq.step('b', async () => a + 1)
-        return b
-      },
+      run: (_: any, enq: any) =>
+        enq
+          .step('a', () => Promise.resolve(1))
+          .then((a: number) => enq.step('b', () => Promise.resolve(a + 1))),
     })
     const actor = createActor(logic)
     actor.system.runtime = {
-      runStep: async (_target: any, key: string, exec: () => any) => {
+      runStep: (_target: any, key: string, exec: () => any) => {
         calls.push(key)
         if (journal.has(key)) {
-          return journal.get(key)
+          return Promise.resolve(journal.get(key))
         }
-        const output = await exec()
-        journal.set(key, output)
-        return output
+        return Promise.resolve(exec()).then((output) => {
+          journal.set(key, output)
+          return output
+        })
       },
     }
     actor.start()
-    const snapshot = await waitFor(actor, (s: any) => s.status === 'done')
+    const snapshot = yield* Effect.promise(() => waitFor(actor, (s: any) => s.status === 'done'))
 
-    expect(snapshot.output).toBe(2)
-    expect(calls).toEqual(['a', 'b'])
-    expect(journal.get('a')).toBe(1)
-    // The host replaced the built-in journal: nothing memoized locally.
-    expect((snapshot as any).effects?.a).toBeUndefined()
-    expect((snapshot as any).effects?.b).toBeUndefined()
+    yield* expect({
+      output: snapshot.output,
+      calls,
+      journalA: journal.get('a'),
+      effectA: (snapshot as any).effects?.a,
+      effectB: (snapshot as any).effects?.b,
+    }).toEqual({
+      output: 2,
+      calls: ['a', 'b'],
+      journalA: 1,
+      effectA: undefined,
+      effectB: undefined,
+    })
   })
 
-  it('a host runStep replays memoized results without re-running exec', async () => {
+  it('a host runStep replays memoized results without re-running exec', function*({ expect }) {
     const journal = new Map<string, unknown>([['a', 41]])
     let executions = 0
     const logic = createAsyncLogic({
-      run: async (_: any, enq: any) => {
-        const a = await enq.step('a', async () => {
-          executions++
-          return 1
-        })
-        return a + 1
-      },
+      run: (_: any, enq: any) =>
+        enq
+          .step('a', () => {
+            executions++
+            return Promise.resolve(1)
+          })
+          .then((a: number) => a + 1),
     })
     const actor = createActor(logic)
     actor.system.runtime = {
-      runStep: async (_target: any, key: string, exec: () => any) => {
-        if (journal.has(key)) {
-          return journal.get(key)
-        }
-        const output = await exec()
-        journal.set(key, output)
-        return output
-      },
+      runStep: (_target: any, key: string, exec: () => any) =>
+        journal.has(key)
+          ? Promise.resolve(journal.get(key))
+          : Promise.resolve(exec()).then((output) => {
+            journal.set(key, output)
+            return output
+          }),
     }
     actor.start()
-    const snapshot = await waitFor(actor, (s: any) => s.status === 'done')
-    expect(snapshot.output).toBe(42)
-    expect(executions).toBe(0)
+    const snapshot = yield* Effect.promise(() => waitFor(actor, (s: any) => s.status === 'done'))
+    yield* expect({ output: snapshot.output, executions }).toEqual({
+      output: 42,
+      executions: 0,
+    })
   })
 
-  it('a durable adapter runStep receives the async child steps', async () => {
+  it('a durable adapter runStep receives the async child steps', function*({ expect }) {
     const stepped: string[] = []
     const asyncWorker = createAsyncLogic({
       id: 'asyncWorker',
-      run: async (_: any, enq: any) => {
-        await enq.step('warmup', async () => 'ok')
-        return 'done'
-      },
+      run: (_: any, enq: any) => enq.step('warmup', () => Promise.resolve('ok')).then(() => 'done'),
     })
     const machine = setup({ actors: { asyncWorker } }).createMachine({
       id: 'order',
@@ -1399,9 +1550,9 @@ describe('runStep runtime operation', () => {
       startActor: (actor: any) => {
         actor.start()
       },
-      runStep: async (actor: any, key: string, exec: () => any) => {
+      runStep: (actor: any, key: string, exec: () => any) => {
         stepped.push(`${actor.address}:${key}`)
-        return exec()
+        return Promise.resolve(exec())
       },
       waitForEvent: () => {
         throw new Error('host-driven loop')
@@ -1409,14 +1560,14 @@ describe('runStep runtime operation', () => {
     })
 
     const [, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
-    await Promise.resolve()
-    expect(stepped).toEqual(['order/asyncWorker:0:warmup'])
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    yield* Effect.promise(() => Promise.resolve())
+    yield* expect(stepped).toEqual(['order/asyncWorker:0:warmup'])
   })
 })
 
 describe('tenth round: review findings', () => {
-  it('a completed child frees its id for the transition handling its completion', () => {
+  it('a completed child frees its id for the transition handling its completion', function*({ expect }) {
     const job = createMachine({
       initial: 'working',
       states: {
@@ -1436,8 +1587,6 @@ describe('tenth round: review findings', () => {
             KICK: ({ children }: any, enq: any) => {
               enq.sendTo(children.job, { type: 'FINISH' })
             },
-            // The supervisor pattern: respawn under the same name while
-            // handling the outgoing child's completion.
             'xstate.done.actor': (_: any, enq: any) => {
               enq.spawn(job, { id: 'job' })
             },
@@ -1448,14 +1597,21 @@ describe('tenth round: review findings', () => {
     const actor = createActor(machine).start()
     const first = actor.getSnapshot().children['job']
     actor.send({ type: 'KICK' })
-    expect(actor.getSnapshot().status).toBe('active')
     const replacement = actor.getSnapshot().children['job'] as AnyActor
-    expect(replacement).toBeDefined()
-    expect(replacement).not.toBe(first)
-    expect(replacement.getSnapshot().status).toBe('active')
+    yield* expect({
+      status: actor.getSnapshot().status,
+      replacementPresent: replacement !== undefined,
+      replaced: replacement !== first,
+      replacementStatus: replacement.getSnapshot().status,
+    }).toEqual({
+      status: 'active',
+      replacementPresent: true,
+      replaced: true,
+      replacementStatus: 'active',
+    })
   })
 
-  it('restores under a custom clock with the declared delay', () => {
+  it('restores under a custom clock with the declared delay', function*({ expect }) {
     const machine = createMachine({
       id: 'p',
       initial: 'waiting',
@@ -1464,34 +1620,33 @@ describe('tenth round: review findings', () => {
         fired: {},
       },
     })
-    vi.useFakeTimers()
-    let persisted: any
-    try {
-      const actor = createActor(machine).start()
-      vi.advanceTimersByTime(600)
-      persisted = actor.getPersistedSnapshot()
-      actor.stop()
-    } finally {
-      vi.useRealTimers()
-    }
+    const live = createActor(machine).start()
+    const persisted = live.getPersistedSnapshot() as any
+    live.stop()
     const [timer] = Object.values(persisted.timers) as any[]
-    expect(typeof timer.startedAt).toBe('number')
+    const startedAtIsNumber = typeof timer.startedAt === 'number'
 
-    // A wall-clock startedAt is meaningless under a simulated clock; the
-    // declared delay applies instead of firing instantly (or never).
     const clock = new SimulatedClock()
     const restored = createActor(machine, {
       clock,
       snapshot: persisted,
     }).start()
     clock.increment(999)
-    expect(restored.getSnapshot().value).toBe('waiting')
+    const valueAt999 = restored.getSnapshot().value
     clock.increment(1)
-    expect(restored.getSnapshot().value).toBe('fired')
+    yield* expect({
+      startedAtIsNumber,
+      valueAt999,
+      valueAfter1000: restored.getSnapshot().value,
+    }).toEqual({
+      startedAtIsNumber: true,
+      valueAt999: 'waiting',
+      valueAfter1000: 'fired',
+    })
     restored.stop()
   })
 
-  it('captures root events for machine ids containing address separators', async () => {
+  it('captures root events for machine ids containing address separators', function*({ expect }) {
     const worker = setup({}).createMachine({
       id: 'worker',
       initial: 'idle',
@@ -1517,16 +1672,19 @@ describe('tenth round: review findings', () => {
         throw new Error('host-driven loop')
       },
     })
-    expect(durable.rootAddress).toBe('a%2Fb')
+    const rootAddress = durable.rootAddress
     const [, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
-    const hello = await durable.waitForEvent()
-    expect(hello.type).toBe('HELLO')
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    const hello = yield* Effect.promise(() => durable.waitForEvent())
+    yield* expect({ rootAddress, helloType: hello.type }).toEqual({
+      rootAddress: 'a%2Fb',
+      helloType: 'HELLO',
+    })
   })
 })
 
 describe('remote handle serialization', () => {
-  it('serializes with the same actor-reference marker as a co-located actor', () => {
+  it('serializes with the same actor-reference marker as a co-located actor', function*({ expect }) {
     const machine = setup({ actors: { worker: workerMachine } }).createMachine({
       id: 'order',
       initial: 'a',
@@ -1540,16 +1698,19 @@ describe('remote handle serialization', () => {
 
     const restored = createActor(machine, { snapshot: persisted }).start()
     const handle = restored.getSnapshot().children['w'] as AnyActor
-    expect(handle.toJSON!()).toEqual({
-      xstate$type: 'actorRef',
-      id: 'w',
-      address: 'order/w',
-      src: 'worker',
-    })
-    // JSON round-trip of the whole snapshot keeps the discriminant, so
-    // tooling that detects actor references sees remote children too.
     const json = JSON.parse(JSON.stringify(restored.getSnapshot())) as any
-    expect(json.children.w.xstate$type).toBe('actorRef')
+    yield* expect({
+      handleJson: handle.toJSON!(),
+      childType: json.children.w.xstate$type,
+    }).toEqual({
+      handleJson: {
+        xstate$type: 'actorRef',
+        id: 'w',
+        address: 'order/w',
+        src: 'worker',
+      },
+      childType: 'actorRef',
+    })
     restored.stop()
   })
 })
@@ -1564,32 +1725,40 @@ describe('timer startedAt survives a restore that never starts', () => {
     },
   })
 
-  it('re-persisting without a live schedule keeps the original deadline', () => {
-    vi.useFakeTimers()
-    try {
-      const actor = createActor(timerMachine2).start()
-      vi.advanceTimersByTime(600)
-      const persisted = actor.getPersistedSnapshot() as any
-      actor.stop()
-      const originalStart = Object.values(persisted.timers as any)[0] as any
+  it('re-persisting without a live schedule keeps the original deadline', function*({ expect }) {
+    const time = createManualTime(5_000)
+    const actor = createActor(timerMachine2, {
+      clock: time.clock,
+      wallClock: time.wallClock,
+    }).start()
+    time.advance(600)
+    const persisted = actor.getPersistedSnapshot() as any
+    actor.stop()
+    const originalStart = Object.values(persisted.timers as any)[0] as any
 
-      // A restore → persist cycle with no local schedule (the durable-host
-      // shape: pure restore, re-persist) must not push the deadline back.
-      const restored = timerMachine2.restoreSnapshot(persisted as never)
-      const repersisted = timerMachine2.getPersistedSnapshot(restored) as any
-      const carried = Object.values(repersisted.timers as any)[0] as any
-      expect(carried.startedAt).toBe(originalStart.startedAt)
+    const restored = timerMachine2.restoreSnapshot(persisted as never)
+    const repersisted = timerMachine2.getPersistedSnapshot(restored) as any
+    const carried = Object.values(repersisted.timers as any)[0] as any
 
-      const resumed = createActor(timerMachine2, {
-        snapshot: repersisted,
-      }).start()
-      vi.advanceTimersByTime(399)
-      expect(resumed.getSnapshot().value).toBe('waiting')
-      vi.advanceTimersByTime(1)
-      expect(resumed.getSnapshot().value).toBe('fired')
-      resumed.stop()
-    } finally {
-      vi.useRealTimers()
-    }
+    const resumed = createActor(timerMachine2, {
+      clock: time.clock,
+      wallClock: time.wallClock,
+      snapshot: repersisted,
+    }).start()
+    time.advance(399)
+    const valueAt399 = resumed.getSnapshot().value
+    time.advance(1)
+    yield* expect({
+      carriedStartedAt: carried.startedAt,
+      originalStartedAt: originalStart.startedAt,
+      valueAt399,
+      valueAfter400: resumed.getSnapshot().value,
+    }).toEqual({
+      carriedStartedAt: 5_000,
+      originalStartedAt: 5_000,
+      valueAt399: 'waiting',
+      valueAfter400: 'fired',
+    })
+    resumed.stop()
   })
 })

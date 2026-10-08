@@ -1,6 +1,6 @@
-import { createMachine, types } from '@systemfsoftware/xstate'
+import { expectTypeOf, it } from '@systemfsoftware/vitest'
+import { createActor, createMachine, types } from '@systemfsoftware/xstate'
 import * as fc from 'fast-check'
-import { expectTypeOf, it } from 'vitest'
 import { fastCheckAdapter, propertyTest, testPaths } from '../src/index.js'
 
 const machine = createMachine({
@@ -19,7 +19,7 @@ const machine = createMachine({
   },
 })
 
-it('infers machine property APIs', () => {
+it('infers machine property APIs', function*({ expect }) {
   if (false) {
     void propertyTest(machine, {
       events: {
@@ -114,9 +114,12 @@ it('infers machine property APIs', () => {
       invariant: () => {},
     })
   }
+
+  const snapshot = createActor(machine).getSnapshot()
+  yield* expect(snapshot.context).toEqual({ count: 0 })
 })
 
-it('`testPaths()` accepts fast-check arbitraries in `events`', () => {
+it('`testPaths()` accepts fast-check arbitraries in `events`', function*({ expect }) {
   const run = () =>
     testPaths(machine, {
       events: {
@@ -132,4 +135,7 @@ it('`testPaths()` accepts fast-check arbitraries in `events`', () => {
         INC: (value: number) => value,
       },
     }))
+
+  const snapshot = createActor(machine).getSnapshot()
+  yield* expect(snapshot.context).toEqual({ count: 0 })
 })

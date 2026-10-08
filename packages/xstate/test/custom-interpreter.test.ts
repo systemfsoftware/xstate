@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { createAsyncLogic, createCallbackLogic, createLogic } from '../src/actors/index.js'
 import {
   type ActorSystemRuntime,
@@ -17,7 +18,7 @@ import {
 
 class CustomInterpreter<TLogic extends AnyActorLogic> {
   private readonly queue: EventFromLogic<TLogic>[] = []
-  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly timers = new Map<string, NodeJS.Timeout>()
   readonly runtime: Partial<ActorSystemRuntime>
 
   constructor(runtime: Partial<ActorSystemRuntime> = {}) {
@@ -41,8 +42,6 @@ class CustomInterpreter<TLogic extends AnyActorLogic> {
       cancelTimer: (source, id) => {
         clearTimeout(this.timers.get(`${source.sessionId}.${id}`))
       },
-      // When this example delegates child execution back to `createActor`, the
-      // child's system must use the same runtime operations as this mailbox.
       spawnActor: (_source, actor) => {
         Object.assign(actor.system, this.runtime)
       },
@@ -78,15 +77,7 @@ class CustomInterpreter<TLogic extends AnyActorLogic> {
 }
 
 describe('custom interpreter runtime', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('routes delayed raises back through a custom mailbox', async () => {
+  it('routes delayed raises back through a custom mailbox', function*({ expect }) {
     const machine = createMachine({
       initial: 'waiting',
       states: {
@@ -94,25 +85,39 @@ describe('custom interpreter runtime', () => {
         done: {},
       },
     })
-    const interpreter = new CustomInterpreter<typeof machine>()
+    const timers: Array<() => void> = []
+    const interpreter = new CustomInterpreter<typeof machine>({
+      scheduleTimer: (source, id) => {
+        timers.push(() => {
+          void interpreter.runtime.sendEvent?.(source, source, {
+            type: 'xstate.timer',
+            id,
+          })
+        })
+      },
+    })
     let [state, effects] = machine.initialTransition(undefined)
-    expect(
-      effects.every(
-        (effect: ExecutableActionObject) => typeof effect.exec === 'function',
-      ),
-    ).toBe(true)
-    await interpreter.executeEffects(effects)
+    yield* expect(effects).toSatisfy(
+      (all: ReadonlyArray<ExecutableActionObject>) =>
+        all.every(
+          (effect: ExecutableActionObject) => typeof effect.exec === 'function',
+        ),
+      'every effect from the initial transition is executable',
+    )
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
 
-    vi.advanceTimersByTime(10)
+    for (const fire of timers) {
+      fire()
+    }
     while (interpreter.hasEvents()) {
       ;[state, effects] = machine.transition(state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
 
-    expect(state.matches('done')).toBe(true)
+    yield* expect(state.value).toEqual('done')
   })
 
-  it('executes createLogic startup and termination with the same loop', async () => {
+  it('executes createLogic startup and termination with the same loop', function*({ expect }) {
     const operations: string[] = []
     const logic = createLogic({
       context: undefined,
@@ -142,20 +147,20 @@ describe('custom interpreter runtime', () => {
     })
 
     let [state, effects] = initialTransition(logic)
-    await interpreter.executeEffects(effects)
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
     ;[state, effects] = transition(logic, state, { type: 'finish' })
-    await interpreter.executeEffects(effects)
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
 
-    expect(state).toMatchObject({ status: 'done', output: 42 })
-    expect(operations).toEqual([
-      'start',
-      'emit:started',
-      'finish',
-      'terminate:done',
-    ])
+    yield* expect({
+      state: { status: state.status, output: state.output },
+      operations,
+    }).toEqual({
+      state: { status: 'done', output: 42 },
+      operations: ['start', 'emit:started', 'finish', 'terminate:done'],
+    })
   })
 
-  it('uses self.system as the default effect runtime', async () => {
+  it('uses self.system as the default effect runtime', function*({ expect }) {
     let self: AnyActor | undefined
     let runtime: Partial<ActorSystemRuntime> | undefined
     const logic = createLogic({
@@ -169,12 +174,12 @@ describe('custom interpreter runtime', () => {
     })
     const [, effects] = initialTransition(logic)
 
-    await executeEffects(effects)
+    yield* Effect.promise(() => executeEffects(effects))
 
-    expect(runtime).toBe(self!.system)
+    yield* expect(runtime).toBe(self!.system)
   })
 
-  it('preserves an invoked createLogic child reference across pure transitions', async () => {
+  it('preserves an invoked createLogic child reference across pure transitions', function*({ expect }) {
     const child = createLogic({
       context: undefined,
       run: ({ event }, enq) => {
@@ -195,13 +200,15 @@ describe('custom interpreter runtime', () => {
       event: { type: string }
     }> = []
 
-    await executeEffects(effects, {
-      sendEvent: (source, target, event) => {
-        deliveries.push({ source: source!, target, event })
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        sendEvent: (source, target, event) => {
+          deliveries.push({ source: source!, target, event })
+        },
+      })
+    )
 
-    expect(deliveries).toEqual([
+    yield* expect(deliveries).toEqual([
       expect.objectContaining({
         source: expect.objectContaining({ id: childRef.id }),
         target: expect.objectContaining({ id: 'x:0' }),
@@ -210,7 +217,7 @@ describe('custom interpreter runtime', () => {
     ])
   })
 
-  it('terminates an invoked createLogic child under its logical id', async () => {
+  it('terminates an invoked createLogic child under its logical id', function*({ expect }) {
     const child = createLogic({
       context: undefined,
       run: ({ event }) =>
@@ -226,16 +233,18 @@ describe('custom interpreter runtime', () => {
     })
     const terminated: string[] = []
 
-    await executeEffects(effects, {
-      terminateActor: (actor) => {
-        terminated.push(actor.id)
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        terminateActor: (actor) => {
+          terminated.push(actor.id)
+        },
+      })
+    )
 
-    expect(terminated).toEqual(['worker'])
+    yield* expect(terminated).toEqual(['worker'])
   })
 
-  it('routes async logic emissions and completion through the runtime', async () => {
+  it('routes async logic emissions and completion through the runtime', function*({ expect }) {
     const operations: string[] = []
     const logic = createAsyncLogic({
       run: async (_, enq) => {
@@ -253,21 +262,29 @@ describe('custom interpreter runtime', () => {
     })
 
     let [state, effects] = initialTransition(logic)
-    await interpreter.executeEffects(effects)
-    await Promise.resolve()
-    await Promise.resolve()
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
+    yield* Effect.promise(() => Promise.resolve())
+    yield* Effect.promise(() => Promise.resolve())
 
     while (state.status === 'active' && interpreter.hasEvents()) {
       ;[state, effects] = transition(logic, state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
 
-    expect(state).toMatchObject({ status: 'done', output: 42 })
-    expect(operations).toEqual(['emit:progress', 'terminate:done'])
+    yield* expect({
+      state: { status: state.status, output: state.output },
+      operations,
+    }).toEqual({
+      state: { status: 'done', output: 42 },
+      operations: ['emit:progress', 'terminate:done'],
+    })
   })
 
-  it('keeps custom actions and arguments explicit', async () => {
-    const action = vi.fn()
+  it('keeps custom actions and arguments explicit', function*({ expect }) {
+    const actionCalls: Array<{ value: number }> = []
+    const action = (args: { value: number }) => {
+      actionCalls.push(args)
+    }
     const machine = createMachine({
       entry: (_, enq) => enq(action, { value: 42 }),
     })
@@ -275,18 +292,18 @@ describe('custom interpreter runtime', () => {
     const [, effects] = machine.initialTransition(undefined)
     const [effect] = effects
 
-    expect(effect).toMatchObject({
+    yield* expect(effect).toMatchObject({
       kind: 'action',
       action,
       args: [{ value: 42 }],
       exec: expect.any(Function),
     })
 
-    await effect.exec()
-    expect(action).toHaveBeenCalledWith({ value: 42 })
+    yield* Effect.promise(() => Promise.resolve(effect.exec()))
+    yield* expect(actionCalls).toEqual([{ value: 42 }])
   })
 
-  it('serializes reentrant sends in a caller-owned transition loop', async () => {
+  it('serializes reentrant sends in a caller-owned transition loop', function*({ expect }) {
     const machine = createMachine({
       initial: 'first',
       states: {
@@ -304,18 +321,18 @@ describe('custom interpreter runtime', () => {
     })
     const interpreter = new CustomInterpreter<typeof machine>()
     let [state, effects] = machine.initialTransition(undefined)
-    await interpreter.executeEffects(effects)
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
     interpreter.enqueue({ type: 'START' })
 
     while (state.status === 'active' && interpreter.hasEvents()) {
       ;[state, effects] = machine.transition(state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
 
-    expect(state.matches('done')).toBe(true)
+    yield* expect(state.value).toEqual('done')
   })
 
-  it('routes messages and completion between invoked actors and their parent', async () => {
+  it('routes messages and completion between invoked actors and their parent', function*({ expect }) {
     const child = createMachine({
       initial: 'waiting',
       states: {
@@ -341,19 +358,19 @@ describe('custom interpreter runtime', () => {
     })
     const interpreter = new CustomInterpreter<typeof machine>()
     let [state, effects] = machine.initialTransition(undefined)
-    await interpreter.executeEffects(effects)
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
     interpreter.enqueue({ type: 'FINISH_CHILD' })
 
     while (state.status === 'active' && interpreter.hasEvents()) {
       ;[state, effects] = machine.transition(state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
 
-    expect(state.matches('success')).toBe(true)
+    yield* expect(state.value).toEqual('success')
   })
 
-  it('surfaces child completion as an ordered termination effect', async () => {
-    const exit = vi.fn()
+  it('surfaces child completion as an ordered termination effect', function*({ expect }) {
+    const exit = () => {}
     const child = createMachine({
       initial: 'waiting',
       states: {
@@ -370,30 +387,37 @@ describe('custom interpreter runtime', () => {
     const [done, effects] = transition(child, childRef.getSnapshot(), {
       type: 'FINISH',
     })
-
-    expect(done.status).toBe('done')
-    expect(effects.at(-2)).toMatchObject({ kind: 'action' })
-    expect(effects.at(-1)).toMatchObject({
-      type: '@xstate.terminate',
-      actor: expect.objectContaining({ id: 'child' }),
-      status: 'done',
-    })
-
-    expect(
-      child.transition(childRef.getSnapshot(), { type: 'FINISH' })[1].at(-1),
-    ).toMatchObject({
-      type: '@xstate.terminate',
-      actor: expect.objectContaining({ id: 'child' }),
-      status: 'done',
-    })
-
+    const secondTransitionLastEffect = child.transition(childRef.getSnapshot(), {
+      type: 'FINISH',
+    })[1].at(-1)
     const repeatedEffects = transition(child, done, { type: 'FINISH' })[1]
-    expect(
-      repeatedEffects.some((effect) => effect.type === '@xstate.terminate'),
-    ).toBe(false)
+
+    yield* expect({
+      status: done.status,
+      secondLastKind: effects.at(-2)?.kind,
+      lastEffect: effects.at(-1),
+      secondTransitionLastEffect,
+      repeatedHasTerminate: repeatedEffects.some(
+        (effect) => effect.type === '@xstate.terminate',
+      ),
+    }).toEqual({
+      status: 'done',
+      secondLastKind: 'action',
+      lastEffect: expect.objectContaining({
+        type: '@xstate.terminate',
+        actor: expect.objectContaining({ id: 'child' }),
+        status: 'done',
+      }),
+      secondTransitionLastEffect: expect.objectContaining({
+        type: '@xstate.terminate',
+        actor: expect.objectContaining({ id: 'child' }),
+        status: 'done',
+      }),
+      repeatedHasTerminate: false,
+    })
   })
 
-  it('exposes child completion in the final microstep', () => {
+  it('exposes child completion in the final microstep', function*({ expect }) {
     const child = createMachine({
       initial: 'waiting',
       states: {
@@ -409,14 +433,14 @@ describe('custom interpreter runtime', () => {
       type: 'FINISH',
     })
 
-    expect(microsteps.at(-1)?.[1].at(-1)).toMatchObject({
+    yield* expect(microsteps.at(-1)?.[1].at(-1)).toMatchObject({
       type: '@xstate.terminate',
       actor: expect.objectContaining({ id: 'child' }),
       status: 'done',
     })
   })
 
-  it('exposes initial completion in the final initial microstep', () => {
+  it('exposes initial completion in the final initial microstep', function*({ expect }) {
     const machine = createMachine({
       initial: 'done',
       states: { done: { type: 'final' } },
@@ -425,17 +449,22 @@ describe('custom interpreter runtime', () => {
     const [, effects] = initialTransition(machine)
     const microsteps = getInitialMicrosteps(machine)
 
-    expect(effects.at(-1)).toMatchObject({
-      type: '@xstate.terminate',
-      status: 'done',
-    })
-    expect(microsteps.at(-1)?.[1].at(-1)).toMatchObject({
-      type: '@xstate.terminate',
-      status: 'done',
+    yield* expect({
+      effect: effects.at(-1),
+      microstepLast: microsteps.at(-1)?.[1].at(-1),
+    }).toEqual({
+      effect: expect.objectContaining({
+        type: '@xstate.terminate',
+        status: 'done',
+      }),
+      microstepLast: expect.objectContaining({
+        type: '@xstate.terminate',
+        status: 'done',
+      }),
     })
   })
 
-  it('delegates terminal lifecycle to the runtime in effect order', async () => {
+  it('delegates terminal lifecycle to the runtime in effect order', function*({ expect }) {
     const operations: string[] = []
     const machine = createMachine({
       initial: 'active',
@@ -450,16 +479,18 @@ describe('custom interpreter runtime', () => {
     const [active] = initialTransition(machine)
     const [, effects] = transition(machine, active, { type: 'FINISH' })
 
-    await executeEffects(effects, {
-      terminateActor: (actor, termination) => {
-        operations.push(`terminate:${actor.id}:${termination.status}`)
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        terminateActor: (actor, termination) => {
+          operations.push(`terminate:${actor.id}:${termination.status}`)
+        },
+      })
+    )
 
-    expect(operations).toEqual(['exit', 'terminate:x:0:done'])
+    yield* expect(operations).toEqual(['exit', 'terminate:x:0:done'])
   })
 
-  it('surfaces unhandled actor errors as terminal termination effects', () => {
+  it('surfaces unhandled actor errors as terminal termination effects', function*({ expect }) {
     const error = new Error('failed')
     const machine = createMachine({})
     const [active] = initialTransition(machine)
@@ -470,15 +501,22 @@ describe('custom interpreter runtime', () => {
       actorId: 'child',
     } as any)
 
-    expect(failed).toMatchObject({ status: 'error', error })
-    expect(effects.at(-1)).toMatchObject({
-      type: '@xstate.terminate',
+    yield* expect({
+      status: failed.status,
+      error: failed.error,
+      lastEffect: effects.at(-1),
+    }).toEqual({
       status: 'error',
       error,
+      lastEffect: expect.objectContaining({
+        type: '@xstate.terminate',
+        status: 'error',
+        error,
+      }),
     })
   })
 
-  it('completes a child before notifying its parent', () => {
+  it('completes a child before notifying its parent', function*({ expect }) {
     const order: string[] = []
     const child = createMachine({
       initial: 'active',
@@ -507,16 +545,22 @@ describe('custom interpreter runtime', () => {
 
     childRef.send({ type: 'FINISH' })
 
-    expect(order).toEqual([
+    yield* expect(order).toEqual([
       'child done snapshot',
       'child complete',
       'parent done',
     ])
   })
 
-  it('does not notify an invoked parent twice on child completion', () => {
-    const completed = vi.fn()
-    const duplicate = vi.fn()
+  it('does not notify an invoked parent twice on child completion', function*({ expect }) {
+    const completedCalls: Array<null> = []
+    const completed = () => {
+      completedCalls.push(null)
+    }
+    const duplicateCalls: Array<null> = []
+    const duplicate = () => {
+      duplicateCalls.push(null)
+    }
     const child = createMachine({
       initial: 'waiting',
       states: {
@@ -550,12 +594,14 @@ describe('custom interpreter runtime', () => {
 
     actor.getSnapshot().children['child']!.send({ type: 'FINISH' })
 
-    expect(actor.getSnapshot().matches('success')).toBe(true)
-    expect(completed).toHaveBeenCalledTimes(1)
-    expect(duplicate).not.toHaveBeenCalled()
+    yield* expect({
+      value: actor.getSnapshot().value,
+      completedCalls,
+      duplicateCalls,
+    }).toEqual({ value: 'success', completedCalls: [null], duplicateCalls: [] })
   })
 
-  it('delivers delayed sends through the source timer input', async () => {
+  it('delivers delayed sends through the source timer input', function*({ expect }) {
     const child = createMachine({
       initial: 'waiting',
       states: {
@@ -589,25 +635,37 @@ describe('custom interpreter runtime', () => {
         success: {},
       },
     })
-    const interpreter = new CustomInterpreter<typeof machine>()
+    const timers: Array<() => void> = []
+    const interpreter = new CustomInterpreter<typeof machine>({
+      scheduleTimer: (source, id) => {
+        timers.push(() => {
+          void interpreter.runtime.sendEvent?.(source, source, {
+            type: 'xstate.timer',
+            id,
+          })
+        })
+      },
+    })
     let [state, effects] = machine.initialTransition(undefined)
-    await interpreter.executeEffects(effects)
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
     interpreter.enqueue({ type: 'SEND' })
 
     while (interpreter.hasEvents()) {
       ;[state, effects] = machine.transition(state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
-    vi.advanceTimersByTime(10)
+    for (const fire of timers) {
+      fire()
+    }
     while (interpreter.hasEvents()) {
       ;[state, effects] = machine.transition(state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
 
-    expect(state.matches('success')).toBe(true)
+    yield* expect(state.value).toEqual('success')
   })
 
-  it('delegates invoked actor lifecycle to the runtime', async () => {
+  it('delegates invoked actor lifecycle to the runtime', function*({ expect }) {
     const operations: string[] = []
     const child = createMachine({})
     const machine = createMachine({
@@ -634,17 +692,17 @@ describe('custom interpreter runtime', () => {
       },
     })
     let [state, effects] = machine.initialTransition(undefined)
-    await interpreter.executeEffects(effects)
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
     interpreter.enqueue({ type: 'EXIT' })
     while (interpreter.hasEvents()) {
       ;[state, effects] = machine.transition(state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
 
-    expect(operations).toEqual(['spawn:child', 'start:child', 'stop:child'])
+    yield* expect(operations).toEqual(['spawn:child', 'start:child', 'stop:child'])
   })
 
-  it('delegates timer scheduling and cancellation to the runtime', async () => {
+  it('delegates timer scheduling and cancellation to the runtime', function*({ expect }) {
     const operations: Array<{ type: string; id: string | undefined }> = []
     const machine = createMachine({
       initial: 'waiting',
@@ -666,23 +724,25 @@ describe('custom interpreter runtime', () => {
       },
     })
     let [state, effects] = machine.initialTransition(undefined)
-    await interpreter.executeEffects(effects)
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
     interpreter.enqueue({ type: 'EXIT' })
     while (interpreter.hasEvents()) {
       ;[state, effects] = machine.transition(state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
 
-    expect(operations.map(({ type }) => type)).toEqual(['schedule', 'cancel'])
     const firstOperation = operations[0]
     const secondOperation = operations[1]
     if (firstOperation === undefined || secondOperation === undefined) {
       throw new Error('expected two timer operations')
     }
-    expect(secondOperation.id).toBe(firstOperation.id)
+    yield* expect({
+      types: operations.map(({ type }) => type),
+      sameId: secondOperation.id === firstOperation.id,
+    }).toEqual({ types: ['schedule', 'cancel'], sameId: true })
   })
 
-  it('routes attached listener events through the custom mailbox', async () => {
+  it('routes attached listener events through the custom mailbox', function*({ expect }) {
     const child = createCallbackLogic(({ emit }) => {
       emit({ type: 'READY' })
     })
@@ -704,16 +764,16 @@ describe('custom interpreter runtime', () => {
 
     const interpreter = new CustomInterpreter<typeof machine>()
     let [state, effects] = machine.initialTransition(undefined)
-    await interpreter.executeEffects(effects)
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
     while (interpreter.hasEvents()) {
       ;[state, effects] = machine.transition(state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
 
-    expect(state.matches('ready')).toBe(true)
+    yield* expect(state.value).toEqual('ready')
   })
 
-  it('uses the same runtime lifecycle for explicitly spawned actors', async () => {
+  it('uses the same runtime lifecycle for explicitly spawned actors', function*({ expect }) {
     const operations: string[] = []
     const child = createCallbackLogic(() => {})
     const machine = createMachine({
@@ -738,17 +798,17 @@ describe('custom interpreter runtime', () => {
       },
     })
     let [state, effects] = machine.initialTransition(undefined)
-    await interpreter.executeEffects(effects)
+    yield* Effect.promise(() => interpreter.executeEffects(effects))
     interpreter.enqueue({ type: 'STOP_CHILD' })
     while (interpreter.hasEvents()) {
       ;[state, effects] = machine.transition(state, interpreter.dequeue()!)
-      await interpreter.executeEffects(effects)
+      yield* Effect.promise(() => interpreter.executeEffects(effects))
     }
 
-    expect(operations).toEqual(['spawn:child', 'start:child', 'stop:child'])
+    yield* expect(operations).toEqual(['spawn:child', 'start:child', 'stop:child'])
   })
 
-  it('needs no actor scope for machine transition methods', async () => {
+  it('needs no actor scope for machine transition methods', function*({ expect }) {
     const machine = createMachine({
       initial: 'waiting',
       states: {
@@ -759,11 +819,11 @@ describe('custom interpreter runtime', () => {
     const [waiting] = machine.initialTransition(undefined)
     const [done, effects] = machine.transition(waiting, { type: 'NEXT' })
 
-    await executeEffects(effects)
-    expect(done.matches('done')).toBe(true)
+    yield* Effect.promise(() => executeEffects(effects))
+    yield* expect(done.value).toEqual('done')
   })
 
-  it('selects the runtime when executing effects', async () => {
+  it('selects the runtime when executing effects', function*({ expect }) {
     const received: string[] = []
     const sendEvent: NonNullable<ActorSystemRuntime['sendEvent']> = (
       _source,
@@ -780,12 +840,12 @@ describe('custom interpreter runtime', () => {
     const [initial] = machine.initialTransition(undefined)
     const [, effects] = machine.transition(initial, { type: 'SEND' })
 
-    await executeEffects(effects, { sendEvent })
+    yield* Effect.promise(() => executeEffects(effects, { sendEvent }))
 
-    expect(received).toEqual(['NOTICE'])
+    yield* expect(received).toEqual(['NOTICE'])
   })
 
-  it('invokes runtime operations with the runtime as this', async () => {
+  it('invokes runtime operations with the runtime as this', function*({ expect }) {
     const runtime: Partial<ActorSystemRuntime> & { received: string[] } = {
       received: [],
       sendEvent(_source, _target, event) {
@@ -800,12 +860,12 @@ describe('custom interpreter runtime', () => {
     const [initial] = machine.initialTransition(undefined)
     const [, effects] = machine.transition(initial, { type: 'SEND' })
 
-    await effects[0].exec(runtime)
+    yield* Effect.promise(() => Promise.resolve(effects[0].exec(runtime)))
 
-    expect(runtime.received).toEqual(['NOTICE'])
+    yield* expect(runtime.received).toEqual(['NOTICE'])
   })
 
-  it('awaits runtime effects sequentially', async () => {
+  it('awaits runtime effects sequentially', function*({ expect }) {
     const operations: string[] = []
     const child = createCallbackLogic(() => {})
     const machine = createMachine({
@@ -813,21 +873,23 @@ describe('custom interpreter runtime', () => {
     })
     const [, effects] = machine.initialTransition(undefined)
 
-    await executeEffects(effects, {
-      spawnActor: async () => {
-        await Promise.resolve()
-        operations.push('spawn')
-      },
-      startActor: (actor) => {
-        operations.push('start')
-        actor.start()
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        spawnActor: async () => {
+          await Promise.resolve()
+          operations.push('spawn')
+        },
+        startActor: (actor) => {
+          operations.push('start')
+          actor.start()
+        },
+      })
+    )
 
-    expect(operations).toEqual(['spawn', 'start'])
+    yield* expect(operations).toEqual(['spawn', 'start'])
   })
 
-  it('uses the same runtime contract in createActor', () => {
+  it('uses the same runtime contract in createActor', function*({ expect }) {
     const child = createCallbackLogic(() => {})
     const machine = createMachine({
       initial: 'active',
@@ -840,19 +902,37 @@ describe('custom interpreter runtime', () => {
       },
     })
     const actor = createActor(machine)
-    const spawnActor = vi.spyOn(actor.system, 'spawnActor')
-    const startActor = vi.spyOn(actor.system, 'startActor')
-    const stopActor = vi.spyOn(actor.system, 'stopActor')
+    const system = actor.system
+    const spawnCalls: string[] = []
+    const startCalls: string[] = []
+    const stopCalls: string[] = []
+    const originalSpawn = system.spawnActor.bind(system)
+    const originalStart = system.startActor.bind(system)
+    const originalStop = system.stopActor.bind(system)
+    system.spawnActor = (source, childActor) => {
+      spawnCalls.push(childActor.id)
+      return originalSpawn(source, childActor)
+    }
+    system.startActor = (childActor) => {
+      startCalls.push(childActor.id)
+      return originalStart(childActor)
+    }
+    system.stopActor = (childActor) => {
+      stopCalls.push(childActor.id)
+      return originalStop(childActor)
+    }
 
     actor.start()
     actor.send({ type: 'EXIT' })
 
-    expect(spawnActor).toHaveBeenCalledOnce()
-    expect(startActor).toHaveBeenCalledOnce()
-    expect(stopActor).toHaveBeenCalledOnce()
+    yield* expect({ spawn: spawnCalls, start: startCalls, stop: stopCalls }).toEqual({
+      spawn: ['child'],
+      start: ['child'],
+      stop: ['child'],
+    })
   })
 
-  it('can execute an existing snapshot transition with another runtime', async () => {
+  it('can execute an existing snapshot transition with another runtime', function*({ expect }) {
     const operations: string[] = []
     const child = createCallbackLogic(() => {})
     const machine = createMachine({
@@ -865,19 +945,21 @@ describe('custom interpreter runtime', () => {
     const [inactive] = initialTransition(machine)
 
     const [, effects] = transition(machine, inactive, { type: 'START' })
-    await executeEffects(effects, {
-      spawnActor: (_source, actor) => {
-        operations.push(`spawn:${actor.id}`)
-      },
-      startActor: (actor) => {
-        operations.push(`start:${actor.id}`)
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        spawnActor: (_source, actor) => {
+          operations.push(`spawn:${actor.id}`)
+        },
+        startActor: (actor) => {
+          operations.push(`start:${actor.id}`)
+        },
+      })
+    )
 
-    expect(operations).toEqual(['spawn:child', 'start:child'])
+    yield* expect(operations).toEqual(['spawn:child', 'start:child'])
   })
 
-  it('uses the execution runtime to stop an existing child', async () => {
+  it('uses the execution runtime to stop an existing child', function*({ expect }) {
     const stopped: string[] = []
     const machine = createMachine({
       initial: 'active',
@@ -892,18 +974,21 @@ describe('custom interpreter runtime', () => {
     const [active] = initialTransition(machine)
     const [, effects] = transition(machine, active, { type: 'EXIT' })
 
-    await executeEffects(effects, {
-      stopActor: (actor) => {
-        stopped.push(actor.id)
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        stopActor: (actor) => {
+          stopped.push(actor.id)
+        },
+      })
+    )
 
-    expect(stopped).toEqual(['child'])
+    yield* expect(stopped).toEqual(['child'])
   })
 
-  it('awaits asynchronous sends before executing the next effect', async () => {
+  it('awaits asynchronous sends before executing the next effect', function*({ expect }) {
     const operations: string[] = []
     let sending = false
+    const observedBeforeSend: boolean[] = []
     const machine = createMachine({
       on: {
         SEND: ({ self }, enq) => {
@@ -915,21 +1000,26 @@ describe('custom interpreter runtime', () => {
     const [snapshot] = machine.initialTransition(undefined)
     const [, effects] = transition(machine, snapshot, { type: 'SEND' })
 
-    await executeEffects(effects, {
-      sendEvent: async (_source, _target, event) => {
-        expect(sending).toBe(false)
-        sending = true
-        await Promise.resolve()
-        await Promise.resolve()
-        operations.push(event.type)
-        sending = false
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        sendEvent: async (_source, _target, event) => {
+          observedBeforeSend.push(sending)
+          sending = true
+          await Promise.resolve()
+          await Promise.resolve()
+          operations.push(event.type)
+          sending = false
+        },
+      })
+    )
 
-    expect(operations).toEqual(['FIRST', 'SECOND'])
+    yield* expect({ observedBeforeSend, operations }).toEqual({
+      observedBeforeSend: [false, false],
+      operations: ['FIRST', 'SECOND'],
+    })
   })
 
-  it('uses the runtime for effects exposed per microstep', async () => {
+  it('uses the runtime for effects exposed per microstep', function*({ expect }) {
     const operations: string[] = []
     const machine = createMachine({
       invoke: { id: 'child', src: createCallbackLogic(() => {}) },
@@ -945,13 +1035,13 @@ describe('custom interpreter runtime', () => {
     }
 
     for (const [, effects] of microsteps) {
-      await executeEffects(effects, runtime)
+      yield* Effect.promise(() => executeEffects(effects, runtime))
     }
 
-    expect(operations).toEqual(['spawn:child', 'start:child'])
+    yield* expect(operations).toEqual(['spawn:child', 'start:child'])
   })
 
-  it('delegates emitted events to the runtime', async () => {
+  it('delegates emitted events to the runtime', function*({ expect }) {
     const emitted: string[] = []
     const machine = createMachine({
       on: {
@@ -961,12 +1051,14 @@ describe('custom interpreter runtime', () => {
     const [snapshot] = machine.initialTransition(undefined)
     const [, effects] = transition(machine, snapshot, { type: 'EMIT' })
 
-    await executeEffects(effects, {
-      emitEvent: (_source, event) => {
-        emitted.push(event.type)
-      },
-    })
+    yield* Effect.promise(() =>
+      executeEffects(effects, {
+        emitEvent: (_source, event) => {
+          emitted.push(event.type)
+        },
+      })
+    )
 
-    expect(emitted).toEqual(['NOTICE'])
+    yield* expect(emitted).toEqual(['NOTICE'])
   })
 })

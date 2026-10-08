@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { createMachine, setup } from '../src/index.js'
 
@@ -18,7 +18,7 @@ describe('event descriptor keys in `on`', () => {
     },
   })
 
-  it('rejects undeclared event keys when schemas.events is declared (setup)', () => {
+  it('rejects undeclared event keys when schemas.events is declared (setup)', function*({ expect }) {
     if (false) {
       s.createMachine({
         // @ts-expect-error - `TYPO` is not a declared event type
@@ -58,10 +58,12 @@ describe('event descriptor keys in `on`', () => {
       })
     }
 
-    expect(true).toBe(true)
+    const machine = s.createMachine({ on: { go: {} } })
+
+    yield* expect(machine.config.on).toEqual({ go: {} })
   })
 
-  it('rejects undeclared event keys when schemas.events is declared (createMachine)', () => {
+  it('rejects undeclared event keys when schemas.events is declared (createMachine)', function*({ expect }) {
     if (false) {
       createMachine({
         schemas: { events: { go: z.object({}) } },
@@ -92,10 +94,15 @@ describe('event descriptor keys in `on`', () => {
       })
     }
 
-    expect(true).toBe(true)
+    const machine = createMachine({
+      schemas: { events: { go: z.object({}) } },
+      on: { go: {} },
+    })
+
+    yield* expect(machine.config.on).toEqual({ go: {} })
   })
 
-  it('accepts declared, internal, wildcard and xstate.* descriptors', () => {
+  it('accepts declared, internal, wildcard and xstate.* descriptors', function*({ expect }) {
     s.createMachine({
       on: {
         go: ({ event }) => {
@@ -115,16 +122,16 @@ describe('event descriptor keys in `on`', () => {
       },
     })
 
-    createMachine({
+    const machine = createMachine({
       schemas: { events: { go: z.object({}) } },
       on: { go: {}, '*': {}, 'xstate.done.actor': {} },
     })
 
-    expect(true).toBe(true)
+    yield* expect(machine.config.on).toEqual({ go: {}, '*': {}, 'xstate.done.actor': {} })
   })
 
-  it('checks state configs without rejecting reserved descriptors', () => {
-    s.createStateConfig({
+  it('checks state configs without rejecting reserved descriptors', function*({ expect }) {
+    const stateConfig = s.createStateConfig({
       on: {
         'xstate.error.actor.*': ({ event }) => {
           expectType<string>(event.type)
@@ -140,9 +147,11 @@ describe('event descriptor keys in `on`', () => {
         },
       })
     }
+
+    yield* expect(Object.keys(stateConfig)).toEqual(['on'])
   })
 
-  it('stays permissive without schemas.events', () => {
+  it('stays permissive without schemas.events', function*({ expect }) {
     setup({}).createMachine({ on: { anything: () => {} } })
     createMachine({
       on: {
@@ -154,10 +163,10 @@ describe('event descriptor keys in `on`', () => {
         },
       },
     })
-    setup({
+    const machine = setup({
       schemas: { internalEvents: { tick: z.object({}) } },
     }).createMachine({ on: { anything: {} } })
 
-    expect(true).toBe(true)
+    yield* expect(machine.config.on).toEqual({ anything: {} })
   })
 })

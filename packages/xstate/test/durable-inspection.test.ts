@@ -1,11 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { createDurable } from '../src/durable/index.js'
 import { createAsyncLogic, setup } from '../src/index.js'
 import type { InspectionEvent } from '../src/inspection.js'
 
 const fraudCheck = createAsyncLogic({
   id: 'fraudCheck',
-  run: async () => 0.2,
+  run: () => Promise.resolve(0.2),
 })
 
 const machine = setup({ actors: { fraudCheck } }).createMachine({
@@ -20,7 +21,7 @@ const machine = setup({ actors: { fraudCheck } }).createMachine({
 })
 
 describe('durable execution inspection', () => {
-  it('the inspect option observes the whole run without any adapter wiring', async () => {
+  it('the inspect option observes the whole run without any adapter wiring', function*({ expect }) {
     const inspected: InspectionEvent[] = []
     const durable = createDurable(
       machine,
@@ -37,33 +38,38 @@ describe('durable execution inspection', () => {
     )
 
     const [snapshot, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
-    const done = await durable.waitForEvent()
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    const done = yield* Effect.promise(() => durable.waitForEvent())
     const [next] = durable.transition(snapshot, done)
-    expect(next.status).toBe('active')
-    expect((next as { value?: unknown }).value).toBe('approved')
 
-    const types = new Set(inspected.map((ev) => ev.type))
-    // The two-event protocol covers the whole run: actor topology (root and
-    // the invoked child, observed from construction) plus every transition.
-    expect(types).toContain('@xstate.actor')
-    expect(types).toContain('@xstate.transition')
-    const actors = inspected
+    const actorAddresses = inspected
       .filter((ev) => ev.type === '@xstate.actor')
-      .map((ev) => (ev.actorRef as { address?: string }).address)
-    expect(actors).toContain('order')
-    expect(actors).toContain('order/fraud')
-    // The completion transition is observed with its causing event.
-    expect(
-      inspected.some(
-        (ev) =>
-          ev.type === '@xstate.transition' &&
-          ev.event.type.startsWith('xstate.done.actor'),
-      ),
-    ).toBe(true)
+      .map((ev) => 'address' in ev.actorRef ? ev.actorRef.address : undefined)
+    const causingEventTypes = inspected
+      .filter((ev) => ev.type === '@xstate.transition')
+      .map((ev) => ev.event.type)
+
+    yield* expect({
+      status: next.status,
+      value: 'value' in next ? next.value : undefined,
+      observedTypes: Array.from(new Set(inspected.map((ev) => ev.type))),
+      actorAddresses,
+      causingEventTypes,
+    }).toEqual({
+      status: 'active',
+      value: 'approved',
+      observedTypes: expect.arrayContaining([
+        '@xstate.actor',
+        '@xstate.transition',
+      ]),
+      actorAddresses: expect.arrayContaining(['order', 'order/fraud']),
+      causingEventTypes: expect.arrayContaining([
+        expect.stringMatching(/^xstate\.done\.actor/),
+      ]),
+    })
   })
 
-  it('inspection is host observability only: none without the option', async () => {
+  it('inspection is host observability only: none without the option', function*({ expect }) {
     const durable = createDurable(machine, {
       executeAction: () => {},
       startActor: (actor) => {
@@ -74,8 +80,10 @@ describe('durable execution inspection', () => {
       },
     })
     const [snapshot, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
-    const [next] = durable.transition(snapshot, await durable.waitForEvent())
-    expect((next as { value?: unknown }).value).toBe('approved')
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    const done = yield* Effect.promise(() => durable.waitForEvent())
+    const [next] = durable.transition(snapshot, done)
+
+    yield* expect('value' in next ? next.value : undefined).toBe('approved')
   })
 })

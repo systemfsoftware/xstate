@@ -1,6 +1,7 @@
+import { describe, it } from '@systemfsoftware/vitest'
 import { createAsyncLogic, createMachine, types } from '@systemfsoftware/xstate'
+import { Effect } from 'effect'
 import * as fc from 'fast-check'
-import { describe, expect, it } from 'vitest'
 import { fastCheckAdapter, ModelTestFailure, propertyTest, replayTest } from '../src/index.js'
 import type { TestFixture } from '../src/index.js'
 
@@ -29,26 +30,66 @@ function fetchMachine() {
   })
 }
 
-describe('executed mode', () => {
-  it('covers both invoke branches through generated outcomes', async () => {
-    const { coverage } = await propertyTest(fetchMachine(), {
-      seed: 4,
-      numRuns: 60,
-      maxCommands: 4,
-      mode: 'executed',
-      outcomes: { fetcher: outcomeArbitrary },
-      events: { FETCH: fc.constant({}) },
-      invariant: () => {},
-    })
+function incrementedCount(args: unknown): number {
+  if (args !== null && typeof args === 'object' && 'context' in args) {
+    const context = args.context
+    if (
+      context !== null && typeof context === 'object' && 'count' in context &&
+      typeof context.count === 'number'
+    ) {
+      return context.count + 1
+    }
+  }
+  throw new Error('expected a context carrying a numeric count')
+}
 
-    expect(coverage.exploration.mode).toBe('executed')
-    expect(coverage.stateNodes.covered).toEqual(
-      expect.arrayContaining(['fetch.success', 'fetch.failure']),
+function observedCountOf(args: unknown): number {
+  if (args !== null && typeof args === 'object' && 'event' in args) {
+    const event = args.event
+    if (event !== null && typeof event === 'object' && 'snapshot' in event) {
+      const snapshot = event.snapshot
+      if (
+        snapshot !== null && typeof snapshot === 'object' && 'context' in snapshot
+      ) {
+        const context = snapshot.context
+        if (
+          context !== null && typeof context === 'object' && 'count' in context &&
+          typeof context.count === 'number'
+        ) {
+          return context.count
+        }
+      }
+    }
+  }
+  throw new Error('expected a snapshot event whose context carries a numeric count')
+}
+
+describe('executed mode', () => {
+  it('covers both invoke branches through generated outcomes', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(fetchMachine(), {
+        seed: 4,
+        numRuns: 60,
+        maxCommands: 4,
+        mode: 'executed',
+        outcomes: { fetcher: outcomeArbitrary },
+        events: { FETCH: fc.constant({}) },
+        invariant: () => {},
+      })
     )
-    expect(coverage.transitions.uncovered).toEqual([])
+
+    yield* expect({
+      mode: coverage.exploration.mode,
+      covered: coverage.stateNodes.covered,
+      uncovered: coverage.transitions.uncovered,
+    }).toEqual({
+      mode: 'executed',
+      covered: expect.arrayContaining(['fetch.success', 'fetch.failure']),
+      uncovered: [],
+    })
   })
 
-  it('reaches a delayed transition with generated advance commands', async () => {
+  it('reaches a delayed transition with generated advance commands', function*({ expect }) {
     const machine = createMachine({
       id: 'timeout',
       initial: 'idle',
@@ -60,20 +101,22 @@ describe('executed mode', () => {
       },
     })
 
-    const { coverage } = await propertyTest(machine, {
-      seed: 9,
-      numRuns: 60,
-      maxCommands: 4,
-      mode: 'executed',
-      events: { START: fc.constant({}) },
-      commands: { advance: fc.integer({ min: 100, max: 900 }) },
-      invariant: () => {},
-    })
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(machine, {
+        seed: 9,
+        numRuns: 60,
+        maxCommands: 4,
+        mode: 'executed',
+        events: { START: fc.constant({}) },
+        commands: { advance: fc.integer({ min: 100, max: 900 }) },
+        invariant: () => {},
+      })
+    )
 
-    expect(coverage.stateNodes.covered).toContain('timeout.expired')
+    yield* expect(coverage.stateNodes.covered).toContain('timeout.expired')
   })
 
-  it('runs an invoked child actor and reports its snapshots', async () => {
+  it('runs an invoked child actor and reports its snapshots', function*({ expect }) {
     const ticker = createMachine({
       id: 'ticker',
       context: { count: 0 },
@@ -81,9 +124,9 @@ describe('executed mode', () => {
       states: {
         ticking: {
           after: {
-            100: ({ context }: any) => ({
+            100: (args: unknown) => ({
               target: 'ticking',
-              context: { count: context.count + 1 },
+              context: { count: incrementedCount(args) },
             }),
           },
         },
@@ -100,8 +143,8 @@ describe('executed mode', () => {
           invoke: {
             id: 'ticker',
             src: 'ticker',
-            onSnapshot: ({ event }: any) => ({
-              context: { observed: event.snapshot.context.count },
+            onSnapshot: (args: unknown) => ({
+              context: { observed: observedCountOf(args) },
             }),
           },
           on: { NOOP: {} },
@@ -109,85 +152,108 @@ describe('executed mode', () => {
       },
     })
 
-    let sawObserved = false
-    await propertyTest(machine as any, {
-      seed: 2,
-      numRuns: 20,
-      maxCommands: 4,
-      mode: 'executed',
-      actors: { ticker: ticker as any },
-      events: { NOOP: fc.constant({}) },
-      commands: { advance: fc.integer({ min: 100, max: 300 }) },
-      invariant: ({ snapshot }: any) => {
-        if (snapshot.context.observed > 0) {
-          sawObserved = true
-        }
-      },
-    })
+    let maxObserved = 0
+    yield* Effect.promise(() =>
+      propertyTest(machine, {
+        seed: 2,
+        numRuns: 20,
+        maxCommands: 4,
+        mode: 'executed',
+        actors: { ticker },
+        events: { NOOP: fc.constant({}) },
+        commands: { advance: fc.integer({ min: 100, max: 300 }) },
+        invariant: ({ snapshot }) => {
+          maxObserved = Math.max(maxObserved, snapshot.context.observed)
+        },
+      })
+    )
 
-    expect(sawObserved).toBe(true)
+    yield* expect(maxObserved).toSatisfy(
+      (value) => value > 0,
+      'a child snapshot with a positive observed count was reported',
+    )
   })
 
-  it('replays an executed failure without the real service', async () => {
+  it('replays an executed failure without the real service', function*({ expect }) {
     const machine = fetchMachine()
     let calls = 0
 
-    const failure = (await propertyTest(machine, {
-      seed: 6,
-      numRuns: 20,
-      maxCommands: 3,
-      mode: 'executed',
-      actors: {
-        fetcher: createAsyncLogic({
-          run: async () => {
-            calls++
-            return 'ok'
-          },
-        }),
-      },
-      events: { FETCH: fc.constant({}) },
-      invariant: ({ snapshot }: any) => {
-        if (snapshot.value === 'success') {
-          throw new Error('reached success')
-        }
-      },
-    }).catch((cause) => cause)) as ModelTestFailure
-
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    const fixture = failure.fixture as TestFixture
-    expect(fixture.mode).toBe('executed')
-    expect(fixture.outcomes?.length).toBeGreaterThan(0)
-
-    calls = 0
-    await expect(
-      replayTest(machine, fixture, {
-        invariant: ({ snapshot }: any) => {
+    const failure = (yield* Effect.promise(() =>
+      propertyTest(machine, {
+        seed: 6,
+        numRuns: 20,
+        maxCommands: 3,
+        mode: 'executed',
+        actors: {
+          fetcher: createAsyncLogic({
+            run: () => {
+              calls++
+              return Promise.resolve('ok')
+            },
+          }),
+        },
+        events: { FETCH: fc.constant({}) },
+        invariant: ({ snapshot }) => {
           if (snapshot.value === 'success') {
             throw new Error('reached success')
           }
         },
-      }),
-    ).rejects.toThrow(ModelTestFailure)
-    expect(calls).toBe(0)
+      }).catch((cause) => cause)
+    )) as ModelTestFailure
+
+    const fixture = failure.fixture as TestFixture
+    yield* expect({
+      isFailure: failure instanceof ModelTestFailure,
+      fixtureMachineId: fixture.machine?.id,
+      mode: fixture.mode,
+      summaryMatchesInvariantFailure: /^Property invariant failed after \d+ steps?$/.test(failure.summary),
+      hasOutcome: (fixture.outcomes?.length ?? 0) > 0,
+    }).toEqual({
+      isFailure: true,
+      fixtureMachineId: 'fetch',
+      mode: 'executed',
+      summaryMatchesInvariantFailure: true,
+      hasOutcome: true,
+    })
+
+    calls = 0
+    const replayError = yield* Effect.promise(() =>
+      replayTest(machine, fixture, {
+        invariant: ({ snapshot }) => {
+          if (snapshot.value === 'success') {
+            throw new Error('reached success')
+          }
+        },
+      }).then(
+        () => undefined,
+        (error) => error,
+      )
+    )
+
+    yield* expect({
+      replayFailed: replayError instanceof ModelTestFailure,
+      calls,
+    }).toEqual({ replayFailed: true, calls: 0 })
   })
 
-  it('is deterministic for one seed', async () => {
-    const run = async () => {
-      const values: string[] = []
-      await propertyTest(fetchMachine(), {
+  it('is deterministic for one seed', function*({ expect }) {
+    const run = (): Promise<unknown[]> => {
+      const values: unknown[] = []
+      return propertyTest(fetchMachine(), {
         seed: 13,
         numRuns: 25,
         maxCommands: 4,
         mode: 'executed',
         outcomes: { fetcher: outcomeArbitrary },
         events: { FETCH: fc.constant({}) },
-        invariant: ({ snapshot }: any) => {
-          values.push(JSON.stringify(snapshot.value))
+        invariant: ({ snapshot }) => {
+          values.push(snapshot.value)
         },
-      })
-      return values.join('|')
+      }).then(() => values)
     }
 
-    expect(await run()).toBe(await run())
+    const first = yield* Effect.promise(() => run())
+    const second = yield* Effect.promise(() => run())
+    yield* expect({ first }).toEqual({ first: second })
   })
 })

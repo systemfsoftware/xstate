@@ -1,19 +1,19 @@
-import { setTimeout as sleep } from 'node:timers/promises'
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import z from 'zod'
 import { createAsyncLogic, createCallbackLogic, createObservableLogic } from '../src/actors/index.js'
-import { createActor, createLogic, createMachine, type DoneActorEvent } from '../src/index.js'
+import { createActor, createLogic, createMachine, type DoneActorEvent, waitFor } from '../src/index.js'
 describe('createActor()', () => {
-  it('throws in development for the removed `state` option', () => {
+  it('throws in development for the removed `state` option', function*({ expect }) {
     const logic = createMachine({})
     const persisted = createActor(logic).getPersistedSnapshot()
-    expect(() =>
+    yield* expect(() =>
       // @ts-expect-error removed; use `snapshot`
       createActor(logic, { state: persisted })
     ).toThrow('"snapshot"')
   })
 
-  it('reserves explicit IDs in the generated ID namespace', () => {
+  it('reserves explicit IDs in the generated ID namespace', function*({ expect }) {
     const logic = createMachine({})
     const root = createActor(logic)
     const explicitlyNamed = createActor(logic, {
@@ -22,18 +22,22 @@ describe('createActor()', () => {
     })
     const automaticallyNamed = createActor(logic, { parent: root })
 
-    expect(explicitlyNamed.id).toBe('x:1')
-    expect(automaticallyNamed.id).toBe('x:2')
+    yield* expect({
+      explicit: explicitlyNamed.id,
+      automatic: automaticallyNamed.id,
+    }).toEqual({ explicit: 'x:1', automatic: 'x:2' })
   })
 
   describe('createAsyncLogic', () => {
-    it('should create an unstarted actor from promise logic', () => {
+    it('should create an unstarted actor from promise logic', function*({ expect }) {
       const promiseLogic = createAsyncLogic({ run: async () => 42 })
       const actor = createActor(promiseLogic)
-      expect(actor).toBeDefined()
-      expect(actor.getSnapshot().status).toBe('active')
+      yield* expect({
+        id: actor.id,
+        status: actor.getSnapshot().status,
+      }).toMatchObject({ id: 'x:0', status: 'active' })
     })
-    it('should accept input when creating actor', async () => {
+    it('should accept input when creating actor', function*({ expect }) {
       const promiseLogic = createAsyncLogic<
         number,
         {
@@ -42,58 +46,66 @@ describe('createActor()', () => {
       >({ run: async ({ input }) => input.value * 2 })
       const actor = createActor(promiseLogic, { input: { value: 21 } })
       actor.start()
-      await sleep(10)
-      expect(actor.getSnapshot().output).toBe(42)
+      const snapshot = yield* Effect.promise(() => waitFor(actor, (emitted) => emitted.output !== undefined))
+      yield* expect(snapshot.output).toBe(42)
     })
-    it('should accept options when creating actor', () => {
+    it('should accept options when creating actor', function*({ expect }) {
       const promiseLogic = createAsyncLogic({ run: async () => 42 })
       const actor = createActor(promiseLogic, { id: 'my-promise' })
-      expect(actor.id).toBe('my-promise')
+      yield* expect(actor.id).toBe('my-promise')
     })
   })
   describe('createCallbackLogic', () => {
-    it('should create an unstarted actor from callback logic', () => {
+    it('should create an unstarted actor from callback logic', function*({ expect }) {
       const callbackLogic = createCallbackLogic(() => {})
       const actor = createActor(callbackLogic)
-      expect(actor).toBeDefined()
-      expect(actor.getSnapshot().status).toBe('active')
+      yield* expect({
+        id: actor.id,
+        status: actor.getSnapshot().status,
+      }).toMatchObject({ id: 'x:0', status: 'active' })
     })
-    it('should accept input when creating actor', () => {
+    it('should accept input when creating actor', function*({ expect }) {
       let capturedInput: string | undefined
-      const callbackLogic = createCallbackLogic<any, string>(({ input }) => {
-        capturedInput = input
-      })
+      const callbackLogic = createCallbackLogic<{ type: string }, string>(
+        ({ input }) => {
+          capturedInput = input
+        },
+      )
       const actor = createActor(callbackLogic, { input: 'hello' })
       actor.start()
-      expect(capturedInput).toBe('hello')
+      yield* expect(capturedInput).toBe('hello')
     })
   })
   describe('createObservableLogic', () => {
-    it('should create an unstarted actor from observable logic', () => {
+    it('should create an unstarted actor from observable logic', function*({ expect }) {
       const observableLogic = createObservableLogic(() => ({
         subscribe: () => ({ unsubscribe: () => {} }),
       }))
       const actor = createActor(observableLogic)
-      expect(actor).toBeDefined()
-      expect(actor.getSnapshot().status).toBe('active')
+      yield* expect({
+        id: actor.id,
+        status: actor.getSnapshot().status,
+      }).toMatchObject({ id: 'x:0', status: 'active' })
     })
   })
   describe('createLogic', () => {
-    it('should create an unstarted actor from custom logic', () => {
+    it('should create an unstarted actor from custom logic', function*({ expect }) {
       const logic = createLogic({
         context: { count: 0 },
         run: () => undefined,
       })
       const actor = createActor(logic)
-      expect(actor).toBeDefined()
-      expect(actor.getSnapshot().status).toBe('active')
-      expect(actor.getSnapshot().context.count).toBe(0)
+      yield* expect({
+        id: actor.id,
+        status: actor.getSnapshot().status,
+        count: actor.getSnapshot().context.count,
+      }).toMatchObject({ id: 'x:0', status: 'active', count: 0 })
     })
-    it('should accept input when creating actor', () => {
+    it('should accept input when creating actor', function*({ expect }) {
       const logic = createLogic<
         { count: number },
         undefined,
-        any,
+        { type: string },
         { initialCount: number }
       >({
         context: ({ input }) => ({ count: input.initialCount }),
@@ -102,11 +114,11 @@ describe('createActor()', () => {
       const actor = createActor(logic, {
         input: { initialCount: 10 },
       })
-      expect(actor.getSnapshot().context.count).toBe(10)
+      yield* expect(actor.getSnapshot().context.count).toBe(10)
     })
   })
   describe('StateMachine', () => {
-    it('should create an unstarted actor from machine logic', () => {
+    it('should create an unstarted actor from machine logic', function*({ expect }) {
       const machine = createMachine({
         initial: 'idle',
         states: {
@@ -114,11 +126,13 @@ describe('createActor()', () => {
         },
       })
       const actor = createActor(machine)
-      expect(actor).toBeDefined()
-      expect(actor.getSnapshot().status).toBe('active')
-      expect(actor.getSnapshot().value).toBe('idle')
+      yield* expect({
+        id: actor.id,
+        status: actor.getSnapshot().status,
+        value: actor.getSnapshot().value,
+      }).toMatchObject({ id: 'x:0', status: 'active', value: 'idle' })
     })
-    it('should accept input when creating actor', () => {
+    it('should accept input when creating actor', function*({ expect }) {
       const machine = createMachine({
         schemas: {
           context: z.object({ value: z.number() }),
@@ -131,9 +145,9 @@ describe('createActor()', () => {
         },
       })
       const actor = createActor(machine, { input: { initialValue: 42 } })
-      expect(actor.getSnapshot().context.value).toBe(42)
+      yield* expect(actor.getSnapshot().context.value).toBe(42)
     })
-    it('should accept options when creating actor', () => {
+    it('should accept options when creating actor', function*({ expect }) {
       const machine = createMachine({
         initial: 'idle',
         states: {
@@ -141,12 +155,12 @@ describe('createActor()', () => {
         },
       })
       const actor = createActor(machine, { id: 'my-machine' })
-      expect(actor.id).toBe('my-machine')
+      yield* expect(actor.id).toBe('my-machine')
     })
   })
 })
 describe('invoke.src accepting actor logic', () => {
-  it('should accept a function returning actor logic', async () => {
+  it('should accept a function returning actor logic', function*({ expect }) {
     const promiseLogic = createAsyncLogic({ run: async () => 'done' })
     const machine = createMachine({
       schemas: {
@@ -171,11 +185,13 @@ describe('invoke.src accepting actor logic', () => {
     })
     const actor = createActor(machine)
     actor.start()
-    await sleep(20)
-    expect(actor.getSnapshot().value).toBe('success')
-    expect(actor.getSnapshot().context.result).toBe('done')
+    yield* Effect.promise(() => waitFor(actor, (snapshot) => snapshot.matches('success')))
+    yield* expect({
+      value: actor.getSnapshot().value,
+      result: actor.getSnapshot().context.result,
+    }).toEqual({ value: 'success', result: 'done' })
   })
-  it('should pass mapped input to returned actor logic', async () => {
+  it('should pass mapped input to returned actor logic', function*({ expect }) {
     const promiseLogic = createAsyncLogic<
       string,
       {
@@ -234,11 +250,13 @@ describe('invoke.src accepting actor logic', () => {
     })
     const actor = createActor(machine)
     actor.start()
-    await sleep(20)
-    expect(actor.getSnapshot().value).toBe('success')
-    expect(actor.getSnapshot().context.result).toBe('hello')
+    yield* Effect.promise(() => waitFor(actor, (snapshot) => snapshot.matches('success')))
+    yield* expect({
+      value: actor.getSnapshot().value,
+      result: actor.getSnapshot().context.result,
+    }).toEqual({ value: 'success', result: 'hello' })
   })
-  it('should accept a string actor logic reference', async () => {
+  it('should accept a string actor logic reference', function*({ expect }) {
     const promiseLogic = createAsyncLogic({ run: async () => 'from-actors' })
     const machine = createMachine({
       actors: {
@@ -266,8 +284,10 @@ describe('invoke.src accepting actor logic', () => {
     })
     const actor = createActor(machine)
     actor.start()
-    await sleep(20)
-    expect(actor.getSnapshot().value).toBe('success')
-    expect(actor.getSnapshot().context.result).toBe('from-actors')
+    yield* Effect.promise(() => waitFor(actor, (snapshot) => snapshot.matches('success')))
+    yield* expect({
+      value: actor.getSnapshot().value,
+      result: actor.getSnapshot().context.result,
+    }).toEqual({ value: 'success', result: 'from-actors' })
   })
 })

@@ -1,9 +1,21 @@
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { describe, expect, it, vi } from 'vitest'
 import { createActor, createMachine, initialTransition, transition } from '../src/index.js'
 
+const errorMessageOf = (value: unknown): string => value instanceof Error ? value.message : String(value)
+
+const messageWhenCalled = (call: () => unknown): string => {
+  try {
+    call()
+  } catch (error) {
+    return errorMessageOf(error)
+  }
+  throw new Error('expected the call to throw')
+}
+
 describe('async transition functions', () => {
-  it('throws a synchronous execution error when a transition function returns a promise', () => {
+  it('throws a synchronous execution error when a transition function returns a promise', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
@@ -15,28 +27,33 @@ describe('async transition functions', () => {
       },
     })
     const [snapshot] = initialTransition(machine)
+    const transitionMessage = messageWhenCalled(() => transition(machine, snapshot, { type: 'LOAD' }))
 
-    expect(() => transition(machine, snapshot, { type: 'LOAD' })).toThrow(
-      'Transition functions must be synchronous. Transition for event "LOAD" in state "(machine).idle" returned a promise. Move async work into an invoked or spawned actor, or enq.effect.',
-    )
-
-    const error = vi.fn()
+    const reportedErrors: unknown[] = []
     const actor = createActor(machine)
-    actor.subscribe({ error })
+    actor.subscribe({
+      error: (thrown) => {
+        reportedErrors.push(thrown)
+      },
+    })
     actor.start()
     actor.send({ type: 'LOAD' })
 
-    expect(actor.getSnapshot().status).toBe('error')
-    expect(error).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: expect.stringContaining(
-          'Transition functions must be synchronous',
-        ),
-      }),
-    )
+    yield* expect({
+      transitionMessage,
+      status: actor.getSnapshot().status,
+      errorMessages: reportedErrors.map((thrown) => errorMessageOf(thrown)),
+    }).toEqual({
+      transitionMessage:
+        'Transition functions must be synchronous. Transition for event "LOAD" in state "(machine).idle" returned a promise. Move async work into an invoked or spawned actor, or enq.effect.',
+      status: 'error',
+      errorMessages: [
+        'Transition functions must be synchronous. Transition for event "LOAD" in state "(machine).idle" returned a promise. Move async work into an invoked or spawned actor, or enq.effect.',
+      ],
+    })
   })
 
-  it('lets state onError recover from an async transition function', () => {
+  it('lets state onError recover from an async transition function', function*({ expect }) {
     const actor = createActor(
       createMachine({
         initial: 'idle',
@@ -51,21 +68,21 @@ describe('async transition functions', () => {
     ).start()
     actor.send({ type: 'LOAD' })
 
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(actor.getSnapshot().value).toBe('failed')
+    yield* expect({
+      status: actor.getSnapshot().status,
+      value: actor.getSnapshot().value,
+    }).toEqual({ status: 'active', value: 'failed' })
   })
 
-  it('throws when enq.* is called after the transition function returned', () => {
+  it('throws when enq.* is called after the transition function returned', function*({ expect }) {
     const handles: any[] = []
     const actor = createActor(
       createMachine({
         on: {
-          // selection-phase handle (no enq call during the function)
           KEEP: (_, enq) => {
             handles.push(enq)
             return {}
           },
-          // execution-phase handle (enq called during the function)
           KEEP_AND_RAISE: (_, enq) => {
             handles.push(enq)
             enq.raise({ type: 'noop' })
@@ -76,18 +93,23 @@ describe('async transition functions', () => {
     actor.send({ type: 'KEEP' })
     actor.send({ type: 'KEEP_AND_RAISE' })
 
-    expect(handles.length).toBeGreaterThanOrEqual(2)
-    for (const enq of handles) {
-      expect(() => enq.raise({ type: 'late' })).toThrow(
-        'enq.* called after the transition function returned',
-      )
-    }
-    expect(actor.getSnapshot().status).toBe('active')
+    yield* expect({
+      handlesAtLeastTwo: handles.length >= 2,
+      lateRaiseMessages: handles.map((enq) => messageWhenCalled(() => enq.raise({ type: 'late' }))),
+      status: actor.getSnapshot().status,
+    }).toEqual({
+      handlesAtLeastTwo: true,
+      lateRaiseMessages: handles.map(() => 'enq.* called after the transition function returned'),
+      status: 'active',
+    })
   })
 
-  it('does not leak an unhandled rejection from an async transition function', async () => {
-    const unhandled = vi.fn()
-    process.on('unhandledRejection', unhandled)
+  it('does not leak an unhandled rejection from an async transition function', function*({ expect }) {
+    const rejections: unknown[] = []
+    const recordRejection = (reason: unknown) => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', recordRejection)
     try {
       const actor = createActor(
         createMachine({
@@ -102,15 +124,15 @@ describe('async transition functions', () => {
       actor.subscribe({ error: () => {} })
       actor.start()
       actor.send({ type: 'LOAD' })
-      await sleep(10)
+      yield* Effect.promise(() => sleep(10))
     } finally {
-      process.off('unhandledRejection', unhandled)
+      process.off('unhandledRejection', recordRejection)
     }
 
-    expect(unhandled).not.toHaveBeenCalled()
+    yield* expect(rejections).toEqual([])
   })
 
-  it('treats an async two-argument entry function as an execution error recoverable by onError', () => {
+  it('treats an async two-argument entry function as an execution error recoverable by onError', function*({ expect }) {
     const actor = createActor(
       createMachine({
         initial: 'idle',
@@ -130,11 +152,13 @@ describe('async transition functions', () => {
     ).start()
     actor.send({ type: 'GO' })
 
-    expect(actor.getSnapshot().status).toBe('active')
-    expect(actor.getSnapshot().value).toBe('failed')
+    yield* expect({
+      status: actor.getSnapshot().status,
+      value: actor.getSnapshot().value,
+    }).toEqual({ status: 'active', value: 'failed' })
   })
 
-  it('throws a sync-only error when an entry or exit function returns a promise', () => {
+  it('throws a sync-only error when an entry or exit function returns a promise', function*({ expect }) {
     const entryMachine = createMachine({
       initial: 'idle',
       states: {
@@ -143,9 +167,7 @@ describe('async transition functions', () => {
       },
     })
     const [entrySnapshot] = initialTransition(entryMachine)
-    expect(() => transition(entryMachine, entrySnapshot, { type: 'GO' })).toThrow(
-      'Entry functions must be synchronous. The entry function of state "(machine).loading" returned a promise (event "GO").',
-    )
+    const entryMessage = messageWhenCalled(() => transition(entryMachine, entrySnapshot, { type: 'GO' }))
 
     const exitMachine = createMachine({
       initial: 'idle',
@@ -158,12 +180,17 @@ describe('async transition functions', () => {
       },
     })
     const [exitSnapshot] = initialTransition(exitMachine)
-    expect(() => transition(exitMachine, exitSnapshot, { type: 'GO' })).toThrow(
-      'Exit functions must be synchronous. The exit function of state "(machine).idle" returned a promise (event "GO").',
-    )
+    const exitMessage = messageWhenCalled(() => transition(exitMachine, exitSnapshot, { type: 'GO' }))
+
+    yield* expect({ entryMessage, exitMessage }).toEqual({
+      entryMessage:
+        'Entry functions must be synchronous. The entry function of state "(machine).loading" returned a promise (event "GO"). Move async work into an invoked or spawned actor, or enq.effect.',
+      exitMessage:
+        'Exit functions must be synchronous. The exit function of state "(machine).idle" returned a promise (event "GO"). Move async work into an invoked or spawned actor, or enq.effect.',
+    })
   })
 
-  it('throws when enq.* is called after an entry function returned', () => {
+  it('throws when enq.* is called after an entry function returned', function*({ expect }) {
     let handle: any
     const actor = createActor(
       createMachine({
@@ -173,16 +200,25 @@ describe('async transition functions', () => {
       }),
     ).start()
 
-    expect(handle).toBeDefined()
-    expect(() => handle.raise({ type: 'late' })).toThrow(
-      'enq.* called after the transition function returned',
-    )
-    expect(actor.getSnapshot().status).toBe('active')
+    yield* expect({
+      handleDefined: handle !== undefined,
+      lateRaiseMessage: handle === undefined
+        ? undefined
+        : messageWhenCalled(() => handle.raise({ type: 'late' })),
+      status: actor.getSnapshot().status,
+    }).toEqual({
+      handleDefined: true,
+      lateRaiseMessage: 'enq.* called after the transition function returned',
+      status: 'active',
+    })
   })
 
-  it('does not leak an unhandled rejection from an async entry function', async () => {
-    const unhandled = vi.fn()
-    process.on('unhandledRejection', unhandled)
+  it('does not leak an unhandled rejection from an async entry function', function*({ expect }) {
+    const rejections: unknown[] = []
+    const recordRejection = (reason: unknown) => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', recordRejection)
     try {
       const actor = createActor(
         createMachine({
@@ -194,12 +230,12 @@ describe('async transition functions', () => {
       )
       actor.subscribe({ error: () => {} })
       actor.start()
-      expect(actor.getSnapshot().status).toBe('error')
-      await sleep(10)
+      yield* expect(actor.getSnapshot().status).toBe('error')
+      yield* Effect.promise(() => sleep(10))
     } finally {
-      process.off('unhandledRejection', unhandled)
+      process.off('unhandledRejection', recordRejection)
     }
 
-    expect(unhandled).not.toHaveBeenCalled()
+    yield* expect(rejections).toEqual([])
   })
 })

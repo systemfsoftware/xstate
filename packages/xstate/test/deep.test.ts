@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine } from '../src/index.js'
 import { trackEntries } from './utils.js'
 
 describe('deep transitions', () => {
   describe('exiting super/substates', () => {
-    it('should exit all substates when superstates exits', () => {
+    it('should exit all substates when superstates exits', function*({ expect }) {
       const machine = createMachine({
         id: 'root',
         initial: 'A',
@@ -42,7 +42,7 @@ describe('deep transitions', () => {
         type: 'A_EVENT',
       })
 
-      expect(flushTracked()).toEqual([
+      yield* expect(flushTracked()).toEqual([
         'exit: A.B.C.D',
         'exit: A.B.C',
         'exit: A.B',
@@ -51,7 +51,7 @@ describe('deep transitions', () => {
       ])
     })
 
-    it('should exit substates and superstates when exiting (B_EVENT)', () => {
+    it('should exit substates and superstates when exiting (B_EVENT)', function*({ expect }) {
       const machine = createMachine({
         id: 'root',
         initial: 'A',
@@ -88,7 +88,7 @@ describe('deep transitions', () => {
         type: 'B_EVENT',
       })
 
-      expect(flushTracked()).toEqual([
+      yield* expect(flushTracked()).toEqual([
         'exit: A.B.C.D',
         'exit: A.B.C',
         'exit: A.B',
@@ -97,7 +97,7 @@ describe('deep transitions', () => {
       ])
     })
 
-    it('should exit substates and superstates when exiting (C_EVENT)', () => {
+    it('should exit substates and superstates when exiting (C_EVENT)', function*({ expect }) {
       const machine = createMachine({
         id: 'root',
         initial: 'A',
@@ -134,7 +134,7 @@ describe('deep transitions', () => {
         type: 'C_EVENT',
       })
 
-      expect(flushTracked()).toEqual([
+      yield* expect(flushTracked()).toEqual([
         'exit: A.B.C.D',
         'exit: A.B.C',
         'exit: A.B',
@@ -143,7 +143,7 @@ describe('deep transitions', () => {
       ])
     })
 
-    it('should exit superstates when exiting (D_EVENT)', () => {
+    it('should exit superstates when exiting (D_EVENT)', function*({ expect }) {
       const machine = createMachine({
         id: 'root',
         initial: 'A',
@@ -181,7 +181,7 @@ describe('deep transitions', () => {
         type: 'D_EVENT',
       })
 
-      expect(flushTracked()).toEqual([
+      yield* expect(flushTracked()).toEqual([
         'exit: A.B.C.D',
         'exit: A.B.C',
         'exit: A.B',
@@ -190,7 +190,7 @@ describe('deep transitions', () => {
       ])
     })
 
-    it('should exit substate when machine handles event (MACHINE_EVENT)', () => {
+    it('should exit substate when machine handles event (MACHINE_EVENT)', function*({ expect }) {
       const machine = createMachine({
         id: 'deep',
         initial: 'A',
@@ -227,7 +227,7 @@ describe('deep transitions', () => {
         type: 'MACHINE_EVENT',
       })
 
-      expect(flushTracked()).toEqual([
+      yield* expect(flushTracked()).toEqual([
         'exit: A.B.C.D',
         'exit: A.B.C',
         'exit: A.B',
@@ -236,7 +236,7 @@ describe('deep transitions', () => {
       ])
     })
 
-    it('should exit deep and enter deep (A_S)', () => {
+    it('should exit deep and enter deep (A_S)', function*({ expect }) {
       const machine = createMachine({
         id: 'root',
         initial: 'A',
@@ -287,7 +287,7 @@ describe('deep transitions', () => {
         type: 'A_S',
       })
 
-      expect(flushTracked()).toEqual([
+      yield* expect(flushTracked()).toEqual([
         'exit: A.B.C.D',
         'exit: A.B.C',
         'exit: A.B',
@@ -299,7 +299,7 @@ describe('deep transitions', () => {
       ])
     })
 
-    it('should exit deep and enter deep (D_P)', () => {
+    it('should exit deep and enter deep (D_P)', function*({ expect }) {
       const machine = createMachine({
         id: 'deep',
         initial: 'A',
@@ -352,7 +352,7 @@ describe('deep transitions', () => {
         type: 'D_P',
       })
 
-      expect(flushTracked()).toEqual([
+      yield* expect(flushTracked()).toEqual([
         'exit: A.B.C.D',
         'exit: A.B.C',
         'exit: A.B',
@@ -364,71 +364,74 @@ describe('deep transitions', () => {
       ])
     })
 
-    it('should exit deep and enter deep when targeting an ancestor of the final resolved deep target', () => {
-      const machine = createMachine({
-        id: 'root',
-        initial: 'A',
-        states: {
-          A: {
-            on: {
-              A_P: { target: '#root.P' },
+    it(
+      'should exit deep and enter deep when targeting an ancestor of the final resolved deep target',
+      function*({ expect }) {
+        const machine = createMachine({
+          id: 'root',
+          initial: 'A',
+          states: {
+            A: {
+              on: {
+                A_P: { target: '#root.P' },
+              },
+              initial: 'B',
+              states: {
+                B: {
+                  initial: 'C',
+                  states: {
+                    C: {
+                      initial: 'D',
+                      states: {
+                        D: {},
+                      },
+                    },
+                  },
+                },
+              },
             },
-            initial: 'B',
-            states: {
-              B: {
-                initial: 'C',
-                states: {
-                  C: {
-                    initial: 'D',
-                    states: {
-                      D: {},
+            P: {
+              initial: 'Q',
+              states: {
+                Q: {
+                  initial: 'R',
+                  states: {
+                    R: {
+                      initial: 'S',
+                      states: {
+                        S: {},
+                      },
                     },
                   },
                 },
               },
             },
           },
-          P: {
-            initial: 'Q',
-            states: {
-              Q: {
-                initial: 'R',
-                states: {
-                  R: {
-                    initial: 'S',
-                    states: {
-                      S: {},
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      })
+        })
 
-      const flushTracked = trackEntries(machine)
+        const flushTracked = trackEntries(machine)
 
-      const actor = createActor(machine).start()
-      flushTracked()
+        const actor = createActor(machine).start()
+        flushTracked()
 
-      actor.send({
-        type: 'A_P',
-      })
+        actor.send({
+          type: 'A_P',
+        })
 
-      expect(flushTracked()).toEqual([
-        'exit: A.B.C.D',
-        'exit: A.B.C',
-        'exit: A.B',
-        'exit: A',
-        'enter: P',
-        'enter: P.Q',
-        'enter: P.Q.R',
-        'enter: P.Q.R.S',
-      ])
-    })
+        yield* expect(flushTracked()).toEqual([
+          'exit: A.B.C.D',
+          'exit: A.B.C',
+          'exit: A.B',
+          'exit: A',
+          'enter: P',
+          'enter: P.Q',
+          'enter: P.Q.R',
+          'enter: P.Q.R.S',
+        ])
+      },
+    )
 
-    it('should exit deep and enter deep when targeting a deep state', () => {
+    it('should exit deep and enter deep when targeting a deep state', function*({ expect }) {
       const machine = createMachine({
         id: 'root',
         initial: 'A',
@@ -481,7 +484,7 @@ describe('deep transitions', () => {
         type: 'D_S',
       })
 
-      expect(flushTracked()).toEqual([
+      yield* expect(flushTracked()).toEqual([
         'exit: A.B.C.D',
         'exit: A.B.C',
         'exit: A.B',

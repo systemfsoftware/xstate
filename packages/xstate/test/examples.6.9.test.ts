@@ -1,4 +1,4 @@
-import { describe } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
 import { createMachine } from '../src/index.js'
 import { testAll } from './utils.js'
 
@@ -45,7 +45,7 @@ describe('Example 6.9', () => {
       H: {
         on: {
           1: { target: 'A.hist' },
-          7: { target: 'A.deepHist' }, // 6.10
+          7: { target: 'A.deepHist' },
         },
       },
     },
@@ -64,10 +64,8 @@ describe('Example 6.9', () => {
       6: 'H',
       FAKE: undefined,
 
-      // history
       '5, 6, 1': { A: { C: 'G' } },
       '3, 6, 1': { A: { B: 'E' } }, // not A.B.D because not deep history
-      // '3, 6, 7': 'A.B.D'
     },
     '{"A":"C"}': {
       2: { A: { C: 'F' } },

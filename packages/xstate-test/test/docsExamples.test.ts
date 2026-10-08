@@ -1,8 +1,4 @@
-/**
- * Runs the code examples in `packages/xstate-test/README.md`. Each `it` is
- * named after the README section its snippet comes from, so a failure here
- * points at the section that went stale.
- */
+import { describe, it } from '@systemfsoftware/vitest'
 import {
   createAsyncLogic,
   createMachine,
@@ -14,12 +10,13 @@ import {
   types,
 } from '@systemfsoftware/xstate'
 import { getShortestPaths } from '@systemfsoftware/xstate/graph'
+import { Cause, Effect, Exit } from 'effect'
 import * as Schema from 'effect/Schema'
 import * as fc from 'fast-check'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it, it as vitestIt, vi } from 'vitest'
+import { afterAll } from 'vitest'
 import * as z from 'zod'
 import { fromEffectSchemas } from '../src/effect-schema.js'
 import {
@@ -51,10 +48,7 @@ import {
   withScheduledSut,
 } from '../src/index.js'
 import { createPlaywrightSut } from '../src/playwright.js'
-import { it as modelIt, withModelTests } from '../src/vitest.js'
 import { FakePage, FakeTestInfo } from './fakePage.js'
-
-// ---------------------------------------------------------------- Quick start
 
 const cartMachine = createMachine({
   id: 'cart',
@@ -142,170 +136,202 @@ function createCartSut({ buggy = false } = {}): TestSut<
 
 const cartSut = createCartSut()
 
-/** The dimension lines of a formatted report, as pasted in the README. */
 function dimensionLines(report: string): string[] {
   return report.split('\n').filter((line) => / covered \(/.test(line))
 }
 
+const rejectionOf = (promise: () => unknown): Effect.Effect<unknown> =>
+  Effect.exit(Effect.promise(() => Promise.resolve(promise()))).pipe(
+    Effect.flatMap((exit) =>
+      Exit.isSuccess(exit)
+        ? Effect.die(new Error('expected the call to reject'))
+        : Effect.succeed(Cause.squash(exit.cause))
+    ),
+  )
+
 describe('README: Quick start', () => {
-  it('Generate random sequences with propertyTest()', async () => {
-    const { coverage } = await propertyTest(cartMachine, {
-      seed: 1,
-      numRuns: 100,
-      events,
-      sut: cartSut,
-    })
+  it('Generate random sequences with propertyTest()', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        numRuns: 100,
+        events,
+        sut: cartSut,
+      })
+    )
     const report = formatTestCoverage(coverage)
 
-    expect(dimensionLines(report).slice(0, 6)).toEqual([
-      'states: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'stateNodes: 3/3 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'configurations: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'statuses: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'eventTypes: 4/4 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'transitions: 3/3 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-    ])
-    expect(report).toContain(
-      '  - ADD / default: 154 generated, 115 applicable, 115 executed, 39 ignored\n' +
-        '  - CHECKOUT / default: 170 generated, 126 applicable, 126 executed, 44 ignored\n' +
-        '  - REMOVE / default: 147 generated, 112 applicable, 112 executed, 35 ignored',
-    )
+    yield* expect({
+      dimensions: dimensionLines(report).slice(0, 6),
+      eventCases: report.includes(
+        '  - ADD / default: 154 generated, 115 applicable, 115 executed, 39 ignored\n' +
+          '  - CHECKOUT / default: 170 generated, 126 applicable, 126 executed, 44 ignored\n' +
+          '  - REMOVE / default: 147 generated, 112 applicable, 112 executed, 35 ignored',
+      ),
+    }).toEqual({
+      dimensions: [
+        'states: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'stateNodes: 3/3 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'configurations: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'statuses: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'eventTypes: 4/4 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'transitions: 3/3 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+      ],
+      eventCases: true,
+    })
   })
 
-  it('Walk the state graph with testPaths()', async () => {
-    const { coverage, results } = await testPaths(cartMachine, {
-      pathGenerator: 'simple',
-      events,
-      sut: cartSut,
-      stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
+  it('Walk the state graph with testPaths()', function*({ expect }) {
+    const { coverage, results } = yield* Effect.promise(() =>
+      testPaths(cartMachine, {
+        pathGenerator: 'simple',
+        events,
+        sut: cartSut,
+        stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
+      })
+    )
+
+    yield* expect({
+      resultCount: results.length,
+      dimensions: dimensionLines(formatTestCoverage(coverage)).slice(0, 6),
+    }).toEqual({
+      resultCount: 15,
+      dimensions: [
+        'states: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'stateNodes: 3/3 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'configurations: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'statuses: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'eventTypes: 4/4 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+        'transitions: 3/3 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
+      ],
     })
 
-    expect(results).toHaveLength(15)
-    expect(dimensionLines(formatTestCoverage(coverage)).slice(0, 6)).toEqual([
-      'states: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'stateNodes: 3/3 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'configurations: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'statuses: 2/2 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'eventTypes: 4/4 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-      'transitions: 3/3 covered (100.0%), 0 uncovered, 0 unreachable, 0 unknown',
-    ])
-
-    // The README's claim: the default shortest paths never take `REMOVE`.
-    const shortest = await testPaths(cartMachine, {
-      events,
-      sut: cartSut,
-      stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
-    })
-    expect(shortest.coverage.eventTypes.uncovered).toEqual(['REMOVE'])
+    const shortest = yield* Effect.promise(() =>
+      testPaths(cartMachine, {
+        events,
+        sut: cartSut,
+        stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
+      })
+    )
+    yield* expect(shortest.coverage.eventTypes.uncovered).toEqual(['REMOVE'])
   })
 })
 
-// ------------------------------------------------------------------- Concepts
-
 describe('README: Concepts', () => {
-  it('Events', async () => {
+  it('Events', function*({ expect }) {
     const seen: string[] = []
-    await propertyTest(cartMachine, {
-      seed: 1,
-      numRuns: 20,
-      events: {
-        ADD: [
-          { case: 'apple', generate: fc.constant({ sku: 'apple' }) },
-          {
-            case: 'known-sku',
-            generate: fc.constantFrom('apple', 'pear'),
-            resolve: ({ generated }) => ({ sku: generated as string }),
-            when: ({ snapshot }) => Object.keys(snapshot.context.items).length < 3,
-          },
-        ],
-      },
-      sut: {
-        create: () => ({
-          send: (_event, context) => {
-            seen.push(`${context.case?.type}.${context.case?.name}`)
-          },
-        }),
-      },
-    })
+    yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        numRuns: 20,
+        events: {
+          ADD: [
+            { case: 'apple', generate: fc.constant({ sku: 'apple' }) },
+            {
+              case: 'known-sku',
+              generate: fc.constantFrom('apple', 'pear'),
+              resolve: ({ generated }) => ({ sku: generated as string }),
+              when: ({ snapshot }) => Object.keys(snapshot.context.items).length < 3,
+            },
+          ],
+        },
+        sut: {
+          create: () => ({
+            send: (_event, context) => {
+              seen.push(`${context.case?.type}.${context.case?.name}`)
+            },
+          }),
+        },
+      })
+    )
 
-    expect(new Set(seen)).toEqual(new Set(['ADD.apple', 'ADD.known-sku']))
+    yield* expect(new Set(seen)).toEqual(new Set(['ADD.apple', 'ADD.known-sku']))
   })
 
-  it('Events: testPaths() offers unconfigured event types as bare events', async () => {
-    const { coverage } = await testPaths(cartMachine, {
-      events: { ADD: fc.record({ sku: fc.constant('apple') }) },
-      stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
-    })
-    expect(coverage.eventTypes.covered).toContain('CHECKOUT')
+  it('Events: testPaths() offers unconfigured event types as bare events', function*({
+    expect,
+  }) {
+    const { coverage } = yield* Effect.promise(() =>
+      testPaths(cartMachine, {
+        events: { ADD: fc.record({ sku: fc.constant('apple') }) },
+        stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
+      })
+    )
+    yield* expect(coverage.eventTypes.covered).toContain('CHECKOUT')
   })
 
-  it('Events: a non-object payload fails the run', async () => {
-    await expect(
+  it('Events: a non-object payload fails the run', function*({ expect }) {
+    const error = yield* rejectionOf(() =>
       propertyTest(cartMachine, {
         seed: 1,
         numRuns: 5,
         events: { ADD: fc.constant('apple') as never },
-      }),
-    ).rejects.toThrow(/ADD/)
+      })
+    )
+    yield* expect(error instanceof Error ? error.message : String(error)).toMatch(
+      /ADD/,
+    )
   })
 
-  it('The sut option', async () => {
+  it('The sut option', function*({ expect }) {
     let created = 0
     let disposed = 0
-    await propertyTest(cartMachine, {
-      seed: 1,
-      numRuns: 10,
-      events,
-      sut: {
-        create: () => {
-          created++
-          const cart = createCart()
-          return {
-            send: (event) => {
-              if (event.type === 'ADD') {
-                cart.add(event.sku)
-              }
-              if (event.type === 'REMOVE') {
-                cart.remove(event.sku)
-              }
-            },
-            read: () => cart.items(),
-            dispose: () => {
-              disposed++
-            },
-          }
+    yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        numRuns: 10,
+        events,
+        sut: {
+          create: () => {
+            created++
+            const cart = createCart()
+            return {
+              send: (event) => {
+                if (event.type === 'ADD') {
+                  cart.add(event.sku)
+                }
+                if (event.type === 'REMOVE') {
+                  cart.remove(event.sku)
+                }
+              },
+              read: () => cart.items(),
+              dispose: () => {
+                disposed++
+              },
+            }
+          },
+          projectModel: (snapshot) => snapshot.context.items,
         },
-        projectModel: (snapshot) => snapshot.context.items,
-      },
-    })
+      })
+    )
 
-    expect(created).toBe(10)
-    expect(disposed).toBe(created)
+    yield* expect({ created, disposed }).toEqual({ created: 10, disposed: 10 })
   })
 
-  it('Oracles: states keys match state values and ids', async () => {
+  it('Oracles: states keys match state values and ids', function*({ expect }) {
     const hits = new Set<string>()
-    await testPaths(cartMachine, {
-      // A descriptor rather than a bare arbitrary: `testPaths()` samples bare
-      // arbitraries into functions, and a map of functions next to `states`
-      // without a `sut` is rejected as a pre-2.0 `TestParam`.
-      events: {
-        ADD: [{ case: 'apple', generate: fc.constant({ sku: 'apple' }) }],
-      },
-      stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
-      states: {
-        shopping: () => {
-          hits.add('shopping')
+    yield* Effect.promise(() =>
+      testPaths(cartMachine, {
+        events: {
+          ADD: [{ case: 'apple', generate: fc.constant({ sku: 'apple' }) }],
         },
-        '#cart.checkedOut': () => {
-          hits.add('checkedOut')
+        stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
+        states: {
+          shopping: () => {
+            hits.add('shopping')
+          },
+          '#cart.checkedOut': () => {
+            hits.add('checkedOut')
+          },
         },
-      },
-    })
-    expect(hits).toEqual(new Set(['shopping', 'checkedOut']))
+      })
+    )
+    yield* expect(hits).toEqual(new Set(['shopping', 'checkedOut']))
   })
 
-  it("Oracles: '*' and meta.test run on a plain machine", async () => {
+  it("Oracles: '*' and meta.test run on a plain machine", function*({
+    expect,
+  }) {
     const calls: string[] = []
     const machine = createMachine({
       schemas: {
@@ -326,19 +352,21 @@ describe('README: Concepts', () => {
         done: {},
       },
     })
-    await testPaths(machine, {
-      states: {
-        '*': (snapshot) => {
-          calls.push(`*:${String(snapshot.value)}`)
+    yield* Effect.promise(() =>
+      testPaths(machine, {
+        states: {
+          '*': (snapshot) => {
+            calls.push(`*:${String(snapshot.value)}`)
+          },
         },
-      },
-    })
-    expect(calls).toContain('meta:idle:undefined')
-    expect(calls).toContain('*:done')
+      })
+    )
+    yield* expect({
+      metaIdle: calls.includes('meta:idle:undefined'),
+      done: calls.includes('*:done'),
+    }).toEqual({ metaIdle: true, done: true })
   })
 })
-
-// -------------------------------------------------------------- How-to guides
 
 const counterMachine = setup({
   schemas: {
@@ -363,9 +391,7 @@ const orderMachine = setup({
   },
   actors: {
     chargeCard: createAsyncLogic({
-      run: async (): Promise<{ id: string }> => {
-        throw new Error('the real service must not run in tests')
-      },
+      run: (): Promise<{ id: string }> => Promise.reject(new Error('the real service must not run in tests')),
     }),
   },
 }).createMachine({
@@ -388,139 +414,166 @@ const orderMachine = setup({
 })
 
 describe('README: How-to guides', () => {
-  it('Derive event generators from schemas', async () => {
+  it('Derive event generators from schemas', function*({ expect }) {
+    const counts: number[] = []
     const byValues: number[] = []
-    await propertyTest(counterMachine, {
-      seed: 1,
-      numRuns: 30,
-      invariant: ({ snapshot, event }) => {
-        expect(snapshot.context['count']).toBeGreaterThanOrEqual(0)
-        if (event?.type === 'INC') {
-          byValues.push(event.by)
-        }
-      },
-    })
-    expect(byValues.length).toBeGreaterThan(0)
-    expect(
-      byValues.every((by) => Number.isInteger(by) && by >= 1 && by <= 5),
-    ).toBe(true)
+    yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 1,
+        numRuns: 30,
+        invariant: ({ snapshot, event }) => {
+          counts.push(snapshot.context['count'])
+          if (event?.type === 'INC') {
+            byValues.push(event.by)
+          }
+        },
+      })
+    )
+    yield* expect({
+      hasValues: byValues.length > 0,
+      outOfRangeValues: byValues.filter(
+        (by) => !(Number.isInteger(by) && by >= 1 && by <= 5),
+      ),
+      negativeCounts: counts.filter((count) => count < 0),
+    }).toEqual({ hasValues: true, outOfRangeValues: [], negativeCounts: [] })
 
     const merged: number[] = []
-    await propertyTest(counterMachine, {
-      seed: 1,
-      numRuns: 10,
-      deriveEvents: false,
-      events: mergeEventGenerators(eventsFromSchemas(counterMachine), {
-        INC: fc.record({ by: fc.constant(1) }),
-      }),
-      invariant: ({ event }) => {
-        if (event?.type === 'INC') {
-          merged.push(event.by)
-        }
-      },
-    })
-    expect(new Set(merged)).toEqual(new Set([1]))
-
-    await propertyTest(counterMachine, {
-      seed: 1,
-      numRuns: 10,
-      deriveEvents: false,
-      events: fromEffectSchemas({
-        INC: Schema.Struct({
-          by: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+    yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 1,
+        numRuns: 10,
+        deriveEvents: false,
+        events: mergeEventGenerators(eventsFromSchemas(counterMachine), {
+          INC: fc.record({ by: fc.constant(1) }),
         }),
-        RESET: Schema.Struct({}),
-      }),
-      invariant: ({ snapshot }) => {
-        expect(snapshot.context['count']).toBeGreaterThanOrEqual(0)
-      },
-    })
+        invariant: ({ event }) => {
+          if (event?.type === 'INC') {
+            merged.push(event.by)
+          }
+        },
+      })
+    )
+    yield* expect(new Set(merged)).toEqual(new Set([1]))
+
+    const laterCounts: number[] = []
+    yield* Effect.promise(() =>
+      propertyTest(counterMachine, {
+        seed: 1,
+        numRuns: 10,
+        deriveEvents: false,
+        events: fromEffectSchemas({
+          INC: Schema.Struct({
+            by: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+          }),
+          RESET: Schema.Struct({}),
+        }),
+        invariant: ({ snapshot }) => {
+          laterCounts.push(snapshot.context['count'])
+        },
+      })
+    )
+    yield* expect({
+      negativeCounts: laterCounts.filter((count) => count < 0),
+    }).toEqual({ negativeCounts: [] })
   })
 
-  it('Steer invoked services', async () => {
-    const fixed = await propertyTest(orderMachine, {
-      seed: 1,
-      numRuns: 20,
-      mode: 'executed',
-      actors: {
-        chargeCard: createAsyncLogic({ run: async () => ({ id: 'ch_1' }) }),
-      },
-      events: { SUBMIT: fc.constant({}) },
-    })
-    expect(fixed.coverage.stateNodes.covered).toContain('order.confirmed')
+  it('Steer invoked services', function*({ expect }) {
+    const fixed = yield* Effect.promise(() =>
+      propertyTest(orderMachine, {
+        seed: 1,
+        numRuns: 20,
+        mode: 'executed',
+        actors: {
+          chargeCard: createAsyncLogic({ run: () => Promise.resolve({ id: 'ch_1' }) }),
+        },
+        events: { SUBMIT: fc.constant({}) },
+      })
+    )
+    yield* expect(fixed.coverage.stateNodes.covered).toContain(
+      'order.confirmed',
+    )
 
-    const generated = await propertyTest(orderMachine, {
-      seed: 1,
-      numRuns: 50,
-      mode: 'executed',
-      outcomes: {
-        chargeCard: fc.oneof(
-          fc.record({
-            ok: fc.constant(true as const),
-            output: fc.record({ id: fc.string() }),
-          }),
-          fc.record({
-            ok: fc.constant(false as const),
-            error: fc.constant('declined'),
-          }),
-        ),
-      },
-      events: { SUBMIT: fc.constant({}) },
-    })
-    expect(generated.coverage.stateNodes.covered).toEqual(
+    const generated = yield* Effect.promise(() =>
+      propertyTest(orderMachine, {
+        seed: 1,
+        numRuns: 50,
+        mode: 'executed',
+        outcomes: {
+          chargeCard: fc.oneof(
+            fc.record({
+              ok: fc.constant(true as const),
+              output: fc.record({ id: fc.string() }),
+            }),
+            fc.record({
+              ok: fc.constant(false as const),
+              error: fc.constant('declined'),
+            }),
+          ),
+        },
+        events: { SUBMIT: fc.constant({}) },
+      })
+    )
+    yield* expect(generated.coverage.stateNodes.covered).toEqual(
       expect.arrayContaining(['order.confirmed', 'order.declined']),
     )
 
-    await expect(
+    const error = yield* rejectionOf(() =>
       propertyTest(orderMachine, {
         outcomes: { chargeCard: fc.constant({ ok: true as const, output: 1 }) },
-      }),
-    ).rejects.toThrow("require `mode: 'executed'`")
+      })
+    )
+    yield* expect(error instanceof Error ? error.message : String(error)).toMatch(
+      "require `mode: 'executed'`",
+    )
 
-    const paths = await testPaths(orderMachine, {
-      mode: 'executed',
-      outcomes: {
-        chargeCard: fc.constant({ ok: true as const, output: { id: 'ch_1' } }),
-      },
-    })
-    expect(paths.coverage.stateNodes.covered).toEqual(
+    const paths = yield* Effect.promise(() =>
+      testPaths(orderMachine, {
+        mode: 'executed',
+        outcomes: {
+          chargeCard: fc.constant({ ok: true as const, output: { id: 'ch_1' } }),
+        },
+      })
+    )
+    yield* expect(paths.coverage.stateNodes.covered).toEqual(
       expect.arrayContaining([
         'order.confirmed',
-        // No `ok: false` outcome is declared, so the error branch is
-        // resolved with a synthesized failure.
         'order.declined',
         'order.timedOut',
       ]),
     )
 
-    const pure = await testPaths(orderMachine, {
-      outcomes: {
-        chargeCard: fc.constant({ ok: true as const, output: { id: 'ch_1' } }),
-      },
-    })
-    expect(pure.coverage.stateNodes.covered).toEqual(
+    const pure = yield* Effect.promise(() =>
+      testPaths(orderMachine, {
+        outcomes: {
+          chargeCard: fc.constant({ ok: true as const, output: { id: 'ch_1' } }),
+        },
+      })
+    )
+    yield* expect(pure.coverage.stateNodes.covered).toEqual(
       expect.arrayContaining(['order.confirmed', 'order.declined']),
     )
   })
 
-  it('Test delayed transitions', async () => {
-    const { coverage } = await propertyTest(orderMachine, {
-      seed: 1,
-      numRuns: 50,
-      mode: 'executed',
-      outcomes: {
-        chargeCard: fc.constant({ ok: true as const, output: { id: 'ch_1' } }),
-      },
-      events: { SUBMIT: fc.constant({}) },
-      commands: { advance: fc.integer({ min: 1_000, max: 10_000 }) },
-    })
-    expect(coverage.stateNodes.covered).toContain('order.timedOut')
+  it('Test delayed transitions', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(orderMachine, {
+        seed: 1,
+        numRuns: 50,
+        mode: 'executed',
+        outcomes: {
+          chargeCard: fc.constant({ ok: true as const, output: { id: 'ch_1' } }),
+        },
+        events: { SUBMIT: fc.constant({}) },
+        commands: { advance: fc.integer({ min: 1_000, max: 10_000 }) },
+      })
+    )
+    yield* expect(coverage.stateNodes.covered).toContain('order.timedOut')
 
-    const paths = await testPaths(orderMachine, { mode: 'executed' })
-    expect(paths.coverage.stateNodes.covered).toContain('order.timedOut')
+    const paths = yield* Effect.promise(() => testPaths(orderMachine, { mode: 'executed' }))
+    yield* expect(paths.coverage.stateNodes.covered).toContain('order.timedOut')
   })
 
-  it('Test a web page with Playwright', async () => {
+  it('Test a web page with Playwright', function*({ expect }) {
     const formMachine = createMachine({
       id: 'form',
       schemas: {
@@ -552,41 +605,46 @@ describe('README: How-to guides', () => {
     })
     const page = new FakeFormPage()
 
-    await propertyTest(formMachine, {
-      seed: 1,
-      numRuns: 25,
-      maxCommands: 8,
-      events: {
-        FILL: fc.record({
-          value: fc.constantFrom('', 'Ada', 'ada@example.com'),
-        }),
-        NEXT: fc.constant({}),
-        BACK: fc.constant({}),
-      },
-      sut: createPlaywrightSut(page, {
-        reset: async (page) => {
-          await page.goto('/')
-        },
+    yield* Effect.promise(() =>
+      propertyTest(formMachine, {
+        seed: 1,
+        numRuns: 25,
+        maxCommands: 8,
         events: {
-          FILL: (page, event) => page.fill('#field', event.value),
-          NEXT: (page) => page.click('#next'),
-          BACK: (page) => page.click('#back'),
+          FILL: fc.record({
+            value: fc.constantFrom('', 'Ada', 'ada@example.com'),
+          }),
+          NEXT: fc.constant({}),
+          BACK: fc.constant({}),
         },
-        read: async (page) => ({
-          step: await page.locator('#step').textContent(),
-          error: await page.locator('#error').textContent(),
+        sut: createPlaywrightSut(page, {
+          reset: (page) => page.goto('/'),
+          events: {
+            FILL: (page, event) => page.fill('#field', event.value),
+            NEXT: (page) => page.click('#next'),
+            BACK: (page) => page.click('#back'),
+          },
+          read: (page) =>
+            Promise.all([
+              page.locator('#step').textContent(),
+              page.locator('#error').textContent(),
+            ]).then(([step, error]) => ({ step, error })),
+          projectModel: (snapshot) => ({
+            step: String(snapshot.value),
+            error: snapshot.context.error,
+          }),
         }),
-        projectModel: (snapshot) => ({
-          step: String(snapshot.value),
-          error: snapshot.context.error,
-        }),
-      }),
-    })
-    expect(page.gotos).toBe(25)
-    expect(page.loadStates.every((state) => state === 'load')).toBe(true)
+      })
+    )
+    yield* expect({
+      gotos: page.gotos,
+      loadStates: [...new Set(page.loadStates)],
+    }).toEqual({ gotos: 25, loadStates: ['load'] })
   })
 
-  it('Test a web page with Playwright: mocks per case', async () => {
+  it('Test a web page with Playwright: mocks per case', function*({
+    expect,
+  }) {
     const machine = createMachine({
       schemas: { events: { SUBMIT: types<{}>() } },
       on: { SUBMIT: {} },
@@ -595,116 +653,143 @@ describe('README: How-to guides', () => {
     const read = () => null
     const projectModel = () => null
 
-    await propertyTest(machine, {
-      seed: 1,
-      numRuns: 10,
-      events: {
-        SUBMIT: [
-          { case: 'ok', generate: fc.constant({}) },
-          { case: 'error', generate: fc.constant({}) },
-        ],
-      },
-      sut: createPlaywrightSut(page, {
-        events: { SUBMIT: (page) => page.click('#submit') },
-        mocks: {
-          'SUBMIT.ok': (page) => page.route('**/api/submit', (route: FakeRoute) => route.fulfill({ status: 200 })),
-          'SUBMIT.error': (page) => page.route('**/api/submit', (route: FakeRoute) => route.fulfill({ status: 500 })),
+    yield* Effect.promise(() =>
+      propertyTest(machine, {
+        seed: 1,
+        numRuns: 10,
+        events: {
+          SUBMIT: [
+            { case: 'ok', generate: fc.constant({}) },
+            { case: 'error', generate: fc.constant({}) },
+          ],
         },
-        read,
-        projectModel,
-      }),
-    })
-    expect(page.routes.length).toBeGreaterThan(0)
-    // Every route a mock installed was removed again.
-    expect(page.installed).toEqual([])
+        sut: createPlaywrightSut(page, {
+          events: { SUBMIT: (page) => page.click('#submit') },
+          mocks: {
+            'SUBMIT.ok': (page) => page.route('**/api/submit', (route: FakeRoute) => route.fulfill({ status: 200 })),
+            'SUBMIT.error': (page) => page.route('**/api/submit', (route: FakeRoute) => route.fulfill({ status: 500 })),
+          },
+          read,
+          projectModel,
+        }),
+      })
+    )
+    yield* expect({
+      hasRoutes: page.routes.length > 0,
+      installed: page.installed,
+    }).toEqual({ hasRoutes: true, installed: [] })
   })
 
-  it('Gate CI on coverage', async () => {
-    const { coverage } = await propertyTest(cartMachine, {
-      seed: 1,
-      events,
-      sut: cartSut,
-    })
+  it('Gate CI on coverage', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        events,
+        sut: cartSut,
+      })
+    )
     assertTestCoverage(coverage, { transitions: 1, stateNodes: 1 })
 
-    const until = await propertyTest(cartMachine, {
-      seed: 1,
-      events,
-      sut: cartSut,
-      until: { transitions: 1 },
-      maxRuns: 500,
+    const until = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        events,
+        sut: cartSut,
+        until: { transitions: 1 },
+        maxRuns: 500,
+      })
+    )
+    yield* expect({
+      stoppedBecause: until.coverage.exploration.stoppedBecause,
+      markdownTable: formatTestCoverage(coverage, { format: 'markdown' }).includes(
+        '|',
+      ),
+      jsonFormatVersion: JSON.stringify(testCoverageToJSON(coverage)).includes(
+        '"formatVersion":1',
+      ),
+      junitTestcase: formatTestCoverageJUnit(coverage, { suiteName: 'cart' })
+        .includes('<testcase'),
+      htmlTitle: formatTestCoverageHTML(coverage, { title: 'Cart' }).includes(
+        '<title>Cart</title>',
+      ),
+    }).toEqual({
+      stoppedBecause: 'until',
+      markdownTable: true,
+      jsonFormatVersion: true,
+      junitTestcase: true,
+      htmlTitle: true,
     })
-    expect(until.coverage.exploration.stoppedBecause).toBe('until')
 
-    expect(formatTestCoverage(coverage, { format: 'markdown' })).toContain('|')
-    expect(JSON.stringify(testCoverageToJSON(coverage))).toContain(
-      '"formatVersion":1',
+    const labelled = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        events,
+        invariant: ({ snapshot, classify }) => {
+          classify(Object.keys(snapshot.context.items).length >= 2, 'two-skus')
+        },
+        expectLabels: { 'two-skus': { min: 0.1 } },
+      })
     )
-    expect(formatTestCoverageJUnit(coverage, { suiteName: 'cart' })).toContain(
-      '<testcase',
-    )
-    expect(formatTestCoverageHTML(coverage, { title: 'Cart' })).toContain(
-      '<title>Cart</title>',
-    )
-
-    const labelled = await propertyTest(cartMachine, {
-      seed: 1,
-      events,
-      invariant: ({ snapshot, classify }) => {
-        classify(Object.keys(snapshot.context.items).length >= 2, 'two-skus')
-      },
-      expectLabels: { 'two-skus': { min: 0.1 } },
-    })
     const twoSkusLabel = labelled.coverage.labels['two-skus']
     if (twoSkusLabel === undefined) {
       throw new Error('expected the two-skus label statistics')
     }
-    expect(twoSkusLabel.share).toBeGreaterThanOrEqual(0.1)
+    yield* expect(twoSkusLabel.share).toBeGreaterThanOrEqual(0.1)
   })
 
-  it('Replay a failure', async () => {
-    let failure!: ModelTestFailure
-    try {
-      await propertyTest(cartMachine, {
+  it('Replay a failure', function*({ expect }) {
+    const failure = yield* rejectionOf(() =>
+      propertyTest(cartMachine, {
         seed: 1,
         events,
         sut: createCartSut({ buggy: true }),
       })
-    } catch (error) {
-      failure = error as ModelTestFailure
+    )
+    if (!(failure instanceof ModelTestFailure)) {
+      throw new Error(`expected a ModelTestFailure, got ${String(failure)}`)
     }
-    expect(failure).toBeInstanceOf(ModelTestFailure)
-    // The failure the docs page pastes: `REMOVE pear` leaves `pear` at zero.
-    expect(failure.summary).toBe('Property observation diverged')
-    expect(failure.message).toContain(
-      [
-        '2. generator REMOVE {"sku":"pear"} -> {"value":"shopping","context":{"items":{}}}',
-        '   sut diverged',
-        '     model:    {}',
-        '     observed: {"pear":0}',
-      ].join('\n'),
-    )
-    expect(failure.message).toContain(
-      'Reproduce: seed 1, path "1:2:1:2:3", replayPath "N:B"',
-    )
-    // The fixture is JSON-safe: round-trip it the way a committed file would.
+    yield* expect({
+      summary: failure.summary,
+      generatorLine: failure.message.includes(
+        [
+          '2. generator REMOVE {"sku":"pear"} -> {"value":"shopping","context":{"items":{}}}',
+          '   sut diverged',
+          '     model:    {}',
+          '     observed: {"pear":0}',
+        ].join('\n'),
+      ),
+      reproduceLine: failure.message.includes(
+        'Reproduce: seed 1, path "1:2:1:2:3", replayPath "N:B"',
+      ),
+      fixtureFormatVersion: failure.fixture?.formatVersion,
+    }).toEqual({
+      summary: 'Property observation diverged',
+      generatorLine: true,
+      reproduceLine: true,
+      fixtureFormatVersion: 2,
+    })
     const fixture = JSON.parse(JSON.stringify(failure.fixture)) as TestFixture
 
-    await expect(
-      replayTest(cartMachine, fixture, { sut: createCartSut({ buggy: true }) }),
-    ).rejects.toBeInstanceOf(ModelTestFailure)
+    const buggyReplay = yield* rejectionOf(() =>
+      replayTest(cartMachine, fixture, { sut: createCartSut({ buggy: true }) })
+    )
+    yield* expect(buggyReplay).toSatisfy(
+      (error) => error instanceof ModelTestFailure,
+      'replaying the recorded failure under the bug still raises ModelTestFailure',
+    )
 
-    // With the bug fixed, the recorded failure no longer reproduces.
-    await expect(
-      replayTest(cartMachine, fixture, { sut: cartSut }),
-    ).rejects.toBeInstanceOf(ReplayNotReproducedError)
-    await replayTest(cartMachine, fixture, { sut: cartSut, expect: 'pass' })
+    const noRepro = yield* rejectionOf(() => replayTest(cartMachine, fixture, { sut: cartSut }))
+    yield* expect(noRepro).toSatisfy(
+      (error) => error instanceof ReplayNotReproducedError,
+      'replaying a fixed failure raises ReplayNotReproducedError',
+    )
+    yield* Effect.promise(() => replayTest(cartMachine, fixture, { sut: cartSut, expect: 'pass' }))
 
     const replay = failure.replay
     if (replay === undefined) {
       throw new Error('expected a recorded replay')
     }
-    await expect(
+    const replayError = yield* rejectionOf(() =>
       propertyTest(cartMachine, {
         events,
         sut: createCartSut({ buggy: true }),
@@ -713,17 +798,23 @@ describe('README: How-to guides', () => {
         ...(replay.replayPath === undefined
           ? {}
           : { replayPath: replay.replayPath }),
-      }),
-    ).rejects.toBeInstanceOf(ModelTestFailure)
+      })
+    )
+    yield* expect(replayError).toSatisfy(
+      (error) => error instanceof ModelTestFailure,
+      'the recorded replay still raises ModelTestFailure',
+    )
   })
 
-  it('Record an offline regression suite', async () => {
-    const suite = await generateTestSuite(cartMachine, {
-      seed: 1,
-      numRuns: 200,
-      events,
-      sut: cartSut,
-    })
+  it('Record an offline regression suite', function*({ expect }) {
+    const suite = yield* Effect.promise(() =>
+      generateTestSuite(cartMachine, {
+        seed: 1,
+        numRuns: 200,
+        events,
+        sut: cartSut,
+      })
+    )
     const json = serializeTestSuite(suite)
     const parsed = parseTestSuiteFromGraph(json)
 
@@ -738,15 +829,14 @@ describe('README: How-to guides', () => {
       },
       describe: (_name, fn) => fn(),
     })
-    expect(registered).toHaveLength(parsed.fixtures.length)
+    yield* expect(registered.length).toEqual(parsed.fixtures.length)
     for (const body of bodies) {
-      await body()
+      yield* Effect.promise(() => Promise.resolve(body()))
     }
   })
 
-  it('Test concurrency', async () => {
-    // A counter whose writes land out of order under the scheduler.
-    await expect(
+  it('Test concurrency', function*({ expect }) {
+    const schedulerError = yield* rejectionOf(() =>
       propertyTest(counterMachine, {
         seed: 1,
         numRuns: 50,
@@ -770,9 +860,8 @@ describe('README: How-to guides', () => {
           },
           projectModel: (snapshot) => snapshot.context['count'],
         }),
-      }),
-    ).rejects.toBeInstanceOf(ModelTestFailure)
-
+      })
+    )
     const result = checkLinearizable(
       [
         {
@@ -798,82 +887,103 @@ describe('README: How-to guides', () => {
             : { state, response: state },
       },
     )
-    expect(result.linearizable).toBe(true)
-    expect(result.witness?.map((entry) => entry.id)).toEqual(['a', 'b'])
-
-    const parallel = await runParallelPropertyCommands(counterMachine, {
-      prefix: [{ type: 'INC', by: 1 }],
-      branches: [[{ type: 'INC', by: 1 }], [{ type: 'INC', by: 2 }]],
-      sut: {
-        create: () => {
-          let count = 0
-          return {
-            send: async (event) => (count += event.type === 'INC' ? event.by : 0),
-          }
+    const parallel = yield* Effect.promise(() =>
+      runParallelPropertyCommands(counterMachine, {
+        prefix: [{ type: 'INC', by: 1 }],
+        branches: [[{ type: 'INC', by: 1 }], [{ type: 'INC', by: 2 }]],
+        sut: {
+          create: () => {
+            let count = 0
+            return {
+              send: (event) => (count += event.type === 'INC' ? event.by : 0),
+            }
+          },
+          projectModel: (snapshot) => snapshot.context['count'],
         },
-        projectModel: (snapshot) => snapshot.context['count'],
-      },
+      })
+    )
+    yield* expect({
+      schedulerFailure: schedulerError instanceof ModelTestFailure,
+      linearizable: result.linearizable,
+      witness: result.witness?.map((entry) => entry.id),
+      parallelLinearizable: parallel.linearizable,
+    }).toEqual({
+      schedulerFailure: true,
+      linearizable: true,
+      witness: ['a', 'b'],
+      parallelLinearizable: true,
     })
-    expect(parallel.linearizable).toBe(true)
   })
 
-  it('Steer exploration', async () => {
-    const weighted = await propertyTest(cartMachine, {
-      seed: 1,
-      numRuns: 20,
-      events: {
-        ADD: { generate: fc.record({ sku }), weight: 5 },
-        REMOVE: fc.record({ sku }),
-        CHECKOUT: { generate: fc.constant({}), weight: 0.5 },
-      },
-    })
+  it('Steer exploration', function*({ expect }) {
+    const weighted = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        numRuns: 20,
+        events: {
+          ADD: { generate: fc.record({ sku }), weight: 5 },
+          REMOVE: fc.record({ sku }),
+          CHECKOUT: { generate: fc.constant({}), weight: 0.5 },
+        },
+      })
+    )
     const cases = weighted.coverage.eventCases
-    expect(Object.values(cases).map(({ weight }) => weight)).toEqual(
+    yield* expect(Object.values(cases).map(({ weight }) => weight)).toEqual(
       expect.arrayContaining([5, 1, 0.5]),
     )
 
-    const frontier = await propertyTest(cartMachine, {
-      seed: 1,
-      events,
-      frontiers: {
-        paths: getShortestPaths(cartMachine, {
-          toState: (snapshot) => Object.keys(snapshot.context.items).length > 0,
-          stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
-        }),
-        runsPerFrontier: 50,
-      },
-    })
-    expect(frontier.coverage.exploration.frontiers.length).toBeGreaterThan(0)
+    const frontier = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        events,
+        frontiers: {
+          paths: getShortestPaths(cartMachine, {
+            toState: (snapshot) => Object.keys(snapshot.context.items).length > 0,
+            stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
+          }),
+          runsPerFrontier: 50,
+        },
+      })
+    )
+    yield* expect(frontier.coverage.exploration.frontiers.length).toBeGreaterThan(
+      0,
+    )
 
-    const auto = await propertyTest(cartMachine, {
-      seed: 1,
-      events,
-      frontiers: 'auto',
-      until: { transitions: 1 },
-      maxRuns: 200,
-    })
-    expect(auto.coverage.exploration.stoppedBecause).toBe('until')
+    const auto = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        events,
+        frontiers: 'auto',
+        until: { transitions: 1 },
+        maxRuns: 200,
+      })
+    )
+    yield* expect(auto.coverage.exploration.stoppedBecause).toBe('until')
 
-    const swarm = await propertyTest(cartMachine, {
-      seed: 1,
-      numRuns: 20,
-      events,
-      swarm: true,
-    })
-    expect(swarm.coverage.exploration.swarm?.runs).toBeGreaterThan(0)
+    const swarm = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        numRuns: 20,
+        events,
+        swarm: true,
+      })
+    )
+    yield* expect(swarm.coverage.exploration.swarm?.runs).toBeGreaterThan(0)
 
-    const { coverage } = await propertyTest(cartMachine, {
-      seed: 1,
-      events,
-      target: ({ snapshot }) => snapshot.context.items['apple'] ?? 0,
-      frontiers: { strategy: 'target' },
-      until: (coverage) => coverage.exploration.target.best >= 8,
-      maxRuns: 400,
-    })
-    expect(coverage.exploration.target.best).toBeGreaterThan(0)
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        events,
+        target: ({ snapshot }) => snapshot.context.items['apple'] ?? 0,
+        frontiers: { strategy: 'target' },
+        until: (coverage) => coverage.exploration.target.best >= 8,
+        maxRuns: 400,
+      })
+    )
+    yield* expect(coverage.exploration.target.best).toBeGreaterThan(0)
   })
 
-  it('Start from a snapshot or input', async () => {
+  it('Start from a snapshot or input', function*({ expect }) {
     const [cartWithApple] = transition(
       cartMachine,
       initialTransition(cartMachine)[0],
@@ -881,23 +991,23 @@ describe('README: How-to guides', () => {
     )
 
     const initialItems: unknown[] = []
-    await propertyTest(cartMachine, {
-      seed: 1,
-      numRuns: 5,
-      events,
-      start: {
-        snapshot: cartWithApple,
-        serializeSnapshot: (snapshot) => snapshot.context,
-      },
-      invariant: ({ initialSnapshot }) => {
-        initialItems.push(initialSnapshot.context.items)
-      },
-    })
-    expect(initialItems[0]).toEqual({ apple: 1 })
+    yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        numRuns: 5,
+        events,
+        start: {
+          snapshot: cartWithApple,
+          serializeSnapshot: (snapshot) => snapshot.context,
+        },
+        invariant: ({ initialSnapshot }) => {
+          initialItems.push(initialSnapshot.context.items)
+        },
+      })
+    )
+    yield* expect(initialItems[0]).toEqual({ apple: 1 })
   })
 })
-
-// ----------------------------------------------------------------- Migration
 
 describe('README: Migrating from @xstate/test 0.x and 1.0 beta', () => {
   const signupMachine = createMachine({
@@ -910,35 +1020,39 @@ describe('README: Migrating from @xstate/test 0.x and 1.0 beta', () => {
     },
   })
 
-  it('From 1.0 beta', async () => {
+  it('From 1.0 beta', function*({ expect }) {
     const clicked: string[] = []
     const checked: string[] = []
     const page = {
-      click: async (selector: string) => {
+      click: (selector: string) => {
         clicked.push(selector)
       },
     }
 
     for (const path of getShortestPaths(signupMachine)) {
-      await testPaths(signupMachine, {
-        paths: [path],
-        sut: {
-          create: () => ({
-            send: (event) => event.type === 'SUBMIT' ? page.click('#submit') : undefined,
-            states: {
-              submitted: () => {
-                checked.push('submitted')
+      yield* Effect.promise(() =>
+        testPaths(signupMachine, {
+          paths: [path],
+          sut: {
+            create: () => ({
+              send: (event) => event.type === 'SUBMIT' ? page.click('#submit') : undefined,
+              states: {
+                submitted: () => {
+                  checked.push('submitted')
+                },
               },
-            },
-          }),
-        },
-      })
+            }),
+          },
+        })
+      )
     }
-    expect(clicked).toEqual(['#submit'])
-    expect(checked).toEqual(['submitted'])
+    yield* expect({ clicked, checked }).toEqual({
+      clicked: ['#submit'],
+      checked: ['submitted'],
+    })
   })
 
-  it('From 0.x', async () => {
+  it('From 0.x', function*({ expect }) {
     const skuMachine = createMachine({
       schemas: {
         context: types<{ skus: string[] }>(),
@@ -954,28 +1068,29 @@ describe('README: Migrating from @xstate/test 0.x and 1.0 beta', () => {
     })
     const filled: string[] = []
     const page = {
-      fill: async (_selector: string, value: string) => {
+      fill: (_selector: string, value: string) => {
         filled.push(value)
       },
     }
 
-    await testPaths(skuMachine, {
-      events: {
-        ADD: [
-          { case: 'apple', generate: fc.constant({ sku: 'apple' }) },
-          { case: 'pear', generate: fc.constant({ sku: 'pear' }) },
-        ],
-      },
-      samples: 1,
-      sut: { create: () => ({ send: (event) => page.fill('#sku', event.sku) }) },
-    })
-    expect(new Set(filled)).toEqual(new Set(['apple', 'pear']))
+    yield* Effect.promise(() =>
+      testPaths(skuMachine, {
+        events: {
+          ADD: [
+            { case: 'apple', generate: fc.constant({ sku: 'apple' }) },
+            { case: 'pear', generate: fc.constant({ sku: 'pear' }) },
+          ],
+        },
+        samples: 1,
+        sut: {
+          create: () => ({ send: (event) => page.fill('#sku', event.sku) }),
+        },
+      })
+    )
+    yield* expect(new Set(filled)).toEqual(new Set(['apple', 'pear']))
   })
 })
 
-// ------------------------------------------- Oracles, failures, and Vitest
-
-/** A cart that pays through an invoked `pay` actor, as in the cart example. */
 const payingCartMachine = setup({
   schemas: {
     context: types<{
@@ -988,7 +1103,7 @@ const payingCartMachine = setup({
     },
   },
   actors: {
-    pay: createAsyncLogic({ run: async () => ({}) }),
+    pay: createAsyncLogic({ run: () => Promise.resolve({}) }),
   },
 }).createMachine({
   id: 'cart',
@@ -1032,78 +1147,92 @@ afterAll(() => {
 })
 
 describe('README: Concepts (pick)', () => {
-  it('Events: pick()', async () => {
-    const { coverage } = await propertyTest(cartMachine, {
-      seed: 1,
-      events: {
-        ...events,
-        REMOVE: pick(
-          (snapshot) => Object.keys(snapshot.context.items),
-          (sku) => ({ sku }),
-        ),
-      },
-      sut: cartSut,
-    })
+  it('Events: pick()', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        events: {
+          ...events,
+          REMOVE: pick(
+            (snapshot) => Object.keys(snapshot.context.items),
+            (sku) => ({ sku }),
+          ),
+        },
+        sut: cartSut,
+      })
+    )
     const remove = coverage.eventCases['["event-case","REMOVE","default"]']
     if (remove === undefined) {
       throw new Error('expected the REMOVE event case coverage')
     }
-    expect(remove.executed).toBeGreaterThan(0)
-    // An empty cart has nothing to pick, so the case is inapplicable.
-    expect(remove.ignored).toBeGreaterThan(0)
+    yield* expect({
+      executed: remove.executed > 0,
+      ignored: remove.ignored > 0,
+    }).toEqual({ executed: true, ignored: true })
   })
 })
 
 describe('README: Concepts (events)', () => {
   const checkoutCase = '["event-case","CHECKOUT","default"]'
 
-  it('sends events the current state has no transition for', async () => {
-    // Only `CHECKOUT` on an empty cart: the machine has no enabled
-    // transition, yet every generated event is sent and counted as executed.
-    const { coverage } = await propertyTest(cartMachine, {
-      seed: 1,
-      numRuns: 10,
-      events: { CHECKOUT: fc.constant({}) },
-      sut: cartSut,
-    })
+  it('sends events the current state has no transition for', function*({
+    expect,
+  }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        numRuns: 10,
+        events: { CHECKOUT: fc.constant({}) },
+        sut: cartSut,
+      })
+    )
     const checkout = coverage.eventCases[checkoutCase]
     if (checkout === undefined) {
       throw new Error('expected the CHECKOUT event case coverage')
     }
-    expect(checkout.executed).toBeGreaterThan(0)
-    expect(checkout.ignored).toBe(0)
+    yield* expect({
+      executed: checkout.executed > 0,
+      ignored: checkout.ignored,
+    }).toEqual({ executed: true, ignored: 0 })
   })
 
-  it('skips unhandled events with snapshot.can(event)', async () => {
-    const { coverage } = await propertyTest(cartMachine, {
-      seed: 1,
-      numRuns: 10,
-      events: {
-        CHECKOUT: {
-          generate: fc.constant({}),
-          when: ({ snapshot, event }) => snapshot.can(event),
+  it('skips unhandled events with snapshot.can(event)', function*({ expect }) {
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
+        seed: 1,
+        numRuns: 10,
+        events: {
+          CHECKOUT: {
+            generate: fc.constant({}),
+            when: ({ snapshot, event }) => snapshot.can(event),
+          },
         },
-      },
-      sut: cartSut,
-    })
+        sut: cartSut,
+      })
+    )
     const checkout = coverage.eventCases[checkoutCase]
     if (checkout === undefined) {
       throw new Error('expected the CHECKOUT event case coverage')
     }
-    expect(checkout.generated).toBeGreaterThan(0)
-    expect(checkout.executed).toBe(0)
-    expect(checkout.ignored).toBe(checkout.generated)
+    yield* expect({
+      generated: checkout.generated > 0,
+      executed: checkout.executed,
+      ignored: checkout.ignored,
+    }).toEqual({
+      generated: true,
+      executed: 0,
+      ignored: checkout.generated,
+    })
   })
 })
 
 describe('README: How-to guides (oracles, failures, and Vitest)', () => {
-  it('Test a web page with Playwright: page oracles', async () => {
+  it('Test a web page with Playwright: page oracles', function*({ expect }) {
     const page = new FakePage()
     const sut = createPlaywrightSut(page, {
       events: { INC: (page) => page.click('#inc') },
       read: (page) => page.app.count,
       projectModel: () => 0,
-      // Fail on console warnings too, and only on server errors.
       oracles: {
         pageError: true,
         console: 'warn',
@@ -1111,17 +1240,20 @@ describe('README: How-to guides (oracles, failures, and Vitest)', () => {
         unhandledRejection: true,
       },
     })
-    const session = await sut.create({} as never)
+    const session = yield* Effect.promise(() => Promise.resolve(sut.create({} as never)))
     page.emitResponse(404, '/missing')
     page.emitConsole('warning', 'careful')
-    await expect(session.check!()).rejects.toMatchObject({
+    const oracleError = yield* rejectionOf(() => session.check!())
+    yield* expect(oracleError).toMatchObject({
       name: 'PlaywrightOracleError',
       messages: ['console.warning: careful'],
     })
-    await session.dispose!({ passed: true })
+    yield* Effect.promise(() => Promise.resolve(session.dispose!({ passed: true })))
   })
 
-  it('Test a web page with Playwright: failure artifacts', async () => {
+  it('Test a web page with Playwright: failure artifacts', function*({
+    expect,
+  }) {
     const counterMachine = createMachine({
       schemas: {
         context: types<{ count: number }>(),
@@ -1134,13 +1266,13 @@ describe('README: How-to guides (oracles, failures, and Vitest)', () => {
     const testInfo = new FakeTestInfo()
     const steps: string[] = []
     const test = {
-      step: async (name: string, body: () => Promise<void>) => {
+      step: (name: string, body: () => Promise<void>) => {
         steps.push(name)
-        await body()
+        return body()
       },
     }
 
-    await expect(
+    const error = yield* rejectionOf(() =>
       propertyTest(counterMachine, {
         seed: 1,
         events: { INC: fc.constant({}) },
@@ -1152,50 +1284,20 @@ describe('README: How-to guides (oracles, failures, and Vitest)', () => {
           testInfo,
           step: (name, body) => test.step(name, body),
         }),
-      }),
-    ).rejects.toBeInstanceOf(ModelTestFailure)
-    expect(steps).toContain('INC')
-    expect(testInfo.attachments.map(({ name }) => name)).toEqual([
-      'fixture.json',
-      'trace',
-      'failure.png',
-    ])
-  })
-
-  describe('Run model tests with Vitest', () => {
-    modelIt.model('the cart matches the model', cartMachine, {
-      seed: 1,
-      events,
-      sut: cartSut,
-    })
-
-    modelIt.paths('every path matches the model', cartMachine, {
-      pathGenerator: 'simple',
-      events,
-      sut: cartSut,
-      stopWhen: (snapshot) => Object.values(snapshot.context.items).some((qty) => qty >= 2),
-    })
-
-    const buggyOptions = {
-      seed: 1,
-      events,
-      sut: createCartSut({ buggy: true }),
-      failures: { dir: join(failuresDir, 'vitest') },
-    }
-    modelIt.model.fails('finds the remove bug', cartMachine, buggyOptions, {
-      message: /Property observation diverged/,
-    })
-
-    const it = withModelTests(vitestIt)
-    it.model('withModelTests wraps Vitest’s own it', cartMachine, {
-      seed: 1,
-      events,
-      sut: cartSut,
-      failures: false,
+      })
+    )
+    yield* expect({
+      isModelTestFailure: error instanceof ModelTestFailure,
+      hasIncStep: steps.includes('INC'),
+      attachments: testInfo.attachments.map(({ name }) => name),
+    }).toEqual({
+      isModelTestFailure: true,
+      hasIncStep: true,
+      attachments: ['fixture.json', 'trace', 'failure.png'],
     })
   })
 
-  it('Check liveness and reachability', async () => {
+  it('Check liveness and reachability', function*({ expect }) {
     const sku = fc.constantFrom('apple', 'pear')
     const whileShopping = ({
       snapshot,
@@ -1203,45 +1305,45 @@ describe('README: How-to guides (oracles, failures, and Vitest)', () => {
       snapshot: SnapshotFrom<typeof payingCartMachine>
     }) => snapshot.matches('shopping')
 
-    const { coverage } = await propertyTest(payingCartMachine, {
-      seed: 1,
-      events: {
-        ADD: { generate: fc.record({ sku }), when: whileShopping },
-        CHECKOUT: { generate: fc.constant({}), when: whileShopping },
-      },
-      mode: 'executed',
-      outcomes: {
-        pay: fc.oneof(
-          fc.constant({ ok: true as const, output: {} }),
-          fc.constant({ ok: false as const, error: 'declined' }),
-        ),
-      },
-      temporal: [
-        {
-          type: 'respond',
-          id: 'payment-settles',
-          within: 1,
-          trigger: ({ snapshot }) => snapshot.matches('paying'),
-          response: ({ snapshot }) => !snapshot.matches('paying'),
+    const { coverage } = yield* Effect.promise(() =>
+      propertyTest(payingCartMachine, {
+        seed: 1,
+        events: {
+          ADD: { generate: fc.record({ sku }), when: whileShopping },
+          CHECKOUT: { generate: fc.constant({}), when: whileShopping },
         },
-        {
-          type: 'sometimes',
-          id: 'declined',
-          predicate: ({ snapshot }) => snapshot.context.lastError !== null,
+        mode: 'executed',
+        outcomes: {
+          pay: fc.oneof(
+            fc.constant({ ok: true as const, output: {} }),
+            fc.constant({ ok: false as const, error: 'declined' }),
+          ),
         },
-      ],
-      reachable: ['#cart.done'],
-    })
-    expect(coverage.temporal.satisfied).toEqual([
+        temporal: [
+          {
+            type: 'respond',
+            id: 'payment-settles',
+            within: 1,
+            trigger: ({ snapshot }) => snapshot.matches('paying'),
+            response: ({ snapshot }) => !snapshot.matches('paying'),
+          },
+          {
+            type: 'sometimes',
+            id: 'declined',
+            predicate: ({ snapshot }) => snapshot.context.lastError !== null,
+          },
+        ],
+        reachable: ['#cart.done'],
+      })
+    )
+    yield* expect(coverage.temporal.satisfied).toEqual([
       'declined',
       'payment-settles',
       'reachable:#cart.done',
     ])
 
-    // Payments never fail, and nothing checks out: both assertions fail.
-    let error!: TestCampaignError
-    try {
-      await propertyTest(payingCartMachine, {
+    const campaignError = yield* rejectionOf(() =>
+      propertyTest(payingCartMachine, {
         seed: 1,
         events: { ADD: fc.record({ sku }) },
         mode: 'executed',
@@ -1255,74 +1357,75 @@ describe('README: How-to guides (oracles, failures, and Vitest)', () => {
         ],
         reachable: ['#cart.done'],
       })
-    } catch (caught) {
-      error = caught as TestCampaignError
-    }
-    expect(error).toBeInstanceOf(TestCampaignError)
-    expect(error.message).toBe(
-      [
+    )
+    yield* expect({
+      isTestCampaignError: campaignError instanceof TestCampaignError,
+      message: campaignError instanceof Error
+        ? campaignError.message
+        : String(campaignError),
+    }).toEqual({
+      isTestCampaignError: true,
+      message: [
         'Campaign assertions failed:',
         '  - sometimes "declined" did not hold in 100 run(s)',
         '  - reachable "#cart.done" was not entered in 100 run(s)',
       ].join('\n'),
-    )
-
-    const vacuous = await propertyTest(payingCartMachine, {
-      seed: 1,
-      maxCommands: 10,
-      events: { ADD: fc.record({ sku }) },
-      temporal: [
-        {
-          type: 'eventually',
-          id: 'checks-out',
-          within: 20,
-          predicate: ({ snapshot }) => snapshot.matches('done'),
-        },
-      ],
     })
-    expect(formatTestCoverage(vacuous.coverage)).toContain(
+
+    const vacuous = yield* Effect.promise(() =>
+      propertyTest(payingCartMachine, {
+        seed: 1,
+        maxCommands: 10,
+        events: { ADD: fc.record({ sku }) },
+        temporal: [
+          {
+            type: 'eventually',
+            id: 'checks-out',
+            within: 20,
+            predicate: ({ snapshot }) => snapshot.matches('done'),
+          },
+        ],
+      })
+    )
+    yield* expect(formatTestCoverage(vacuous.coverage)).toContain(
       '  warning: eventually "checks-out" has within 20, but the longest sequence is 10 steps, so it can never fail',
     )
   })
 
-  it('Inspect the distribution of generated data', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    try {
-      await propertyTest(cartMachine, {
+  it('Inspect the distribution of generated data', function*({ expect }) {
+    const reports: string[] = []
+    yield* Effect.promise(() =>
+      propertyTest(cartMachine, {
         seed: 1,
         events,
-        statistics: true,
+        statistics: (report) => {
+          reports.push(report)
+        },
         invariant: ({ snapshot, classify }) => {
           classify(Object.keys(snapshot.context.items).length >= 2, 'two-skus')
         },
       })
-      const firstCall = log.mock.calls[0]
-      if (firstCall === undefined) {
-        throw new Error('expected a console.log call')
-      }
-      expect(firstCall[0]).toBe(STATISTICS_OUTPUT)
-    } finally {
-      log.mockRestore()
-    }
+    )
+    yield* expect(reports).toEqual([STATISTICS_OUTPUT])
   })
 
-  it('Save failures and replay them first', async () => {
+  it('Save failures and replay them first', function*({ expect }) {
     const dir = join(failuresDir, '.xstate-test')
     const options = {
       seed: 1,
       events,
       failures: { dir, key: 'cart-store' },
     }
-    let failure!: ModelTestFailure
-    try {
-      await propertyTest(cartMachine, {
+    const failure = yield* rejectionOf(() =>
+      propertyTest(cartMachine, {
         ...options,
         sut: createCartSut({ buggy: true }),
       })
-    } catch (error) {
-      failure = error as ModelTestFailure
+    )
+    if (!(failure instanceof ModelTestFailure)) {
+      throw new Error(`expected a ModelTestFailure, got ${String(failure)}`)
     }
-    expect(failure.message).toMatch(
+    yield* expect(failure.message).toMatch(
       new RegExp(`\nSaved: ${dir}/cart-store/[0-9a-f]{12}\\.json\n`),
     )
     const [saved] = readdirSync(join(dir, 'cart-store'))
@@ -1330,22 +1433,23 @@ describe('README: How-to guides (oracles, failures, and Vitest)', () => {
       throw new Error('expected a saved failure file')
     }
 
-    await expect(
+    const replayed = yield* rejectionOf(() =>
       propertyTest(cartMachine, {
         ...options,
         sut: createCartSut({ buggy: true }),
-      }),
-    ).rejects.toThrow(
+      })
+    )
+    yield* expect(
+      replayed instanceof Error ? replayed.message : String(replayed),
+    ).toContain(
       `Property observation diverged (replayed from ${join(dir, 'cart-store', saved)})`,
     )
 
-    // Fixed: the saved failure no longer reproduces, so it is deleted.
-    await propertyTest(cartMachine, { ...options, sut: cartSut })
-    expect(readdirSync(join(dir, 'cart-store'))).toEqual([])
+    yield* Effect.promise(() => propertyTest(cartMachine, { ...options, sut: cartSut }))
+    yield* expect(readdirSync(join(dir, 'cart-store'))).toEqual([])
   })
 })
 
-/** The output pasted under "Inspect the distribution of generated data". */
 const STATISTICS_OUTPUT = [
   'Test statistics (100 runs)',
   '',
@@ -1358,13 +1462,10 @@ const STATISTICS_OUTPUT = [
   '   14.0%  two-skus: 26 recorded',
 ].join('\n')
 
-// ------------------------------------------------------- Playwright page fake
-
 interface FakeRoute {
   fulfill: (response: { status: number }) => void
 }
 
-/** A minimal in-memory stand-in for the Playwright `Page` the README drives. */
 class FakeFormPage {
   public gotos = 0
   public readonly loadStates: string[] = []

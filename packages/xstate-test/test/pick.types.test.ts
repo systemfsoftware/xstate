@@ -1,5 +1,6 @@
+import { expectTypeOf, it } from '@systemfsoftware/vitest'
 import { createMachine, types } from '@systemfsoftware/xstate'
-import { expectTypeOf, it } from 'vitest'
+import * as fc from 'fast-check'
 import { pick, propertyTest, testPaths } from '../src/index.js'
 
 const cartMachine = createMachine({
@@ -13,7 +14,7 @@ const cartMachine = createMachine({
   context: { items: {} },
 })
 
-it('infers the snapshot and checks the payload of pick()', () => {
+it('infers the snapshot and checks the payload of pick()', function*({ expect }) {
   if (false) {
     void propertyTest(cartMachine, {
       events: {
@@ -53,9 +54,18 @@ it('infers the snapshot and checks the payload of pick()', () => {
       },
     })
   }
+
+  const initial = cartMachine.getInitialSnapshot()
+  const withItems = { ...initial, context: { items: { apple: 2, banana: 1 } } }
+  const descriptor = pick((snapshot: typeof initial) => Object.keys(snapshot.context.items))
+  yield* expect({
+    empty: descriptor.resolve({ snapshot: initial, generated: 0 }),
+    picked: descriptor.resolve({ snapshot: withItems, generated: 0 }),
+    wrapped: descriptor.resolve({ snapshot: withItems, generated: 3 }),
+  }).toEqual({ empty: undefined, picked: 'apple', wrapped: 'banana' })
 })
 
-it('types the resolved descriptor', () => {
+it('types the resolved descriptor', function*({ expect }) {
   const descriptor = pick(
     (
       snapshot:
@@ -72,4 +82,9 @@ it('types the resolved descriptor', () => {
   expectTypeOf(descriptor.resolve).returns.toEqualTypeOf<
     { sku: string } | undefined
   >()
+
+  yield* expect({
+    keys: Object.keys(descriptor),
+    naturalIndex: fc.sample(descriptor.generate, 1).every((index) => Number.isInteger(index) && index >= 0),
+  }).toEqual({ keys: ['generate', 'resolve'], naturalIndex: true })
 })

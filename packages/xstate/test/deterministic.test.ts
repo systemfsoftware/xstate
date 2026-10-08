@@ -1,5 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createCallbackLogic, createMachine, initialTransition, transition } from '../src/index.js'
+
+const thrownSummary = (
+  run: () => unknown,
+): { readonly name: string; readonly message: string } | undefined => {
+  try {
+    run()
+    return undefined
+  } catch (error) {
+    return error instanceof Error
+      ? { name: error.name, message: error.message }
+      : { name: typeof error, message: String(error) }
+  }
+}
 
 describe('deterministic machine', () => {
   const lightMachine = createMachine({
@@ -27,13 +40,13 @@ describe('deterministic machine', () => {
           walk: {
             on: {
               PED_COUNTDOWN: { target: 'wait' },
-              TIMER: undefined, // forbidden event
+              TIMER: undefined,
             },
           },
           wait: {
             on: {
               PED_COUNTDOWN: { target: 'stop' },
-              TIMER: undefined, // forbidden event
+              TIMER: undefined,
             },
           },
           stop: {},
@@ -62,8 +75,8 @@ describe('deterministic machine', () => {
   })
 
   describe('machine transitions', () => {
-    it('should properly transition states based on event-like object', () => {
-      expect(
+    it('should properly transition states based on event-like object', function*({ expect }) {
+      yield* expect(
         transition(
           lightMachine,
           lightMachine.resolveState({ value: 'green' }),
@@ -74,7 +87,7 @@ describe('deterministic machine', () => {
       ).toEqual('yellow')
     })
 
-    it('should not transition states for illegal transitions', () => {
+    it('should not transition states for illegal transitions', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -93,22 +106,30 @@ describe('deterministic machine', () => {
         type: 'FAKE',
       })
 
-      expect(actor.getSnapshot().value).toBe('a')
-      expect(actor.getSnapshot()).toBe(previousSnapshot)
+      yield* expect({
+        value: actor.getSnapshot().value,
+        sameSnapshot: actor.getSnapshot() === previousSnapshot,
+      }).toEqual({ value: 'a', sameSnapshot: true })
     })
 
-    it('should throw an error if not given an event', () => {
-      expect(() =>
-        transition(
-          lightMachine,
-          testMachine.resolveState({ value: 'red' }) as any,
-          undefined as any,
-        )
-      ).toThrow()
+    it('should throw an error if not given an event', function*({ expect }) {
+      const missingEvent = undefined as never
+      yield* expect(
+        thrownSummary(() =>
+          transition(
+            lightMachine,
+            testMachine.resolveState({ value: 'red' }) as never,
+            missingEvent,
+          )
+        ),
+      ).toEqual({
+        name: 'Error',
+        message: `State 'red' does not exist on '(machine)'`,
+      })
     })
 
-    it('should transition to nested states as target', () => {
-      expect(
+    it('should transition to nested states as target', function*({ expect }) {
+      yield* expect(
         transition(testMachine, testMachine.resolveState({ value: 'a' }), {
           type: 'T',
         })[0].value,
@@ -117,40 +138,50 @@ describe('deterministic machine', () => {
       })
     })
 
-    it('should throw an error for transitions from invalid states', () => {
-      expect(() =>
-        transition(testMachine, testMachine.resolveState({ value: 'fake' }), {
-          type: 'T',
-        })
-      ).toThrow()
+    it('should throw an error for transitions from invalid states', function*({ expect }) {
+      yield* expect(
+        thrownSummary(() =>
+          transition(testMachine, testMachine.resolveState({ value: 'fake' }), {
+            type: 'T',
+          })
+        ),
+      ).toEqual({
+        name: 'Error',
+        message: `State 'fake' does not exist on '(machine)'`,
+      })
     })
 
-    it('should throw an error for transitions from invalid substates', () => {
-      expect(() =>
-        transition(testMachine, testMachine.resolveState({ value: 'a.fake' }), {
-          type: 'T',
-        })
-      ).toThrow()
+    it('should throw an error for transitions from invalid substates', function*({ expect }) {
+      yield* expect(
+        thrownSummary(() =>
+          transition(testMachine, testMachine.resolveState({ value: 'a.fake' }), {
+            type: 'T',
+          })
+        ),
+      ).toEqual({
+        name: 'Error',
+        message: `State 'a.fake' does not exist on '(machine)'`,
+      })
     })
 
-    it('should use the machine.initialState when an undefined state is given', () => {
+    it('should use the machine.initialState when an undefined state is given', function*({ expect }) {
       const [init] = initialTransition(lightMachine, undefined)
-      expect(
+      yield* expect(
         transition(lightMachine, init, { type: 'TIMER' })[0].value,
       ).toEqual('yellow')
     })
 
-    it('should use the machine.initialState when an undefined state is given (unhandled event)', () => {
+    it('should use the machine.initialState when an undefined state is given (unhandled event)', function*({ expect }) {
       const [init] = initialTransition(lightMachine, undefined)
-      expect(
+      yield* expect(
         transition(lightMachine, init, { type: 'TIMER' })[0].value,
       ).toEqual('yellow')
     })
   })
 
   describe('machine transition with nested states', () => {
-    it('should properly transition a nested state', () => {
-      expect(
+    it('should properly transition a nested state', function*({ expect }) {
+      yield* expect(
         transition(
           lightMachine,
           lightMachine.resolveState({ value: { red: 'walk' } }),
@@ -159,8 +190,8 @@ describe('deterministic machine', () => {
       ).toEqual({ red: 'wait' })
     })
 
-    it('should transition from initial nested states', () => {
-      expect(
+    it('should transition from initial nested states', function*({ expect }) {
+      yield* expect(
         transition(lightMachine, lightMachine.resolveState({ value: 'red' }), {
           type: 'PED_COUNTDOWN',
         })[0].value,
@@ -169,8 +200,8 @@ describe('deterministic machine', () => {
       })
     })
 
-    it('should transition from deep initial nested states', () => {
-      expect(
+    it('should transition from deep initial nested states', function*({ expect }) {
+      yield* expect(
         transition(lightMachine, lightMachine.resolveState({ value: 'red' }), {
           type: 'PED_COUNTDOWN',
         })[0].value,
@@ -179,8 +210,8 @@ describe('deterministic machine', () => {
       })
     })
 
-    it('should bubble up events that nested states cannot handle', () => {
-      expect(
+    it('should bubble up events that nested states cannot handle', function*({ expect }) {
+      yield* expect(
         transition(
           lightMachine,
           lightMachine.resolveState({ value: { red: 'stop' } }),
@@ -189,7 +220,7 @@ describe('deterministic machine', () => {
       ).toEqual('green')
     })
 
-    it('should not transition from illegal events', () => {
+    it('should not transition from illegal events', function*({ expect }) {
       const machine = createMachine({
         initial: 'a',
         states: {
@@ -213,12 +244,14 @@ describe('deterministic machine', () => {
         type: 'FAKE',
       })
 
-      expect(actor.getSnapshot().value).toEqual({ a: 'b' })
-      expect(actor.getSnapshot()).toBe(previousSnapshot)
+      yield* expect({
+        value: actor.getSnapshot().value,
+        sameSnapshot: actor.getSnapshot() === previousSnapshot,
+      }).toEqual({ value: { a: 'b' }, sameSnapshot: true })
     })
 
-    it('should transition to the deepest initial state', () => {
-      expect(
+    it('should transition to the deepest initial state', function*({ expect }) {
+      yield* expect(
         transition(
           lightMachine,
           lightMachine.resolveState({ value: 'yellow' }),
@@ -231,7 +264,7 @@ describe('deterministic machine', () => {
       })
     })
 
-    it('should return the same state if no transition occurs', () => {
+    it('should return the same state if no transition occurs', function*({ expect }) {
       const [init] = initialTransition(lightMachine, undefined)
       const [initialState] = transition(lightMachine, init, {
         type: 'NOTHING',
@@ -240,8 +273,15 @@ describe('deterministic machine', () => {
         type: 'NOTHING',
       })
 
-      expect(initialState.value).toEqual(nextState.value)
-      expect(nextState).toBe(initialState)
+      yield* expect({
+        initialValue: initialState.value,
+        nextValue: nextState.value,
+        sameState: nextState === initialState,
+      }).toEqual({
+        initialValue: 'green',
+        nextValue: 'green',
+        sameState: true,
+      })
     })
   })
 
@@ -261,30 +301,25 @@ describe('deterministic machine', () => {
           },
         },
       },
-      // {
-      //   actors: {
-      //     activity: createCallbackLogic(() => () => {})
-      //   }
-      // }
     )
 
-    it('should work with substate nodes that have the same key', () => {
+    it('should work with substate nodes that have the same key', function*({ expect }) {
       const [init] = initialTransition(machine, undefined)
-      expect(transition(machine, init, { type: 'NEXT' })[0].value).toEqual(
+      yield* expect(transition(machine, init, { type: 'NEXT' })[0].value).toEqual(
         'test',
       )
     })
   })
 
   describe('forbidden events', () => {
-    it('undefined transitions should forbid events', () => {
+    it('undefined transitions should forbid events', function*({ expect }) {
       const [walkState] = transition(
         lightMachine,
         lightMachine.resolveState({ value: { red: 'walk' } }),
         { type: 'TIMER' },
       )
 
-      expect(walkState.value).toEqual({ red: 'walk' })
+      yield* expect(walkState.value).toEqual({ red: 'walk' })
     })
   })
 })

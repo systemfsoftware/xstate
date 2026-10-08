@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import z from 'zod'
 import { createActor, createAsyncLogic, createMachine } from '../src/index.js'
 import { createInertActorScope } from '../src/inertActorScope.js'
 
 describe('choice states', () => {
-  it('routes through the first matching condition', () => {
+  it('routes through the first matching condition', function*({ expect }) {
     const machine = createMachine({
       context: {
         isVip: true,
@@ -32,10 +32,10 @@ describe('choice states', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().value).toBe('vipFlow')
+    yield* expect(actor.getSnapshot().value).toBe('vipFlow')
   })
 
-  it('routes through the fallback when no condition matches', () => {
+  it('routes through the fallback when no condition matches', function*({ expect }) {
     const machine = createMachine({
       context: {
         isVip: false,
@@ -67,10 +67,10 @@ describe('choice states', () => {
 
     const actor = createActor(machine).start()
 
-    expect(actor.getSnapshot().value).toBe('standardFlow')
+    yield* expect(actor.getSnapshot().value).toBe('standardFlow')
   })
 
-  it('routes when entered via a transition', () => {
+  it('routes when entered via a transition', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         context: z.object({
@@ -114,11 +114,11 @@ describe('choice states', () => {
 
     actor.trigger.ROUTE()
 
-    expect(actor.getSnapshot().value).toBe('review')
+    yield* expect(actor.getSnapshot().value).toBe('review')
   })
 
-  it('throws when a choice state does not declare a `choice` function', () => {
-    expect(() =>
+  it('throws when a choice state does not declare a `choice` function', function*({ expect }) {
+    yield* expect(() =>
       createMachine({
         initial: 'routing',
         states: {
@@ -133,8 +133,8 @@ describe('choice states', () => {
     )
   })
 
-  it('throws when a non-choice state declares `choice`', () => {
-    expect(() =>
+  it('throws when a non-choice state declares `choice`', function*({ expect }) {
+    yield* expect(() =>
       createMachine({
         initial: 'a',
         states: {
@@ -149,7 +149,7 @@ describe('choice states', () => {
     )
   })
 
-  it('throws when a choice does not resolve to a target', () => {
+  it('throws when a choice does not resolve to a target', function*({ expect }) {
     const machine = createMachine({
       initial: 'routing',
       states: {
@@ -161,7 +161,7 @@ describe('choice states', () => {
       },
     })
 
-    expect(() => machine.getInitialSnapshot(createInertActorScope(machine))).toThrow(
+    yield* expect(() => machine.getInitialSnapshot(createInertActorScope(machine))).toThrow(
       'Choice state "(machine).routing" must resolve to a target.',
     )
   })
@@ -169,14 +169,14 @@ describe('choice states', () => {
   it.each([
     [
       'invoke',
-      { invoke: { src: createAsyncLogic({ run: async () => undefined }) } },
+      { invoke: { src: createAsyncLogic({ run: () => Promise.resolve(undefined) }) } },
     ],
     ['after', { after: { 10: { target: 'done' } } }],
     ['on', { on: { NEXT: { target: 'done' } } }],
     ['entry', { entry: () => undefined }],
     ['exit', { exit: () => undefined }],
-  ])('throws when a choice state declares `%s`', (key, config) => {
-    expect(() =>
+  ])('throws when a choice state declares `%s`', function*([key, config], { expect }) {
+    yield* expect(() =>
       createMachine({
         initial: 'routing',
         states: {

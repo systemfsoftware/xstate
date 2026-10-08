@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { z } from 'zod'
 import { assertEvent, createActor, createMachine } from '../src/index.js'
 
 describe('assertion helpers', () => {
-  it('assertEvent asserts the correct event type', () => {
+  it('assertEvent asserts the correct event type', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     type TestEvent =
       | { type: 'greet'; message: string }
@@ -40,11 +41,14 @@ describe('assertion helpers', () => {
 
     const actor = createActor(machine)
 
+    let observed: { message: string; isError: boolean } | undefined
+
     actor.subscribe({
       error(err) {
-        expect(err).toMatchInlineSnapshot(
-          `[Error: Expected event {"type":"count","value":42} to have type matching "greet"]`,
-        )
+        observed = {
+          message: err instanceof Error ? err.message : String(err),
+          isError: err instanceof Error,
+        }
         resolve()
       },
     })
@@ -53,10 +57,15 @@ describe('assertion helpers', () => {
 
     actor.send({ type: 'count', value: 42 })
 
-    return promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect(observed).toEqual({
+      message: 'Expected event {"type":"count","value":42} to have type matching "greet"',
+      isError: true,
+    })
   })
 
-  it('assertEvent asserts multiple event types', () => {
+  it('assertEvent asserts multiple event types', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     type TestEvent =
       | { type: 'greet'; message: string }
@@ -104,11 +113,14 @@ describe('assertion helpers', () => {
 
     const actor = createActor(machine)
 
+    let observed: { message: string; isError: boolean } | undefined
+
     actor.subscribe({
       error(err) {
-        expect(err).toMatchInlineSnapshot(
-          `[Error: Expected event {"type":"count","value":42} to have one of types matching "greet", "notify"]`,
-        )
+        observed = {
+          message: err instanceof Error ? err.message : String(err),
+          isError: err instanceof Error,
+        }
         resolve()
       },
     })
@@ -117,6 +129,11 @@ describe('assertion helpers', () => {
 
     actor.send({ type: 'count', value: 42 })
 
-    return promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect(observed).toEqual({
+      message: 'Expected event {"type":"count","value":42} to have one of types matching "greet", "notify"',
+      isError: true,
+    })
   })
 })
