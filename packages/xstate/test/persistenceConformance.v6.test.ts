@@ -1,4 +1,6 @@
 import { describe, it } from '@systemfsoftware/vitest'
+import { Ajv2020, type AnySchemaObject } from 'ajv/dist/2020.js'
+import { readFileSync } from 'node:fs'
 import {
   type AnyActorRef,
   createActor,
@@ -9,8 +11,22 @@ import {
   SimulatedClock,
 } from '../src/index.js'
 
-function roundTrip<T>(persisted: T): T {
-  return JSON.parse(JSON.stringify(persisted)) as T
+const persistedSnapshotSchema: AnySchemaObject = JSON.parse(
+  readFileSync(
+    new URL('../src/persistedSnapshot.schema.json', import.meta.url),
+    'utf8',
+  ),
+)
+const validateEnvelope = new Ajv2020({ allErrors: true }).compile(
+  persistedSnapshotSchema,
+)
+
+function roundTrip<T>(persisted: T): { json: T; schemaErrors: unknown[] | null } {
+  const json = JSON.parse(JSON.stringify(persisted)) as T
+  return {
+    json,
+    schemaErrors: validateEnvelope(json) ? null : (validateEnvelope.errors ?? []),
+  }
 }
 
 describe('non-JSON payload warning (dev)', () => {
@@ -68,22 +84,30 @@ describe('non-JSON payload warning (dev)', () => {
     const sharing = createMachine({
       context: { left: shared, right: { nested: shared } },
     })
-    const sharingSnapshot = createActor(sharing).getPersistedSnapshot()
-    yield* expect({ message, sharingSnapshot }).toMatchObject({
+    const { json: sharingSnapshot, schemaErrors } = roundTrip(
+      createActor(sharing).getPersistedSnapshot(),
+    )
+    yield* expect({ message, sharingSnapshot, schemaErrors }).toMatchObject({
       message: 'Cannot persist actor "list": circular reference at context.items[0].parent.items[0]',
       sharingSnapshot: {
         context: { left: { a: 1 }, right: { nested: { a: 1 } } },
       },
+      schemaErrors: null,
     })
   })
 
   it('does not warn for an undefined property', function*({ expect }) {
     const warned: string[] = []
     const machine = createMachine({ context: { result: undefined } })
-    createActor(machine, {
-      warn: (message) => warned.push(message),
-    }).getPersistedSnapshot()
-    yield* expect(warned).toEqual([])
+    const { schemaErrors } = roundTrip(
+      createActor(machine, {
+        warn: (message) => warned.push(message),
+      }).getPersistedSnapshot(),
+    )
+    yield* expect({ warned, schemaErrors }).toEqual({
+      warned: [],
+      schemaErrors: null,
+    })
   })
 
   it('does not warn for JSON values, Dates, shared references, or actor refs', function*({ expect }) {
@@ -128,20 +152,28 @@ describe('#5077 re-persistability of children', () => {
 
     const actor = createActor(parent).start()
     actor.send({ type: 'spawn' })
-    const persisted = roundTrip(actor.getPersistedSnapshot())
+    const { json: persisted, schemaErrors: persistedErrors } = roundTrip(
+      actor.getPersistedSnapshot(),
+    )
     actor.stop()
 
     const restored = createActor(parent, { snapshot: persisted }).start()
     restored.send({ type: 'ping' })
 
+    const { json: restoredJson, schemaErrors: restoredErrors } = roundTrip(
+      restored.getPersistedSnapshot(),
+    )
+
     yield* expect({
       src: persisted.children['myChild']?.src,
       restoredChild: restored.getSnapshot().children['myChild']?.getSnapshot(),
-      restoredSrc: roundTrip(restored.getPersistedSnapshot()).children['myChild']?.src,
+      restoredSrc: restoredJson.children['myChild']?.src,
+      schemaErrors: [persistedErrors, restoredErrors],
     }).toMatchObject({
       src: 'child',
       restoredChild: { context: { count: 1 } },
       restoredSrc: 'child',
+      schemaErrors: [null, null],
     })
   })
 
@@ -159,7 +191,12 @@ describe('#5077 re-persistability of children', () => {
     const actor = createActor(parent).start()
     actor.send({ type: 'spawn' })
 
-    yield* expect(roundTrip(actor.getPersistedSnapshot()).children['myChild']?.src).toBe('child')
+    const { json, schemaErrors } = roundTrip(actor.getPersistedSnapshot())
+
+    yield* expect({ src: json.children['myChild']?.src, schemaErrors }).toEqual({
+      src: 'child',
+      schemaErrors: null,
+    })
   })
 
   it('an extended actor retains its registered source when transition-spawned', function*({ expect }) {
@@ -177,7 +214,12 @@ describe('#5077 re-persistability of children', () => {
     const actor = createActor(parent).start()
     actor.send({ type: 'spawn' })
 
-    yield* expect(roundTrip(actor.getPersistedSnapshot()).children['myChild']?.src).toBe('child')
+    const { json, schemaErrors } = roundTrip(actor.getPersistedSnapshot())
+
+    yield* expect({ src: json.children['myChild']?.src, schemaErrors }).toEqual({
+      src: 'child',
+      schemaErrors: null,
+    })
   })
 
   it('preserves the explicitly selected source when duplicate registrations later diverge', function*({ expect }) {
@@ -207,7 +249,9 @@ describe('#5077 re-persistability of children', () => {
 
     const actor = createActor(parent).start()
     actor.send({ type: 'spawn' })
-    const persisted = roundTrip(actor.getPersistedSnapshot())
+    const { json: persisted, schemaErrors: persistedErrors } = roundTrip(
+      actor.getPersistedSnapshot(),
+    )
     actor.stop()
 
     const migratedParent = parent.provide({ actors: { second: replacement } })
@@ -219,9 +263,11 @@ describe('#5077 re-persistability of children', () => {
     yield* expect({
       src: persisted.children['worker']?.src,
       worker: restored.getSnapshot().children['worker']?.getSnapshot(),
+      schemaErrors: persistedErrors,
     }).toMatchObject({
       src: 'second',
       worker: { context: { count: 10 } },
+      schemaErrors: null,
     })
   })
 
@@ -266,23 +312,28 @@ describe('#5077 re-persistability of children', () => {
     })
 
     const actor = createActor(parent).start()
-    const json = roundTrip(actor.getPersistedSnapshot())
+    const { json, schemaErrors: firstErrors } = roundTrip(
+      actor.getPersistedSnapshot(),
+    )
     actor.stop()
 
     const restored = createActor(parent, { snapshot: json }).start()
 
     restored.send({ type: 'ping' })
 
-    const secondRestored = createActor(parent, {
-      snapshot: roundTrip(restored.getPersistedSnapshot()),
-    }).start()
+    const { json: secondJson, schemaErrors: secondErrors } = roundTrip(
+      restored.getPersistedSnapshot(),
+    )
+    const secondRestored = createActor(parent, { snapshot: secondJson }).start()
 
     yield* expect({
       child: restored.getSnapshot().children['myChild']?.getSnapshot(),
       secondStatus: secondRestored.getSnapshot().status,
+      schemaErrors: [firstErrors, secondErrors],
     }).toMatchObject({
       child: { context: { count: 1 } },
       secondStatus: 'active',
+      schemaErrors: [null, null],
     })
   })
 
@@ -310,23 +361,28 @@ describe('#5077 re-persistability of children', () => {
     })
 
     const actor = createActor(parent).start()
-    const json = roundTrip(actor.getPersistedSnapshot())
+    const { json, schemaErrors: firstErrors } = roundTrip(
+      actor.getPersistedSnapshot(),
+    )
     actor.stop()
 
     const restored = createActor(parent, { snapshot: json }).start()
 
     restored.send({ type: 'ping' })
 
-    const secondRestored = createActor(parent, {
-      snapshot: roundTrip(restored.getPersistedSnapshot()),
-    }).start()
+    const { json: secondJson, schemaErrors: secondErrors } = roundTrip(
+      restored.getPersistedSnapshot(),
+    )
+    const secondRestored = createActor(parent, { snapshot: secondJson }).start()
 
     yield* expect({
       child: restored.getSnapshot().children['myChild']?.getSnapshot(),
       secondStatus: secondRestored.getSnapshot().status,
+      schemaErrors: [firstErrors, secondErrors],
     }).toMatchObject({
       child: { context: { count: 1 } },
       secondStatus: 'active',
+      schemaErrors: [null, null],
     })
   })
 
@@ -345,7 +401,9 @@ describe('#5077 re-persistability of children', () => {
       throw new Error('expected a spawned child')
     }
     const sessionId = actorChild.sessionId
-    const persisted = roundTrip(actor.getPersistedSnapshot())
+    const { json: persisted, schemaErrors } = roundTrip(
+      actor.getPersistedSnapshot(),
+    )
     actor.stop()
 
     const restored = createActor(parent, { snapshot: persisted }).start()
@@ -368,11 +426,13 @@ describe('#5077 re-persistability of children', () => {
       hasSessionId: persistedRef !== undefined && 'sessionId' in persistedRef,
       sameSession: restoredChild.sessionId === sessionId,
       childIsSame: restored.getSnapshot().children['myChild'] === restoredChild,
+      schemaErrors,
     }).toEqual({
       hasIncarnationId: false,
       hasSessionId: false,
       sameSession: false,
       childIsSame: true,
+      schemaErrors: null,
     })
   })
 
@@ -395,7 +455,9 @@ describe('#5077 re-persistability of children', () => {
     }
     const removedSessionId = removedChild.sessionId
     actor.send({ type: 'REMOVE' })
-    const persisted = roundTrip(actor.getPersistedSnapshot())
+    const { json: persisted, schemaErrors } = roundTrip(
+      actor.getPersistedSnapshot(),
+    )
     actor.stop()
 
     const restored = createActor(parent, { snapshot: persisted }).start()
@@ -416,9 +478,11 @@ describe('#5077 re-persistability of children', () => {
     yield* expect({
       sameSession: replacement.sessionId === removedSessionId,
       childIsSame: restored.getSnapshot().children['myChild'] === replacement,
+      schemaErrors,
     }).toEqual({
       sameSession: false,
       childIsSame: true,
+      schemaErrors: null,
     })
   })
 })
@@ -437,16 +501,21 @@ describe('missing persisted child sources', () => {
       actors: { child },
     })
     const actor = createActor(configuredParent).start()
-    const persisted = roundTrip(actor.getPersistedSnapshot())
+    const { json: persisted, schemaErrors } = roundTrip(
+      actor.getPersistedSnapshot(),
+    )
     actor.stop()
 
     const restored = createActor(parent, { snapshot: persisted })
 
-    yield* expect(restored.getSnapshot()).toMatchObject({
-      status: 'error',
-      error: expect.objectContaining({
-        message: expect.stringContaining("child source 'child'"),
-      }),
+    yield* expect({ snapshot: restored.getSnapshot(), schemaErrors }).toMatchObject({
+      snapshot: {
+        status: 'error',
+        error: expect.objectContaining({
+          message: expect.stringContaining("child source 'child'"),
+        }),
+      },
+      schemaErrors: null,
     })
   })
 })
@@ -471,7 +540,7 @@ describe('#4873 system.get after restore', () => {
       })
 
       const actor = createActor(parent).start()
-      const json = roundTrip(actor.getPersistedSnapshot())
+      const { json, schemaErrors } = roundTrip(actor.getPersistedSnapshot())
       actor.stop()
 
       const restored = createActor(parent, { snapshot: json }).start()
@@ -482,9 +551,11 @@ describe('#4873 system.get after restore', () => {
       yield* expect({
         present: ref !== undefined,
         snapshot: ref?.getSnapshot(),
+        schemaErrors,
       }).toMatchObject({
         present: true,
         snapshot: { context: { count: 1 } },
+        schemaErrors: null,
       })
     },
   )
@@ -523,15 +594,20 @@ describe('#5178 historyValue revival', () => {
     actor.send({ type: 'POWER' })
     const offValue = actor.getSnapshot().value
 
-    const json = roundTrip(actor.getPersistedSnapshot())
+    const { json, schemaErrors } = roundTrip(actor.getPersistedSnapshot())
     actor.stop()
 
     const restored = createActor(machine, { snapshot: json }).start()
     restored.send({ type: 'POWER' })
 
-    yield* expect({ offValue, restoredValue: restored.getSnapshot().value }).toEqual({
+    yield* expect({
+      offValue,
+      restoredValue: restored.getSnapshot().value,
+      schemaErrors,
+    }).toEqual({
       offValue: 'off',
       restoredValue: { on: 'second' },
+      schemaErrors: null,
     })
   })
 })
@@ -551,10 +627,9 @@ describe('#5331 logical timers restored', () => {
   it('persists timer intent and restarts its declared delay locally', function*({ expect }) {
     const clock = new SimulatedClock()
     const actor = createActor(createDelayMachine(), { clock }).start()
-    const persisted = actor.getPersistedSnapshot()
+    const { json, schemaErrors } = roundTrip(actor.getPersistedSnapshot())
     actor.stop()
 
-    const json = roundTrip(persisted)
     const timers = Object.values(
       (json['timers'] ?? {}) as Record<string, Record<string, unknown>>,
     )
@@ -578,6 +653,7 @@ describe('#5331 logical timers restored', () => {
       hasElapsed: timer !== undefined && 'elapsed' in timer,
       pendingValue,
       doneValue,
+      schemaErrors,
     }).toMatchObject({
       timerCount: 1,
       timer: {
@@ -589,6 +665,7 @@ describe('#5331 logical timers restored', () => {
       hasElapsed: false,
       pendingValue: 'pending',
       doneValue: 'done',
+      schemaErrors: null,
     })
   })
 })
@@ -606,7 +683,9 @@ describe('#5228 restore errors surface', () => {
       })
 
       const actor = createActor(machine).start()
-      const persisted = roundTrip(actor.getPersistedSnapshot())
+      const { json: persisted, schemaErrors } = roundTrip(
+        actor.getPersistedSnapshot(),
+      )
       actor.stop()
 
       persisted['value'] = 'nonexistent'
@@ -626,7 +705,12 @@ describe('#5228 restore errors surface', () => {
       yield* expect({
         surfacedOrThrewOrError: threw || surfaced || status === 'error',
         statusNotActive: status !== 'active',
-      }).toEqual({ surfacedOrThrewOrError: true, statusNotActive: true })
+        schemaErrors,
+      }).toEqual({
+        surfacedOrThrewOrError: true,
+        statusNotActive: true,
+        schemaErrors: null,
+      })
     },
   )
 
@@ -642,7 +726,7 @@ describe('#5228 restore errors surface', () => {
       states: { a: {} },
     })
 
-    const persisted = roundTrip(
+    const { json: persisted, schemaErrors } = roundTrip(
       createActor(machineV1).start().getPersistedSnapshot(),
     )
 
@@ -650,11 +734,14 @@ describe('#5228 restore errors surface', () => {
     restored.subscribe({ error: () => {} })
     restored.start()
 
-    yield* expect(restored.getSnapshot()).toMatchObject({
-      status: 'error',
-      error: {
-        message: expect.stringMatching(/does not match machine version/),
+    yield* expect({ snapshot: restored.getSnapshot(), schemaErrors }).toMatchObject({
+      snapshot: {
+        status: 'error',
+        error: {
+          message: expect.stringMatching(/does not match machine version/),
+        },
       },
+      schemaErrors: null,
     })
   })
 
@@ -677,7 +764,7 @@ describe('#5228 restore errors surface', () => {
       states: { a: {} },
     })
 
-    const persisted = roundTrip(
+    const { json: persisted, schemaErrors } = roundTrip(
       createActor(machineV1).start().getPersistedSnapshot(),
     )
     const restored = createActor(machineV2, { snapshot: persisted }).start()
@@ -685,7 +772,8 @@ describe('#5228 restore errors surface', () => {
     yield* expect({
       status: restored.getSnapshot().status,
       context: restored.getSnapshot().context,
-    }).toEqual({ status: 'active', context: { total: 5 } })
+      schemaErrors,
+    }).toEqual({ status: 'active', context: { total: 5 }, schemaErrors: null })
   })
 
   it('preserves an explicit child source through parent snapshot migration', function*({ expect }) {
@@ -709,7 +797,7 @@ describe('#5228 restore errors surface', () => {
       actors: { first: shared, second: secondV2 },
     })
 
-    const persisted = roundTrip(
+    const { json: persisted, schemaErrors } = roundTrip(
       createActor(machineV1).start().getPersistedSnapshot(),
     )
 
@@ -719,7 +807,8 @@ describe('#5228 restore errors surface', () => {
     yield* expect({
       src: persisted.children['worker']?.src,
       sameLogic: worker !== undefined && 'logic' in worker && worker.logic === secondV2,
-    }).toEqual({ src: 'second', sameLogic: true })
+      schemaErrors,
+    }).toEqual({ src: 'second', sameLogic: true, schemaErrors: null })
   })
 })
 
@@ -739,7 +828,7 @@ describe('#4583 rehydrated stopped (done) actor', () => {
       actor.send({ type: 'NEXT' })
       const doneBeforePersist = actor.getSnapshot().status
 
-      const json = roundTrip(actor.getPersistedSnapshot())
+      const { json, schemaErrors } = roundTrip(actor.getPersistedSnapshot())
       actor.stop()
 
       const restored = createActor(machine, { snapshot: json })
@@ -749,7 +838,12 @@ describe('#4583 rehydrated stopped (done) actor', () => {
       yield* expect({
         doneBeforePersist,
         statusAfterRestore: restored.getSnapshot().status,
-      }).toEqual({ doneBeforePersist: 'done', statusAfterRestore: 'done' })
+        schemaErrors,
+      }).toEqual({
+        doneBeforePersist: 'done',
+        statusAfterRestore: 'done',
+        schemaErrors: null,
+      })
     },
   )
 })
