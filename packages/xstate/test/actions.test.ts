@@ -3372,6 +3372,7 @@ describe('sendTo', () => {
     "should not attempt to deliver a delayed event to the spawned actor's ID that was stopped since the event was scheduled",
     function*({ expect }) {
       const rejections: EventRejection[] = []
+      const warned: string[] = []
       const spy1 = recorder()
       let stoppedChildSessionId: string | undefined
       const child1 = createMachine({
@@ -3428,17 +3429,22 @@ describe('sendTo', () => {
           },
         },
       })
-      const actorRef = createActor(machine, { onRejectedEvent: (r) => rejections.push(r) }).start()
+      const actorRef = createActor(machine, {
+        onRejectedEvent: (r) => rejections.push(r),
+        warn: (message) => warned.push(message),
+      }).start()
       actorRef.send({ type: 'START' })
       yield* Effect.promise(() => sleep(10))
       yield* expect({
         spy1: spy1.calls,
         spy2: spy2.calls,
         rejections: rejections.map(({ reason, targetId, event }) => ({ reason, targetId, event })),
+        warned,
       }).toEqual({
         spy1: [],
         spy2: [],
         rejections: [{ reason: 'stopped', targetId: 'myChild', event: { type: 'PING' } }],
+        warned: [`Event "PING" to actor "myChild" was not delivered (stopped).`],
       })
     },
   )
@@ -3446,7 +3452,7 @@ describe('sendTo', () => {
   it.skip(
     "should not attempt to deliver a delayed event to the invoked actor's ID that was stopped since the event was scheduled",
     function*({ expect }) {
-      const rejections: EventRejection[] = []
+      const warned: string[] = []
       const spy1 = recorder()
       const child1 = createMachine({
         on: {
@@ -3499,18 +3505,20 @@ describe('sendTo', () => {
           },
         },
       })
-      const actorRef = createActor(machine, { onRejectedEvent: (r) => rejections.push(r) }).start()
+      const actorRef = createActor(machine, { warn: (message) => warned.push(message) }).start()
       actorRef.send({ type: 'START' })
       actorRef.send({ type: 'NEXT' })
       yield* Effect.promise(() => sleep(10))
       yield* expect({
         spy1: spy1.calls,
         spy2: spy2.calls,
-        rejections: rejections.map(({ reason, targetId, event }) => ({ reason, targetId, event })),
+        warned,
       }).toEqual({
         spy1: [],
         spy2: [],
-        rejections: [{ reason: 'stopped', targetId: 'myChild', event: { type: 'PING' } }],
+        warned: [
+          'Event "PING" was sent to stopped actor "myChild (x:1)". This actor has already reached its final state, and will not transition.\nEvent: {"type":"PING"}',
+        ],
       })
     },
   )

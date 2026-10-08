@@ -420,8 +420,9 @@ function finalStateBehaviorWarning(stateNode: AnyStateNode): string | undefined 
   }; final states cannot run actors or take transitions.`
 }
 
-function isStateMachineLogic(logic: AnyActorLogic): logic is AnyStateMachine {
-  return 'root' in logic
+function isStateMachineLogic(logic: unknown): logic is AnyStateMachine {
+  return typeof logic === 'object' && logic !== null && 'root' in logic &&
+    logic.root instanceof StateNode
 }
 
 /** @internal */
