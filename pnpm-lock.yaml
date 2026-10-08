@@ -232,6 +232,7 @@ catalogs:
       version: 5.0.3
 
 overrides:
+  '@systemfsoftware/conformance-spec': file:.sfs-deps/conformance-spec-1.0.0.tgz
   '@systemfsoftware/effect-cell-types': file:.sfs-deps/effect-cell-types-12.0.0.tgz
   '@systemfsoftware/effect-gherkin-spec': file:.sfs-deps/effect-gherkin-spec-7.0.1.tgz
   '@systemfsoftware/effect-schema-discovery': file:.sfs-deps/effect-schema-discovery-2.0.0.tgz
@@ -336,6 +337,12 @@ importers:
       '@systemfsoftware/arethetypeswrong-cli':
         specifier: 'catalog:'
         version: file:.sfs-deps/arethetypeswrong-cli-4.2.0.tgz
+      '@systemfsoftware/conformance-spec':
+        specifier: file:../../.sfs-deps/conformance-spec-1.0.0.tgz
+        version: file:.sfs-deps/conformance-spec-1.0.0.tgz(effect@4.0.1)
+      '@systemfsoftware/effect-gherkin-spec':
+        specifier: file:../../.sfs-deps/effect-gherkin-spec-7.0.1.tgz
+        version: file:.sfs-deps/effect-gherkin-spec-7.0.1.tgz(@systemfsoftware/vitest@file:.sfs-deps/vitest-2.0.0.tgz(effect@4.0.1)(redis@6.3.0(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1))))(effect@4.0.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1)))
       '@systemfsoftware/tsconfig':
         specifier: file:../../.sfs-deps/tsconfig-2.0.1.tgz
         version: file:.sfs-deps/tsconfig-2.0.1.tgz
@@ -1714,11 +1721,39 @@ packages:
     engines: {node: '>=24'}
     hasBin: true
 
+  '@systemfsoftware/conformance-spec@file:.sfs-deps/conformance-spec-1.0.0.tgz':
+    resolution: {integrity: sha512-E1SUhkLF6UbaFpwnR0X1EeRUQcUGHSVVLkabuMkLBNT2zPU3K5l5JJ+soT2f2ocaCwl9qsnqoPw4yKWblRyqng==, tarball: file:.sfs-deps/conformance-spec-1.0.0.tgz}
+    version: 1.0.0
+    peerDependencies:
+      effect: ^4
+
   '@systemfsoftware/effect-cell-types@file:.sfs-deps/effect-cell-types-12.0.0.tgz':
     resolution: {integrity: sha512-3pmbmzGrUe//NOacyRToZZtv/ow+DREFxL05LiS7Z8ZhPriIKwpvCBACWQ8kPFzkcSAIVPZV+XMx56LkU266EQ==, tarball: file:.sfs-deps/effect-cell-types-12.0.0.tgz}
     version: 12.0.0
     peerDependencies:
       effect: ^4
+
+  '@systemfsoftware/effect-gherkin-spec@file:.sfs-deps/effect-gherkin-spec-7.0.1.tgz':
+    resolution: {integrity: sha512-Uyr2LKkWp1e6cqmSEKZtGxuYCZ6kyj/HD1pt90RcCk6x20s6e76l5s5SAhYFyfn7N14D4XFH8YFu7cHUtaLBOA==, tarball: file:.sfs-deps/effect-gherkin-spec-7.0.1.tgz}
+    version: 7.0.1
+    peerDependencies:
+      '@systemfsoftware/vitest': ^2.0.0
+      effect: ^4
+      vitest: ^5
+
+  '@systemfsoftware/effect-sim-kernel@file:.sfs-deps/effect-sim-kernel-1.0.0.tgz':
+    resolution: {integrity: sha512-B4z4wxtI8EIpFIg3K3VIBqfhIELg8JNX1j21htt0c6H8KagiAE9nY90fgzrSK52Ot8nR3wfNHXLNVyk63j7F8g==, tarball: file:.sfs-deps/effect-sim-kernel-1.0.0.tgz}
+    version: 1.0.0
+    peerDependencies:
+      effect: ^4
+
+  '@systemfsoftware/effect-spec-runtime@file:.sfs-deps/effect-spec-runtime-1.0.1.tgz':
+    resolution: {integrity: sha512-U8/9ZN9i82idvFwrM3QD+G8zs0kx96QfGqpNTNBRtg0iPk+RbDPH2WjSZWXP6fQdMw7NTo1YfV/GBdsnytVfMA==, tarball: file:.sfs-deps/effect-spec-runtime-1.0.1.tgz}
+    version: 1.0.1
+    peerDependencies:
+      '@systemfsoftware/vitest': ^2.0.0
+      effect: ^4
+      vitest: ^5
 
   '@systemfsoftware/oxlint-config-cell-architecture@file:.sfs-deps/oxlint-config-cell-architecture-4.0.0.tgz':
     resolution: {integrity: sha512-Uye24d15thfQ/Z4MJC7bFBYTMMc914SjLNjsVpyo/KxI8c/9ocAtAw4JvSNQcuNZSG9/+LTeQipwfkd/N8gRvQ==, tarball: file:.sfs-deps/oxlint-config-cell-architecture-4.0.0.tgz}
@@ -4094,9 +4129,32 @@ snapshots:
 
   '@systemfsoftware/arethetypeswrong-cli@file:.sfs-deps/arethetypeswrong-cli-4.2.0.tgz': {}
 
+  '@systemfsoftware/conformance-spec@file:.sfs-deps/conformance-spec-1.0.0.tgz(effect@4.0.1)':
+    dependencies:
+      '@systemfsoftware/effect-sim-kernel': file:.sfs-deps/effect-sim-kernel-1.0.0.tgz(effect@4.0.1)
+      effect: 4.0.1
+
   '@systemfsoftware/effect-cell-types@file:.sfs-deps/effect-cell-types-12.0.0.tgz(effect@4.0.1)':
     dependencies:
       effect: 4.0.1
+
+  '@systemfsoftware/effect-gherkin-spec@file:.sfs-deps/effect-gherkin-spec-7.0.1.tgz(@systemfsoftware/vitest@file:.sfs-deps/vitest-2.0.0.tgz(effect@4.0.1)(redis@6.3.0(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1))))(effect@4.0.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1)))':
+    dependencies:
+      '@systemfsoftware/effect-spec-runtime': file:.sfs-deps/effect-spec-runtime-1.0.1.tgz(@systemfsoftware/vitest@file:.sfs-deps/vitest-2.0.0.tgz(effect@4.0.1)(redis@6.3.0(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1))))(effect@4.0.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1)))
+      '@systemfsoftware/vitest': file:.sfs-deps/vitest-2.0.0.tgz(effect@4.0.1)(redis@6.3.0(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1)))
+      effect: 4.0.1
+      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1))
+
+  '@systemfsoftware/effect-sim-kernel@file:.sfs-deps/effect-sim-kernel-1.0.0.tgz(effect@4.0.1)':
+    dependencies:
+      effect: 4.0.1
+
+  '@systemfsoftware/effect-spec-runtime@file:.sfs-deps/effect-spec-runtime-1.0.1.tgz(@systemfsoftware/vitest@file:.sfs-deps/vitest-2.0.0.tgz(effect@4.0.1)(redis@6.3.0(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1))))(effect@4.0.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1)))':
+    dependencies:
+      '@systemfsoftware/effect-sim-kernel': file:.sfs-deps/effect-sim-kernel-1.0.0.tgz(effect@4.0.1)
+      '@systemfsoftware/vitest': file:.sfs-deps/vitest-2.0.0.tgz(effect@4.0.1)(redis@6.3.0(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1)))
+      effect: 4.0.1
+      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.2(@types/node@24.19.1)(jiti@2.6.1)(yaml@2.9.1))
 
   '@systemfsoftware/oxlint-config-cell-architecture@file:.sfs-deps/oxlint-config-cell-architecture-4.0.0.tgz(effect@4.0.1)(oxlint@1.87.0(oxlint-tsgolint@7.0.2001))(typescript@7.0.2)':
     dependencies:
