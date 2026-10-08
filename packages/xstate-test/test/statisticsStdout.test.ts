@@ -8,6 +8,7 @@ const packageDir = fileURLToPath(new URL('..', import.meta.url))
 
 interface CampaignOutput {
   readonly stdout: string
+  readonly stderr: string
   readonly deliveredJson: string
 }
 
@@ -18,7 +19,7 @@ class CampaignExited
   }>
 {}
 
-const campaignScript = (statistics: string): string =>
+const campaignScript = (statisticsOption: string): string =>
   [
     `import { writeSync } from 'node:fs'`,
     `import { createMachine } from '@systemfsoftware/xstate'`,
@@ -34,16 +35,16 @@ const campaignScript = (statistics: string): string =>
     `  numRuns: 1,`,
     `  maxCommands: 1,`,
     `  events: { INC: fc.constant({}) },`,
-    `  statistics: ${statistics},`,
+    `  ${statisticsOption}`,
     `})`,
     `writeSync(3, JSON.stringify(delivered))`,
   ].join('\n')
 
-const runCampaign = (statistics: string): Effect.Effect<CampaignOutput, CampaignExited> =>
+const runCampaign = (statisticsOption: string): Effect.Effect<CampaignOutput, CampaignExited> =>
   Effect.callback<CampaignOutput, CampaignExited>((resume) => {
     const child = spawn(
       process.execPath,
-      ['--input-type=module', '--eval', campaignScript(statistics)],
+      ['--input-type=module', '--eval', campaignScript(statisticsOption)],
       { cwd: packageDir, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] },
     )
     const stdout: Buffer[] = []
@@ -59,6 +60,7 @@ const runCampaign = (statistics: string): Effect.Effect<CampaignOutput, Campaign
       }
       resume(Effect.succeed({
         stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
         deliveredJson: Buffer.concat(channel).toString('utf8'),
       }))
     })
@@ -73,16 +75,25 @@ const oneRunReport = [
 
 describe('statistics on a campaign process stdout', (it) => {
   it('prints the report when statistics is true', function*({ expect }) {
-    yield* expect(yield* runCampaign('true')).toEqual({ stdout: `${oneRunReport}\n`, deliveredJson: '[]' })
+    yield* expect(yield* runCampaign('statistics: true,')).toEqual({
+      stdout: `${oneRunReport}\n`,
+      stderr: '',
+      deliveredJson: '[]',
+    })
+  })
+
+  it('prints nothing when statistics is left out', function*({ expect }) {
+    yield* expect(yield* runCampaign('')).toEqual({ stdout: '', stderr: '', deliveredJson: '[]' })
   })
 
   it('prints nothing when statistics is false', function*({ expect }) {
-    yield* expect(yield* runCampaign('false')).toEqual({ stdout: '', deliveredJson: '[]' })
+    yield* expect(yield* runCampaign('statistics: false,')).toEqual({ stdout: '', stderr: '', deliveredJson: '[]' })
   })
 
   it('prints nothing and hands the report to a callback', function*({ expect }) {
-    yield* expect(yield* runCampaign('(report) => { delivered.push(report) }')).toEqual({
+    yield* expect(yield* runCampaign('statistics: (report) => { delivered.push(report) },')).toEqual({
       stdout: '',
+      stderr: '',
       deliveredJson: JSON.stringify([oneRunReport]),
     })
   })
