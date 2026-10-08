@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import {
   type AnyActorLogic,
   type AnyEventObject,
@@ -65,7 +66,7 @@ export function durableExecutionConformance({
 }: DurableConformanceOptions): void {
   describe(`${name} durable execution conformance`, () => {
     if (capabilities.has('actions')) {
-      it('durably executes initial and transition actions', async () => {
+      it('durably executes initial and transition actions', function*({ expect }) {
         const calls: number[] = []
         const machine = setup({
           actions: {
@@ -88,20 +89,22 @@ export function durableExecutionConformance({
             done: { type: 'final' },
           },
         })
-        const execution = await createHarness().start(machine, undefined)
+        const execution = yield* Effect.promise(() => createHarness().start(machine, undefined))
 
-        await execution.send({ type: 'FINISH' })
-        await execution.result
+        yield* Effect.promise(() => execution.send({ type: 'FINISH' }))
+        yield* Effect.promise(() => execution.result)
 
-        expect(calls).toEqual([1, 2])
-        expect(
-          execution.operations.flatMap((operation) => operation.type === 'action' ? [operation.actionType] : []),
-        ).toEqual(['record', 'record'])
+        yield* expect({
+          calls,
+          actionTypes: execution.operations.flatMap((operation) =>
+            operation.type === 'action' ? [operation.actionType] : []
+          ),
+        }).toEqual({ calls: [1, 2], actionTypes: ['record', 'record'] })
       })
     }
 
     if (capabilities.has('timers')) {
-      it('delivers delayed transitions through host-managed timers', async () => {
+      it('delivers delayed transitions through host-managed timers', function*({ expect }) {
         const machine = createMachine({
           output: 'timed out',
           initial: 'waiting',
@@ -110,16 +113,17 @@ export function durableExecutionConformance({
             done: { type: 'final' },
           },
         })
-        const execution = await createHarness().start(machine, undefined)
+        const execution = yield* Effect.promise(() => createHarness().start(machine, undefined))
 
-        await execution.advanceTime(99)
-        expect(execution.getSnapshot().status).toBe('active')
-        await execution.advanceTime(1)
+        yield* Effect.promise(() => execution.advanceTime(99))
+        yield* expect(execution.getSnapshot().status).toBe('active')
+        yield* Effect.promise(() => execution.advanceTime(1))
 
-        await expect(execution.result).resolves.toBe('timed out')
+        const output = yield* Effect.promise(() => execution.result)
+        yield* expect(output).toBe('timed out')
       })
 
-      it('cancels and replaces delayed sends by logical timer ID', async () => {
+      it('cancels and replaces delayed sends by logical timer ID', function*({ expect }) {
         const machine = createMachine({
           initial: 'waiting',
           states: {
@@ -144,21 +148,21 @@ export function durableExecutionConformance({
             done: { type: 'final' },
           },
         })
-        const execution = await createHarness().start(machine, undefined)
+        const execution = yield* Effect.promise(() => createHarness().start(machine, undefined))
 
-        await execution.send({ type: 'SCHEDULE' })
-        await execution.send({ type: 'CANCEL' })
-        await execution.advanceTime(100)
-        expect(execution.getSnapshot().status).toBe('active')
+        yield* Effect.promise(() => execution.send({ type: 'SCHEDULE' }))
+        yield* Effect.promise(() => execution.send({ type: 'CANCEL' }))
+        yield* Effect.promise(() => execution.advanceTime(100))
+        yield* expect(execution.getSnapshot().status).toBe('active')
 
-        await execution.send({ type: 'SCHEDULE' })
-        await execution.send({ type: 'REPLACE' })
-        await execution.advanceTime(19)
-        expect(execution.getSnapshot().status).toBe('active')
-        await execution.advanceTime(1)
-        await execution.result
+        yield* Effect.promise(() => execution.send({ type: 'SCHEDULE' }))
+        yield* Effect.promise(() => execution.send({ type: 'REPLACE' }))
+        yield* Effect.promise(() => execution.advanceTime(19))
+        yield* expect(execution.getSnapshot().status).toBe('active')
+        yield* Effect.promise(() => execution.advanceTime(1))
+        yield* Effect.promise(() => execution.result)
 
-        expect(
+        yield* expect(
           execution.operations.filter(({ type }) => type.startsWith('timer.')),
         ).toEqual([
           expect.objectContaining({
@@ -182,7 +186,7 @@ export function durableExecutionConformance({
     }
 
     if (capabilities.has('actors')) {
-      it('delegates spawned actor lifecycle to the host', async () => {
+      it('delegates spawned actor lifecycle to the host', function*({ expect }) {
         const child = createMachine({})
         const machine = setup({ actors: { child } }).createMachine({
           entry: ({ actors }, enq) => {
@@ -192,11 +196,11 @@ export function durableExecutionConformance({
             STOP: ({ children }, enq) => enq.stop(children['worker']),
           },
         })
-        const execution = await createHarness().start(machine, undefined)
+        const execution = yield* Effect.promise(() => createHarness().start(machine, undefined))
 
-        await execution.send({ type: 'STOP' })
+        yield* Effect.promise(() => execution.send({ type: 'STOP' }))
 
-        expect(
+        yield* expect(
           execution.operations
             .filter(({ type }) => type.startsWith('actor.'))
             .slice(0, 3),
@@ -209,7 +213,7 @@ export function durableExecutionConformance({
     }
 
     if (capabilities.has('actorCommunication')) {
-      it('routes messages between parent and child actors', async () => {
+      it('routes messages between parent and child actors', function*({ expect }) {
         const child = createMachine({
           on: {
             PING: ({ parent }, enq) => enq.sendTo(parent, { type: 'PONG' }),
@@ -229,28 +233,32 @@ export function durableExecutionConformance({
             done: { type: 'final' },
           },
         })
-        const execution = await createHarness().start(machine, undefined)
+        const execution = yield* Effect.promise(() => createHarness().start(machine, undefined))
 
-        await execution.send({ type: 'SEND' })
+        yield* Effect.promise(() => execution.send({ type: 'SEND' }))
 
-        await expect(execution.result).resolves.toBe('communicated')
+        const output = yield* Effect.promise(() => execution.result)
         // Only the parent→child PING is a host operation. The child's PONG
         // is addressed to the root: the execution captures and retains it,
         // and the loop takes it through `waitForEvent()` — the host's own
         // sendEvent never sees it (that the result resolved proves it was
         // applied).
-        expect(
-          execution.operations.filter(({ type }) => type === 'event.send'),
-        ).toEqual([
-          expect.objectContaining({
-            sourceId: 'x:0',
-            targetId: 'worker',
-            eventType: 'PING',
-          }),
-        ])
+        yield* expect({
+          output,
+          eventSends: execution.operations.filter(({ type }) => type === 'event.send'),
+        }).toEqual({
+          output: 'communicated',
+          eventSends: [
+            expect.objectContaining({
+              sourceId: 'x:0',
+              targetId: 'worker',
+              eventType: 'PING',
+            }),
+          ],
+        })
       })
 
-      it('propagates invoked child completion to its parent', async () => {
+      it('propagates invoked child completion to its parent', function*({ expect }) {
         const child = createMachine({
           initial: 'active',
           states: {
@@ -275,22 +283,28 @@ export function durableExecutionConformance({
             done: { type: 'final' },
           },
         })
-        const execution = await createHarness().start(machine, undefined)
+        const execution = yield* Effect.promise(() => createHarness().start(machine, undefined))
 
-        await execution.send({ type: 'FINISH_CHILD' })
+        yield* Effect.promise(() => execution.send({ type: 'FINISH_CHILD' }))
 
-        await expect(execution.result).resolves.toBe('child completed')
-        expect(execution.operations).toContainEqual({
-          type: 'event.send',
-          sourceId: 'x:0',
-          targetId: 'worker',
-          eventType: 'FINISH',
+        const output = yield* Effect.promise(() => execution.result)
+        yield* expect({
+          output,
+          eventSends: execution.operations.filter(({ type }) => type === 'event.send'),
+        }).toEqual({
+          output: 'child completed',
+          eventSends: [{
+            type: 'event.send',
+            sourceId: 'x:0',
+            targetId: 'worker',
+            eventType: 'FINISH',
+          }],
         })
       })
     }
 
     if (capabilities.has('mailbox')) {
-      it('buffers events sent before the host begins waiting', async () => {
+      it('buffers events sent before the host begins waiting', function*({ expect }) {
         const machine = createMachine({
           output: 'received',
           initial: 'active',
@@ -300,30 +314,39 @@ export function durableExecutionConformance({
             done: { type: 'final' },
           },
         })
-        const execution = await createHarness().start(machine, undefined)
+        const execution = yield* Effect.promise(() => createHarness().start(machine, undefined))
 
-        await expect(execution.result).resolves.toBe('received')
+        const output = yield* Effect.promise(() => execution.result)
+        yield* expect(output).toBe('received')
       })
     }
 
     if (capabilities.has('errors')) {
-      it('rejects with an unhandled machine error', async () => {
+      it('rejects with an unhandled machine error', function*({ expect }) {
         const error = new Error('failed')
         const machine = createMachine({})
-        const execution = await createHarness().start(machine, undefined)
+        const execution = yield* Effect.promise(() => createHarness().start(machine, undefined))
 
-        await execution.send({
-          type: 'xstate.error.actor.worker',
-          actorId: 'worker',
-          error,
-        })
+        yield* Effect.promise(() =>
+          execution.send({
+            type: 'xstate.error.actor.worker',
+            actorId: 'worker',
+            error,
+          })
+        )
 
-        await expect(execution.result).rejects.toBe(error)
+        const outcome = yield* Effect.promise(() =>
+          execution.result.then(
+            () => undefined,
+            (rejection: unknown) => rejection,
+          )
+        )
+        yield* expect(outcome).toBe(error)
       })
     }
 
     if (capabilities.has('output')) {
-      it('resolves terminal machine output', async () => {
+      it('resolves terminal machine output', function*({ expect }) {
         const machine = createMachine({
           output: 42,
           initial: 'active',
@@ -332,12 +355,13 @@ export function durableExecutionConformance({
             done: { type: 'final' },
           },
         })
-        const execution = await createHarness().start(machine, undefined)
+        const execution = yield* Effect.promise(() => createHarness().start(machine, undefined))
 
-        await execution.send({ type: 'FINISH' })
-        await flush()
+        yield* Effect.promise(() => execution.send({ type: 'FINISH' }))
+        yield* Effect.promise(() => flush())
 
-        await expect(execution.result).resolves.toBe(42)
+        const output = yield* Effect.promise(() => execution.result)
+        yield* expect(output).toBe(42)
       })
     }
   })

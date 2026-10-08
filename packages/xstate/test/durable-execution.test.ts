@@ -1,14 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
-import {
-  createDurable,
-  type DurableEffectMetadata,
-  DurableExecutionCancelledError,
-  DurableExecutionResumeError,
-} from '../src/durable/index.js'
-import { type ActorLogic, createLogic, createMachine, type Snapshot } from '../src/index.js'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
+import { createDurable, type DurableEffectMetadata, DurableExecutionCancelledError } from '../src/durable/index.js'
+import { type ActorLogic, type ActorSystemRuntime, createLogic, createMachine, type Snapshot } from '../src/index.js'
+
+const errorNameOf = (error: unknown): string | undefined => error instanceof Error ? error.name : undefined
 
 describe('durable execution', () => {
-  it('tags and executes effects in deterministic transition order', async () => {
+  it('tags and executes effects in deterministic transition order', function*({ expect }) {
     const operations: string[] = []
     const executed: DurableEffectMetadata[] = []
     const machine = createMachine({
@@ -35,31 +33,38 @@ describe('durable execution', () => {
           executed.push(metadata)
         },
       }),
-      executeAction: async (effect, metadata) => {
+      executeAction: (effect, metadata) => {
         executed.push(metadata)
-        await effect.exec()
+        return Promise.resolve(effect.exec())
       },
       waitForEvent: () => ({ type: 'FINISH' }),
     })
 
-    let [state, effects] = d.initialTransition(undefined)
-    expect(effects.map(({ id }) => id)).toEqual(['0:0', '0:1'])
-    await d.executeEffects(effects)
-    ;[state, effects] = d.transition(state, await d.waitForEvent())
-    expect(effects.map(({ id }) => id)).toEqual(['1:0', '1:1'])
-    await d.executeEffects(effects)
+    const [initialState, initialEffects] = d.initialTransition(undefined)
+    yield* expect(initialEffects.map(({ id }) => id)).toEqual(['0:0', '0:1'])
+    yield* Effect.promise(() => d.executeEffects(initialEffects))
+    const finishEvent = yield* Effect.promise(() => d.waitForEvent())
+    const [state, effects] = d.transition(initialState, finishEvent)
+    yield* expect(effects.map(({ id }) => id)).toEqual(['1:0', '1:1'])
+    yield* Effect.promise(() => d.executeEffects(effects))
 
-    expect(state.status).toBe('done')
-    expect(operations).toEqual(['initial:first', 'initial:second', 'finish'])
-    expect(executed).toEqual([
-      { id: '0:0', transitionIndex: 0, effectIndex: 0 },
-      { id: '0:1', transitionIndex: 0, effectIndex: 1 },
-      { id: '1:0', transitionIndex: 1, effectIndex: 0 },
-      { id: '1:1', transitionIndex: 1, effectIndex: 1 },
-    ])
+    yield* expect({
+      status: state.status,
+      operations,
+      executed,
+    }).toEqual({
+      status: 'done',
+      operations: ['initial:first', 'initial:second', 'finish'],
+      executed: [
+        { id: '0:0', transitionIndex: 0, effectIndex: 0 },
+        { id: '0:1', transitionIndex: 0, effectIndex: 1 },
+        { id: '1:0', transitionIndex: 1, effectIndex: 0 },
+        { id: '1:1', transitionIndex: 1, effectIndex: 1 },
+      ],
+    })
   })
 
-  it('keeps effect IDs stable when a durable host retries a batch', async () => {
+  it('keeps effect IDs stable when a durable host retries a batch', function*({ expect }) {
     const ids: string[] = []
     const machine = createMachine({
       entry: (_, enq) => enq(() => {}),
@@ -72,13 +77,13 @@ describe('durable execution', () => {
     })
     const [, effects] = d.initialTransition(undefined)
 
-    await d.executeEffects(effects)
-    await d.executeEffects(effects)
+    yield* Effect.promise(() => d.executeEffects(effects))
+    yield* Effect.promise(() => d.executeEffects(effects))
 
-    expect(ids).toEqual(['0:0', '0:0'])
+    yield* expect(ids).toEqual(['0:0', '0:0'])
   })
 
-  it('reconstructs the same IDs during replay', () => {
+  it('reconstructs the same IDs during replay', function*({ expect }) {
     const machine = createMachine({
       initial: 'one',
       entry: (_, enq) => enq(() => {}),
@@ -99,17 +104,19 @@ describe('durable execution', () => {
         executeAction: () => {},
         waitForEvent: () => ({ type: 'NEXT' }),
       })
-      let [state, initialEffects] = d.initialTransition(undefined)
+      const [state, initialEffects] = d.initialTransition(undefined)
       const [, nextEffects] = d.transition(state, { type: 'NEXT' })
       return [...initialEffects, ...nextEffects].map(({ id }) => id)
     }
 
-    expect(replay()).toEqual(replay())
-    expect(replay()).toEqual(['0:0', '1:0'])
+    yield* expect({ first: replay(), again: replay() }).toEqual({
+      first: ['0:0', '1:0'],
+      again: ['0:0', '1:0'],
+    })
   })
 
-  it('delegates timers to the host runtime without awaiting the delay', async () => {
-    const scheduleTimer = vi.fn()
+  it('delegates timers to the host runtime without awaiting the delay', function*({ expect }) {
+    const scheduleTimerCalls: Array<[string, number]> = []
     const seenEffects: unknown[] = []
     const machine = createMachine({
       initial: 'waiting',
@@ -121,30 +128,35 @@ describe('durable execution', () => {
     const d = createDurable(machine, {
       runtime: (_metadata, effect) => {
         seenEffects.push(effect)
-        return { scheduleTimer }
+        return {
+          scheduleTimer: (_source, id, delay) => {
+            scheduleTimerCalls.push([id, delay])
+          },
+        }
       },
       executeAction: () => {},
       waitForEvent: () => ({ type: 'unused' as const }),
     })
     const [, effects] = d.initialTransition(undefined)
 
-    await d.executeEffects(effects)
+    yield* Effect.promise(() => d.executeEffects(effects))
 
-    expect(scheduleTimer).toHaveBeenCalledOnce()
-    expect(scheduleTimer.mock.calls[0]?.slice(1)).toEqual([
-      expect.any(String),
-      100,
-    ])
-    expect(seenEffects).toEqual([
-      expect.objectContaining({
-        type: '@xstate.raise',
-        delay: 100,
-        event: expect.objectContaining({ type: expect.stringMatching('after') }),
-      }),
-    ])
+    yield* expect({
+      scheduleTimerCalls,
+      seenEffects,
+    }).toEqual({
+      scheduleTimerCalls: [['xstate.after.100.(machine).waiting', 100]],
+      seenEffects: [
+        expect.objectContaining({
+          type: '@xstate.raise',
+          delay: 100,
+          event: expect.objectContaining({ type: 'xstate.after' }),
+        }),
+      ],
+    })
   })
 
-  it('fails when the host does not support a required runtime operation', async () => {
+  it('fails when the host does not support a required runtime operation', function*({ expect }) {
     const machine = createMachine({
       initial: 'waiting',
       states: {
@@ -158,10 +170,20 @@ describe('durable execution', () => {
     })
     const [, effects] = d.initialTransition(undefined)
 
-    await expect(d.executeEffects(effects)).rejects.toBeInstanceOf(TypeError)
+    const failure = yield* Effect.flip(
+      Effect.tryPromise({
+        try: () => d.executeEffects(effects),
+        catch: (error: unknown) => error,
+      }),
+    )
+
+    yield* expect(failure).toSatisfy(
+      (error) => error instanceof TypeError,
+      'a TypeError because the host runtime lacks the required operation',
+    )
   })
 
-  it('exposes the next transition index for host-managed checkpoints', () => {
+  it('exposes the next transition index for host-managed checkpoints', function*({ expect }) {
     const machine = createMachine({
       on: {
         EFFECT: (_, enq) => enq(() => {}),
@@ -174,10 +196,6 @@ describe('durable execution', () => {
     })
 
     const [state, initialEffects] = d.initialTransition(undefined)
-
-    expect(initialEffects).toEqual([])
-    expect(d.nextTransitionIndex).toBe(13)
-
     const checkpoint = d.nextTransitionIndex
     const restored = createDurable(machine, {
       transitionIndex: checkpoint,
@@ -186,42 +204,73 @@ describe('durable execution', () => {
     })
     const [, effects] = restored.transition(state, { type: 'EFFECT' })
 
-    expect(effects[0]?.id).toBe('13:0')
-    expect(restored.nextTransitionIndex).toBe(14)
+    yield* expect({
+      initialEffects,
+      checkpoint,
+      effectId: effects[0]?.id,
+      nextTransitionIndex: restored.nextTransitionIndex,
+    }).toEqual({
+      initialEffects: [],
+      checkpoint: 13,
+      effectId: '13:0',
+      nextTransitionIndex: 14,
+    })
   })
 
-  it('rejects an invalid starting transition index', () => {
+  it('rejects an invalid starting transition index', function*({ expect }) {
     const machine = createMachine({})
 
-    expect(() =>
-      createDurable(machine, {
-        transitionIndex: -1,
-        executeAction: () => {},
-        waitForEvent: () => ({ type: 'unused' }),
-      })
-    ).toThrow('transitionIndex must be a non-negative safe integer')
+    const failure = yield* Effect.flip(
+      Effect.try({
+        try: () =>
+          createDurable(machine, {
+            transitionIndex: -1,
+            executeAction: () => {},
+            waitForEvent: () => ({ type: 'unused' }),
+          }),
+        catch: (error: unknown) => error,
+      }),
+    )
+
+    yield* expect(failure).toSatisfy(
+      (error) =>
+        error instanceof RangeError &&
+        error.message === 'transitionIndex must be a non-negative safe integer',
+      'a RangeError naming the invalid transition index',
+    )
   })
 
-  it('rejects run() when configured to resume from a checkpoint', async () => {
-    const action = vi.fn()
+  it('rejects run() when configured to resume from a checkpoint', function*({ expect }) {
+    const actionCalls: Array<unknown[]> = []
+    const action = (...args: unknown[]) => {
+      actionCalls.push(args)
+    }
     const machine = createMachine({
       entry: (_, enq) => enq(action),
     })
     const durable = createDurable(machine, {
       transitionIndex: 12,
-      executeAction: async (effect, _metadata, runtime) => {
-        await effect.exec(runtime)
-      },
+      executeAction: (effect, _metadata, runtime) => effect.exec(runtime),
       waitForEvent: () => ({ type: 'unused' }),
     })
 
-    await expect(durable.run(undefined)).rejects.toBeInstanceOf(
-      DurableExecutionResumeError,
+    const failure = yield* Effect.flip(
+      Effect.tryPromise({
+        try: () => durable.run(undefined),
+        catch: (error: unknown) => error,
+      }),
     )
-    expect(action).not.toHaveBeenCalled()
+
+    yield* expect({
+      errorName: errorNameOf(failure),
+      actionCalls,
+    }).toEqual({
+      errorName: 'DurableExecutionResumeError',
+      actionCalls: [],
+    })
   })
 
-  it('rejects run() after lower-level transition methods were used', async () => {
+  it('rejects run() after lower-level transition methods were used', function*({ expect }) {
     const machine = createMachine({})
     const durable = createDurable(machine, {
       executeAction: () => {},
@@ -230,78 +279,98 @@ describe('durable execution', () => {
 
     durable.initialTransition(undefined)
 
-    await expect(durable.run(undefined)).rejects.toBeInstanceOf(
-      DurableExecutionResumeError,
+    const failure = yield* Effect.flip(
+      Effect.tryPromise({
+        try: () => durable.run(undefined),
+        catch: (error: unknown) => error,
+      }),
     )
+
+    yield* expect(errorNameOf(failure)).toBe('DurableExecutionResumeError')
   })
 
-  it('forwards the host runtime to createLogic effects', async () => {
-    const sendEvent = vi.fn()
-    const runtime = { sendEvent }
-    let providedRuntime: unknown
+  it('forwards the host runtime to createLogic effects', function*({ expect }) {
+    const sendEventCalls: Array<[unknown, unknown, unknown]> = []
+    const runtime = {
+      sendEvent: (source: unknown, target: unknown, event: unknown) => {
+        sendEventCalls.push([source, target, event])
+      },
+    }
+    const providedRuntime: { value: Partial<ActorSystemRuntime> | undefined } = {
+      value: undefined,
+    }
     const logic = createLogic({
       context: undefined,
       run: ({ event }, enq) => {
         if (event.type === '@xstate.init') {
           enq.effect((effectRuntime) => {
-            providedRuntime = effectRuntime
+            providedRuntime.value = effectRuntime
           })
         }
       },
     })
     const durable = createDurable(logic, {
-      executeAction: async (effect, _metadata, effectRuntime) => {
-        await effect.exec(effectRuntime)
-      },
+      executeAction: (effect, _metadata, effectRuntime) => effect.exec(effectRuntime),
       runtime: () => runtime,
       waitForEvent: () => ({ type: 'unused' }),
     })
     const [, effects] = durable.initialTransition(undefined)
 
-    await durable.executeEffects(effects)
+    yield* Effect.promise(() => durable.executeEffects(effects))
 
     const target = { address: 'elsewhere' } as never
     const event = { type: 'X' }
-    await (
-      providedRuntime as { sendEvent(...args: unknown[]): PromiseLike<void> }
-    ).sendEvent(undefined, target, event)
-    expect(runtime.sendEvent).toHaveBeenCalledWith(undefined, target, event)
+    const effectRuntime = providedRuntime.value
+    if (effectRuntime?.sendEvent === undefined) {
+      throw new Error('expected the effect runtime to provide sendEvent')
+    }
+    yield* Effect.promise(() => Promise.resolve(effectRuntime.sendEvent!(undefined, target, event)))
+
+    yield* expect(sendEventCalls).toEqual([
+      [undefined, { address: 'elsewhere' }, { type: 'X' }],
+    ])
   })
 
-  it('routes parked root events through the dedicated mailbox hook', async () => {
-    const enqueueRootEvent = vi.fn()
-    let providedRuntime: unknown
+  it('routes parked root events through the dedicated mailbox hook', function*({ expect }) {
+    const enqueueRootEventCalls: Array<[unknown, unknown]> = []
+    const providedRuntime: { value: Partial<ActorSystemRuntime> | undefined } = {
+      value: undefined,
+    }
     const logic = createLogic({
       context: undefined,
       run: ({ event }, enq) => {
         if (event.type === '@xstate.init') {
           enq.effect((effectRuntime) => {
-            providedRuntime = effectRuntime
+            providedRuntime.value = effectRuntime
           })
         }
       },
     })
     const durable = createDurable(logic, {
-      executeAction: async (effect, _metadata, effectRuntime) => {
-        await effect.exec(effectRuntime)
+      executeAction: (effect, _metadata, effectRuntime) => effect.exec(effectRuntime),
+      enqueueRootEvent: (source, event) => {
+        enqueueRootEventCalls.push([source, event])
       },
-      enqueueRootEvent,
       waitForEvent: () => ({ type: 'unused' }),
     })
     const [, effects] = durable.initialTransition(undefined)
-    await durable.executeEffects(effects)
+    yield* Effect.promise(() => durable.executeEffects(effects))
 
     const source = { id: 'child' } as never
     const target = { address: durable.rootAddress } as never
     const event = { type: 'CHILD_EVENT' }
-    await (
-      providedRuntime as { sendEvent(...args: unknown[]): PromiseLike<void> }
-    ).sendEvent(source, target, event)
+    const effectRuntime = providedRuntime.value
+    if (effectRuntime?.sendEvent === undefined) {
+      throw new Error('expected the effect runtime to provide sendEvent')
+    }
+    yield* Effect.promise(() => Promise.resolve(effectRuntime.sendEvent!(source, target, event)))
 
-    expect(enqueueRootEvent).toHaveBeenCalledWith(source, event)
+    yield* expect(enqueueRootEventCalls).toEqual([
+      [{ id: 'child' }, { type: 'CHILD_EVENT' }],
+    ])
   })
 
-  it('runs to completion and assigns stable IDs to event waits', async () => {
+  it('runs to completion and assigns stable IDs to event waits', function*({ expect }) {
     const waits: Array<{ id: string; transitionIndex: number }> = []
     const machine = createMachine({
       output: 42,
@@ -320,11 +389,15 @@ describe('durable execution', () => {
       },
     })
 
-    await expect(durable.run(undefined)).resolves.toBe(42)
-    expect(waits).toEqual([{ id: 'event:0', transitionIndex: 0 }])
+    const output = yield* Effect.promise(() => durable.run(undefined))
+
+    yield* expect({ output, waits }).toEqual({
+      output: 42,
+      waits: [{ id: 'event:0', transitionIndex: 0 }],
+    })
   })
 
-  it('throws the machine error when execution ends with an error', async () => {
+  it('throws the machine error when execution ends with an error', function*({ expect }) {
     const error = new Error('failed')
     const snapshot: Snapshot<never> = {
       status: 'error',
@@ -343,10 +416,17 @@ describe('durable execution', () => {
       waitForEvent: () => ({ type: 'unused' as const }),
     })
 
-    await expect(durable.run(undefined)).rejects.toBe(error)
+    const caught = yield* Effect.flip(
+      Effect.tryPromise({
+        try: () => durable.run(undefined),
+        catch: (cause: unknown) => cause,
+      }),
+    )
+
+    yield* expect(caught).toBe(error)
   })
 
-  it('treats a stopped machine as cancellation', async () => {
+  it('treats a stopped machine as cancellation', function*({ expect }) {
     const snapshot: Snapshot<never> = {
       status: 'stopped',
       output: undefined,
@@ -363,8 +443,16 @@ describe('durable execution', () => {
       waitForEvent: () => ({ type: 'unused' as const }),
     })
 
-    await expect(durable.run(undefined)).rejects.toBeInstanceOf(
-      DurableExecutionCancelledError,
+    const caught = yield* Effect.flip(
+      Effect.tryPromise({
+        try: () => durable.run(undefined),
+        catch: (cause: unknown) => cause,
+      }),
+    )
+
+    yield* expect(caught).toSatisfy(
+      (error) => error instanceof DurableExecutionCancelledError,
+      'a DurableExecutionCancelledError because a stopped machine is cancellation',
     )
   })
 })

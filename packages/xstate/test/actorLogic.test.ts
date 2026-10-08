@@ -1,7 +1,7 @@
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { EMPTY, interval, type Observable, of, throwError } from 'rxjs'
 import { take } from 'rxjs/operators'
-import { describe, expect, it, vi } from 'vitest'
-import type { Mock } from 'vitest'
 import z from 'zod'
 import {
   createAsyncLogic,
@@ -29,7 +29,7 @@ import { waitFor } from '../src/waitFor.js'
 import { toSubscribable } from './utils.js'
 
 describe('logic (createLogic)', () => {
-  it('returns actor termination as an ordered transition effect', () => {
+  it('returns actor termination as an ordered transition effect', function*({ expect }) {
     const logic = createLogic({
       context: undefined,
       run: ({ event }) =>
@@ -40,21 +40,24 @@ describe('logic (createLogic)', () => {
     const [active] = initialTransition(logic)
 
     const [done, effects] = transition(logic, active, { type: 'finish' })
+    const terminalEffects = transition(logic, done, { type: 'finish' })[1]
 
-    expect(done).toMatchObject({ status: 'done', output: 42 })
-    expect(effects).toEqual([
-      expect.objectContaining({
-        kind: 'builtin',
-        type: '@xstate.terminate',
-        status: 'done',
-        output: 42,
-      }),
-    ])
-    expect(transition(logic, done, { type: 'finish' })[1]).toEqual([])
+    yield* expect({ done, effects, terminalEffects }).toMatchObject({
+      done: { status: 'done', output: 42 },
+      effects: [
+        {
+          kind: 'builtin',
+          type: '@xstate.terminate',
+          status: 'done',
+          output: 42,
+        },
+      ],
+      terminalEffects: [],
+    })
   })
 
-  it('returns async actor termination from the pure transition', () => {
-    const logic = createAsyncLogic({ run: async () => 42 })
+  it('returns async actor termination from the pure transition', function*({ expect }) {
+    const logic = createAsyncLogic({ run: () => Promise.resolve(42) })
     const [active] = initialTransition(logic)
 
     const [done, effects] = transition(logic, active, {
@@ -62,15 +65,17 @@ describe('logic (createLogic)', () => {
       data: 42,
     } as any)
 
-    expect(done).toMatchObject({ status: 'done', output: 42 })
-    expect(effects.at(-1)).toMatchObject({
-      type: '@xstate.terminate',
-      status: 'done',
-      output: 42,
+    yield* expect({ done, last: effects.at(-1) }).toMatchObject({
+      done: { status: 'done', output: 42 },
+      last: {
+        type: '@xstate.terminate',
+        status: 'done',
+        output: 42,
+      },
     })
   })
 
-  it('returns observable completion and failure as termination effects', () => {
+  it('returns observable completion and failure as termination effects', function*({ expect }) {
     const logic = createObservableLogic<never, undefined>(
       () => toSubscribable(EMPTY),
     )
@@ -84,20 +89,27 @@ describe('logic (createLogic)', () => {
       data: error,
     } as any)
 
-    expect(done.status).toBe('done')
-    expect(doneEffects.at(-1)).toMatchObject({
-      type: '@xstate.terminate',
-      status: 'done',
-    })
-    expect(failed).toMatchObject({ status: 'error', error })
-    expect(errorEffects.at(-1)).toMatchObject({
-      type: '@xstate.terminate',
-      status: 'error',
-      error,
+    yield* expect({
+      doneStatus: done.status,
+      doneLast: doneEffects.at(-1),
+      failed,
+      errorLast: errorEffects.at(-1),
+    }).toMatchObject({
+      doneStatus: 'done',
+      doneLast: {
+        type: '@xstate.terminate',
+        status: 'done',
+      },
+      failed: { status: 'error', error },
+      errorLast: {
+        type: '@xstate.terminate',
+        status: 'error',
+        error,
+      },
     })
   })
 
-  it('returns termination when createLogic completes during initialization', () => {
+  it('returns termination when createLogic completes during initialization', function*({ expect }) {
     const logic = createLogic({
       context: undefined,
       run: ({ event }) =>
@@ -108,15 +120,17 @@ describe('logic (createLogic)', () => {
 
     const [done, effects] = initialTransition(logic)
 
-    expect(done).toMatchObject({ status: 'done', output: 42 })
-    expect(effects.at(-1)).toMatchObject({
-      type: '@xstate.terminate',
-      status: 'done',
-      output: 42,
+    yield* expect({ done, last: effects.at(-1) }).toMatchObject({
+      done: { status: 'done', output: 42 },
+      last: {
+        type: '@xstate.terminate',
+        status: 'done',
+        output: 42,
+      },
     })
   })
 
-  it('returns a snapshot and effects from transition', () => {
+  it('returns a snapshot and effects from transition', function*({ expect }) {
     const logic = createLogic({
       context: { count: 0 },
       run: ({ context, event }, enq) => {
@@ -139,17 +153,19 @@ describe('logic (createLogic)', () => {
       scope,
     )
 
-    expect(nextSnapshot.context).toEqual({ count: 1 })
-    expect(effects).toEqual([
-      expect.objectContaining({
-        kind: 'emit',
-        type: 'counted',
-        event: { type: 'counted' },
-      }),
-    ])
+    yield* expect({ context: nextSnapshot.context, effects }).toEqual({
+      context: { count: 1 },
+      effects: [
+        expect.objectContaining({
+          kind: 'emit',
+          type: 'counted',
+          event: { type: 'counted' },
+        }),
+      ],
+    })
   })
 
-  it('tracks enqueued effects in the next snapshot', () => {
+  it('tracks enqueued effects in the next snapshot', function*({ expect }) {
     const logic = createLogic({
       context: {},
       run: (_, enq) => {
@@ -163,15 +179,31 @@ describe('logic (createLogic)', () => {
       { type: 'next' },
     )
 
-    expect(effects).toHaveLength(1)
-    expect(nextSnapshot.effects).toEqual({
-      subscription: { status: 'active' },
+    yield* expect({
+      effects,
+      nextEffects: nextSnapshot.effects,
+      repeatedEffects,
+      repeatedNextEffects: snapshotAfterSecondTransition.effects,
+    }).toEqual({
+      effects: [
+        expect.objectContaining({
+          kind: 'action',
+          type: 'xstate.logic.effect',
+          params: { key: 'subscription' },
+          args: [],
+        }),
+      ],
+      nextEffects: {
+        subscription: { status: 'active' },
+      },
+      repeatedEffects: [],
+      repeatedNextEffects: {
+        subscription: { status: 'active' },
+      },
     })
-    expect(repeatedEffects).toEqual([])
-    expect(snapshotAfterSecondTransition.effects).toEqual(nextSnapshot.effects)
   })
 
-  it('does not track unnamed effects in the next snapshot', () => {
+  it('does not track unnamed effects in the next snapshot', function*({ expect }) {
     const logic = createLogic({
       context: {},
       run: (_, enq) => {
@@ -191,12 +223,30 @@ describe('logic (createLogic)', () => {
       scope,
     )
 
-    expect(nextSnapshot.effects).toBeUndefined()
-    expect(effects).toHaveLength(1)
-    expect(repeatedEffects).toHaveLength(1)
+    yield* expect({
+      nextEffects: nextSnapshot.effects,
+      effects,
+      repeatedEffects,
+    }).toEqual({
+      nextEffects: undefined,
+      effects: [
+        expect.objectContaining({
+          kind: 'action',
+          type: 'xstate.logic.effect',
+          args: [],
+        }),
+      ],
+      repeatedEffects: [
+        expect.objectContaining({
+          kind: 'action',
+          type: 'xstate.logic.effect',
+          args: [],
+        }),
+      ],
+    })
   })
 
-  it('executes enqueued effects once and cleans them up when stopped', () => {
+  it('executes enqueued effects once and cleans them up when stopped', function*({ expect }) {
     let starts = 0
     let stops = 0
     const logic = createLogic({
@@ -223,14 +273,16 @@ describe('logic (createLogic)', () => {
     actor.send({ type: 'inc' })
     actor.stop()
 
-    expect(actor.getSnapshot().context).toEqual({ count: 2 })
-    expect(starts).toBe(1)
-    expect(stops).toBe(1)
+    yield* expect({
+      context: actor.getSnapshot().context,
+      starts,
+      stops,
+    }).toEqual({ context: { count: 2 }, starts: 1, stops: 1 })
   })
 })
 
 describe('hand-written actor logic', () => {
-  it('completes when a transition returns a terminal snapshot without a terminate effect', () => {
+  it('completes when a transition returns a terminal snapshot without a terminate effect', function*({ expect }) {
     const logic: ActorLogic<
       Snapshot<number>,
       { type: 'finish' },
@@ -263,12 +315,12 @@ describe('hand-written actor logic', () => {
 
     actor.send({ type: 'finish' })
 
-    expect(observed).toEqual(['next:active', 'next:done', 'complete'])
+    yield* expect(observed).toEqual(['next:active', 'next:done', 'complete'])
   })
 })
 
 describe('logic helpers', () => {
-  it('creates callback logic', () => {
+  it('creates callback logic', function*({ expect }) {
     const received: string[] = []
     const actor = createActor(
       createCallbackLogic(({ receive }) => {
@@ -281,21 +333,21 @@ describe('logic helpers', () => {
     actor.send({ type: 'ping' })
     actor.stop()
 
-    expect(received).toEqual(['ping'])
+    yield* expect(received).toEqual(['ping'])
   })
 
-  it('creates observable logic', async () => {
+  it('creates observable logic', function*({ expect }) {
     const actor = createActor(
       createObservableLogic<number, undefined>(() => toSubscribable(of(1, 2))),
     ).start()
-    const snapshot = await waitFor(actor, (s) => s.status === 'done')
+    const snapshot = yield* Effect.promise(() => waitFor(actor, (s) => s.status === 'done'))
 
-    expect(snapshot.context).toBe(2)
+    yield* expect(snapshot.context).toBe(2)
   })
 })
 
 describe('promise logic (createAsyncLogic)', () => {
-  it('should interpret a promise', async () => {
+  it('should interpret a promise', function*({ expect }) {
     const promiseLogic = createAsyncLogic({
       run: () =>
         new Promise<string>((res) => {
@@ -304,10 +356,10 @@ describe('promise logic (createAsyncLogic)', () => {
     })
     const actor = createActor(promiseLogic)
     actor.start()
-    const snapshot = await waitFor(actor, (s) => s.output === 'hello')
-    expect(snapshot.output).toBe('hello')
+    const snapshot = yield* Effect.promise(() => waitFor(actor, (s) => s.output === 'hello'))
+    yield* expect(snapshot.output).toBe('hello')
   })
-  it('should resolve', () => {
+  it('should resolve', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     const actor = createActor(
       createAsyncLogic({ run: () => Promise.resolve(42) }),
@@ -318,9 +370,10 @@ describe('promise logic (createAsyncLogic)', () => {
       }
     })
     actor.start()
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect(actor.getSnapshot().output).toBe(42)
   })
-  it('should resolve (observer .next)', () => {
+  it('should resolve (observer .next)', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     const actor = createActor(
       createAsyncLogic({ run: () => Promise.resolve(42) }),
@@ -333,31 +386,34 @@ describe('promise logic (createAsyncLogic)', () => {
       },
     })
     actor.start()
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect(actor.getSnapshot().output).toBe(42)
   })
-  it('should reject (observer .error)', () => {
+  it('should reject (observer .error)', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
+    let received: unknown
     const actor = createActor(
       createAsyncLogic({ run: () => Promise.reject('Error') }),
     )
     actor.subscribe({
       error: (data) => {
-        expect(data).toBe('Error')
+        received = data
         resolve()
       },
     })
     actor.start()
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect(received).toBe('Error')
   })
-  it('should complete (observer .complete)', async () => {
+  it('should complete (observer .complete)', function*({ expect }) {
     const actor = createActor(
       createAsyncLogic({ run: () => Promise.resolve(42) }),
     )
     actor.start()
-    const snapshot = await waitFor(actor, (s) => s.output === 42)
-    expect(snapshot.output).toBe(42)
+    const snapshot = yield* Effect.promise(() => waitFor(actor, (s) => s.output === 42))
+    yield* expect(snapshot.output).toBe(42)
   })
-  it('should not execute when reading initial state', async () => {
+  it('should not execute when reading initial state', function*({ expect }) {
     let called = false
     const logic = createAsyncLogic({
       run: () => {
@@ -367,73 +423,84 @@ describe('promise logic (createAsyncLogic)', () => {
     })
     const actor = createActor(logic)
     actor.getSnapshot()
-    expect(called).toBe(false)
+    yield* expect({ called }).toEqual({ called: false })
   })
-  it('should await steps and persist their results as effects', async () => {
+  it('should await steps and persist their results as effects', function*({ expect }) {
     let stepExecutions = 0
     const logic = createAsyncLogic({
-      run: async (_, enq) => {
-        const user = await enq.step('fetchUser', async () => {
-          stepExecutions++
-          return { id: 1 }
-        })
-
-        return user.id
-      },
+      run: (_, enq) =>
+        enq
+          .step('fetchUser', () => {
+            stepExecutions++
+            return Promise.resolve({ id: 1 })
+          })
+          .then((user) => user.id),
     })
     const actor = createActor(logic).start()
-    const snapshot = await waitFor(actor, (s) => s.status === 'done')
+    const snapshot = yield* Effect.promise(() => waitFor(actor, (s) => s.status === 'done'))
 
-    expect(snapshot.output).toBe(1)
-    expect(snapshot.effects).toEqual({
-      async: { status: 'done', output: 1 },
-      fetchUser: { status: 'done', output: { id: 1 } },
-    })
-    expect(stepExecutions).toBe(1)
-
+    const stepExecutionsBeforeRestore = stepExecutions
     const restoredActor = createActor(logic, {
       snapshot: actor.getPersistedSnapshot(),
     }).start()
+    const stepExecutionsAfterRestore = stepExecutions
 
-    expect(restoredActor.getSnapshot().output).toBe(1)
-    expect(stepExecutions).toBe(1)
+    yield* expect({
+      output: snapshot.output,
+      effects: snapshot.effects,
+      stepExecutionsBeforeRestore,
+      restoredOutput: restoredActor.getSnapshot().output,
+      stepExecutionsAfterRestore,
+    }).toEqual({
+      output: 1,
+      effects: {
+        async: { status: 'done', output: 1 },
+        fetchUser: { status: 'done', output: { id: 1 } },
+      },
+      stepExecutionsBeforeRestore: 1,
+      restoredOutput: 1,
+      stepExecutionsAfterRestore: 1,
+    })
   })
-  it('should replay active async logic while skipping completed steps', async () => {
+  it('should replay active async logic while skipping completed steps', function*({ expect }) {
     let runExecutions = 0
     let firstStepExecutions = 0
     let secondStepExecutions = 0
     const logic = createAsyncLogic({
-      run: async (_, enq) => {
+      run: (_, enq) => {
         runExecutions++
-        const first = await enq.step('first', async () => {
-          firstStepExecutions++
-          return 1
-        })
-        const second = await enq.step('second', async () => {
-          secondStepExecutions++
-          return secondStepExecutions === 1 ? new Promise<number>(() => {}) : 2
-        })
-
-        return first + second
+        return enq
+          .step('first', () => {
+            firstStepExecutions++
+            return Promise.resolve(1)
+          })
+          .then((first) =>
+            enq
+              .step('second', () => {
+                secondStepExecutions++
+                return secondStepExecutions === 1
+                  ? new Promise<number>(() => {})
+                  : Promise.resolve(2)
+              })
+              .then((second) => first + second)
+          )
       },
     })
     const actor = createActor(logic).start()
 
-    const activeSnapshot = await waitFor(actor, (snapshot) => {
-      return (
-        snapshot.effects?.['first']?.status === 'done' &&
-        snapshot.effects?.['second']?.status === 'active'
-      )
-    })
+    const activeSnapshot = yield* Effect.promise(() =>
+      waitFor(actor, (snapshot) => {
+        return (
+          snapshot.effects?.['first']?.status === 'done' &&
+          snapshot.effects?.['second']?.status === 'active'
+        )
+      })
+    )
 
-    expect(activeSnapshot.effects).toEqual({
-      async: { status: 'active' },
-      first: { status: 'done', output: 1 },
-      second: { status: 'active' },
-    })
-    expect(runExecutions).toBe(1)
-    expect(firstStepExecutions).toBe(1)
-    expect(secondStepExecutions).toBe(1)
+    const activeEffects = activeSnapshot.effects
+    const runExecutionsFirst = runExecutions
+    const firstStepExecutionsFirst = firstStepExecutions
+    const secondStepExecutionsFirst = secondStepExecutions
 
     const persistedSnapshot = JSON.parse(
       JSON.stringify(actor.getPersistedSnapshot()),
@@ -444,24 +511,45 @@ describe('promise logic (createAsyncLogic)', () => {
       snapshot: persistedSnapshot,
     }).start()
 
-    await waitFor(restoredActor, () => runExecutions === 2)
-
-    const doneSnapshot = await waitFor(
-      restoredActor,
-      (snapshot) => snapshot.status === 'done',
-    )
-
-    expect(doneSnapshot.output).toBe(3)
-    expect(doneSnapshot.effects).toEqual({
-      async: { status: 'done', output: 3 },
-      first: { status: 'done', output: 1 },
-      second: { status: 'done', output: 2 },
+    yield* expect({
+      activeEffects,
+      runExecutionsFirst,
+      firstStepExecutionsFirst,
+      secondStepExecutionsFirst,
+    }).toEqual({
+      activeEffects: {
+        async: { status: 'active' },
+        first: { status: 'done', output: 1 },
+        second: { status: 'active' },
+      },
+      runExecutionsFirst: 1,
+      firstStepExecutionsFirst: 1,
+      secondStepExecutionsFirst: 1,
     })
-    expect(runExecutions).toBe(2)
-    expect(firstStepExecutions).toBe(1)
-    expect(secondStepExecutions).toBe(2)
+
+    yield* Effect.promise(() => waitFor(restoredActor, () => runExecutions === 2))
+
+    const doneSnapshot = yield* Effect.promise(() => waitFor(restoredActor, (snapshot) => snapshot.status === 'done'))
+
+    yield* expect({
+      output: doneSnapshot.output,
+      effects: doneSnapshot.effects,
+      runExecutions,
+      firstStepExecutions,
+      secondStepExecutions,
+    }).toEqual({
+      output: 3,
+      effects: {
+        async: { status: 'done', output: 3 },
+        first: { status: 'done', output: 1 },
+        second: { status: 'done', output: 2 },
+      },
+      runExecutions: 2,
+      firstStepExecutions: 1,
+      secondStepExecutions: 2,
+    })
   })
-  it('should rerun an unresolved promise from an active persisted snapshot', async () => {
+  it('should rerun an unresolved promise from an active persisted snapshot', function*({ expect }) {
     let createdPromises = 0
     const promiseLogic = createAsyncLogic({
       run: () => {
@@ -474,26 +562,34 @@ describe('promise logic (createAsyncLogic)', () => {
     const actor = createActor(promiseLogic)
     actor.start()
     const activePersistedState = actor.getPersistedSnapshot()
-    expect(createdPromises).toBe(1)
+    const createdPromisesFirst = createdPromises
     actor.stop()
     const restoredActor = createActor(promiseLogic, {
       snapshot: activePersistedState,
     })
     restoredActor.start()
-    expect(createdPromises).toBe(2)
+    const createdPromisesSecond = createdPromises
 
-    const snapshot = await waitFor(
-      restoredActor,
-      (snapshot) => snapshot.status === 'done',
+    yield* expect({ createdPromisesFirst, createdPromisesSecond }).toEqual({
+      createdPromisesFirst: 1,
+      createdPromisesSecond: 2,
+    })
+
+    const snapshot = yield* Effect.promise(() =>
+      waitFor(
+        restoredActor,
+        (snapshot) => snapshot.status === 'done',
+      )
     )
 
-    expect(snapshot.output).toBe(42)
-    expect(snapshot.effects).toEqual({
-      async: { status: 'done', output: 42 },
+    yield* expect({ output: snapshot.output, effects: snapshot.effects }).toEqual({
+      output: 42,
+      effects: {
+        async: { status: 'done', output: 42 },
+      },
     })
   })
-  it('should persist a resolved promise', () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
+  it('should persist a resolved promise', function*({ expect }) {
     const promiseLogic = createAsyncLogic({
       run: () =>
         new Promise<number>((res) => {
@@ -502,32 +598,37 @@ describe('promise logic (createAsyncLogic)', () => {
     })
     const actor = createActor(promiseLogic)
     actor.start()
-    setTimeout(() => {
-      const resolvedPersistedState = actor.getPersistedSnapshot()
-      expect(resolvedPersistedState).toMatchInlineSnapshot(`
-        {
-          "effects": {
-            "async": {
-              "output": 42,
-              "status": "done",
-            },
-          },
-          "error": undefined,
-          "input": undefined,
-          "output": 42,
-          "status": "done",
-        }
-      `)
-      const restoredActor = createActor(promiseLogic, {
-        snapshot: resolvedPersistedState,
+    yield* Effect.promise(() =>
+      new Promise<void>((res) => {
+        setTimeout(res, 5)
       })
-      restoredActor.start()
-      expect(restoredActor.getSnapshot().output).toBe(42)
-      resolve()
-    }, 5)
-    return promise
+    )
+    const resolvedPersistedState = actor.getPersistedSnapshot()
+    const restoredActor = createActor(promiseLogic, {
+      snapshot: resolvedPersistedState,
+    })
+    restoredActor.start()
+
+    yield* expect({
+      resolvedPersistedState,
+      restoredOutput: restoredActor.getSnapshot().output,
+    }).toEqual({
+      resolvedPersistedState: {
+        effects: {
+          async: {
+            output: 42,
+            status: 'done',
+          },
+        },
+        error: undefined,
+        input: undefined,
+        output: 42,
+        status: 'done',
+      },
+      restoredOutput: 42,
+    })
   })
-  it('should not invoke a resolved promise again', async () => {
+  it('should not invoke a resolved promise again', function*({ expect }) {
     let createdPromises = 0
     const promiseLogic = createAsyncLogic({
       run: () => {
@@ -537,31 +638,42 @@ describe('promise logic (createAsyncLogic)', () => {
     })
     const actor = createActor(promiseLogic)
     actor.start()
-    await new Promise((res) => setTimeout(res, 5))
+    yield* Effect.promise(() =>
+      new Promise<void>((res) => {
+        setTimeout(res, 5)
+      })
+    )
     const resolvedPersistedState = actor.getPersistedSnapshot()
-    expect(resolvedPersistedState).toMatchInlineSnapshot(`
-      {
-        "effects": {
-          "async": {
-            "output": 1,
-            "status": "done",
-          },
-        },
-        "error": undefined,
-        "input": undefined,
-        "output": 1,
-        "status": "done",
-      }
-    `)
-    expect(createdPromises).toBe(1)
+    const createdPromisesBeforeRestore = createdPromises
     const restoredActor = createActor(promiseLogic, {
       snapshot: resolvedPersistedState,
     })
     restoredActor.start()
-    expect(restoredActor.getSnapshot().output).toBe(1)
-    expect(createdPromises).toBe(1)
+
+    yield* expect({
+      resolvedPersistedState,
+      createdPromisesBeforeRestore,
+      restoredOutput: restoredActor.getSnapshot().output,
+      createdPromisesAfterRestore: createdPromises,
+    }).toEqual({
+      resolvedPersistedState: {
+        effects: {
+          async: {
+            output: 1,
+            status: 'done',
+          },
+        },
+        error: undefined,
+        input: undefined,
+        output: 1,
+        status: 'done',
+      },
+      createdPromisesBeforeRestore: 1,
+      restoredOutput: 1,
+      createdPromisesAfterRestore: 1,
+    })
   })
-  it('should not invoke a rejected promise again', async () => {
+  it('should not invoke a rejected promise again', function*({ expect }) {
     let createdPromises = 0
     const promiseLogic = createAsyncLogic({
       run: () => {
@@ -572,57 +684,72 @@ describe('promise logic (createAsyncLogic)', () => {
     const actorRef = createActor(promiseLogic)
     actorRef.subscribe({ error: function preventUnhandledErrorListener() {} })
     actorRef.start()
-    await new Promise((res) => setTimeout(res, 5))
+    yield* Effect.promise(() =>
+      new Promise<void>((res) => {
+        setTimeout(res, 5)
+      })
+    )
     const rejectedPersistedState = actorRef.getPersistedSnapshot()
-    expect(rejectedPersistedState).toMatchInlineSnapshot(`
-      {
-        "effects": {
-          "async": {
-            "error": 1,
-            "status": "error",
-          },
-        },
-        "error": 1,
-        "input": undefined,
-        "output": undefined,
-        "status": "error",
-      }
-    `)
-    expect(createdPromises).toBe(1)
+    const createdPromisesBeforeRestore = createdPromises
     const actorRef2 = createActor(promiseLogic, {
       snapshot: rejectedPersistedState,
     })
     actorRef2.subscribe({ error: function preventUnhandledErrorListener() {} })
     actorRef2.start()
-    expect(createdPromises).toBe(1)
+
+    yield* expect({
+      rejectedPersistedState,
+      createdPromisesBeforeRestore,
+      createdPromisesAfterRestore: createdPromises,
+    }).toEqual({
+      rejectedPersistedState: {
+        effects: {
+          async: {
+            error: 1,
+            status: 'error',
+          },
+        },
+        error: 1,
+        input: undefined,
+        output: undefined,
+        status: 'error',
+      },
+      createdPromisesBeforeRestore: 1,
+      createdPromisesAfterRestore: 1,
+    })
   })
-  it('should have access to the system', () => {
-    expect.assertions(1)
+  it('should have access to the system', function*({ expect }) {
+    let receivedSystem: AnyActorSystem | undefined
     const promiseLogic = createAsyncLogic({
       run: ({ system }) => {
-        expect(system).toBeDefined()
+        receivedSystem = system
         return Promise.resolve(42)
       },
     })
-    createActor(promiseLogic).start()
+    const actor = createActor(promiseLogic).start()
+    yield* expect(receivedSystem).toBe(actor.system)
   })
-  it('should have reference to self', () => {
-    expect.assertions(1)
+  it('should have reference to self', function*({ expect }) {
+    let receivedSelf: AnyActorRef | undefined
     const promiseLogic = createAsyncLogic({
       run: ({ self }) => {
-        expect(self.send).toBeDefined()
+        receivedSelf = self
         return Promise.resolve(42)
       },
     })
-    createActor(promiseLogic).start()
+    const actor = createActor(promiseLogic).start()
+    yield* expect(receivedSelf).toBe(actor)
   })
-  it('should abort when stopping', async () => {
+  it('should abort when stopping', function*({ expect }) {
     const deferred = Promise.withResolvers<number>()
-    const fn = vi.fn()
+    const abortCalls: unknown[] = []
+    const onAbort = (event: unknown) => {
+      abortCalls.push(event)
+    }
     const promiseLogic = createAsyncLogic({
       run: (ctx) => {
         return new Promise((res) => {
-          ctx.signal.addEventListener('abort', fn)
+          ctx.signal.addEventListener('abort', onAbort)
         })
       },
     })
@@ -630,12 +757,17 @@ describe('promise logic (createAsyncLogic)', () => {
     actor.start()
     actor.stop()
     deferred.resolve(42)
-    await deferred.promise
-    expect(fn).toHaveBeenCalled()
+    yield* Effect.promise(() => deferred.promise)
+    yield* expect({ abortListenerCalls: abortCalls.length }).toEqual({
+      abortListenerCalls: 1,
+    })
   })
-  it('should not abort when stopped if promise is resolved/rejected', async () => {
+  it('should not abort when stopped if promise is resolved/rejected', function*({ expect }) {
     const resolvedDeferred = Promise.withResolvers<number>()
-    const resolvedSignalListener = vi.fn()
+    const resolvedAbortCalls: unknown[] = []
+    const resolvedSignalListener = (event: unknown) => {
+      resolvedAbortCalls.push(event)
+    }
     const resolvedPromiseLogic = createAsyncLogic({
       run: (ctx) => {
         ctx.signal.addEventListener('abort', resolvedSignalListener)
@@ -643,7 +775,10 @@ describe('promise logic (createAsyncLogic)', () => {
       },
     })
     const rejectedDeferred = Promise.withResolvers<number>()
-    const rejectedSignalListener = vi.fn()
+    const rejectedAbortCalls: unknown[] = []
+    const rejectedSignalListener = (event: unknown) => {
+      rejectedAbortCalls.push(event)
+    }
     const rejectedPromiseLogic = createAsyncLogic({
       run: (ctx) => {
         ctx.signal.addEventListener('abort', rejectedSignalListener)
@@ -653,27 +788,33 @@ describe('promise logic (createAsyncLogic)', () => {
     const actor = createActor(resolvedPromiseLogic)
     actor.start()
     resolvedDeferred.resolve(42)
-    await waitFor(actor, (s) => s.status === 'done')
+    yield* Effect.promise(() => waitFor(actor, (s) => s.status === 'done'))
     actor.stop()
-    expect(resolvedSignalListener).not.toHaveBeenCalled()
+    yield* expect({
+      resolvedAbortListenerCalls: resolvedAbortCalls.length,
+    }).toEqual({ resolvedAbortListenerCalls: 0 })
     const actor2 = createActor(rejectedPromiseLogic)
     actor2.start()
     rejectedDeferred.reject(50)
-    await rejectedDeferred.promise.catch(() => {})
-    await waitFor(actor2, (s) => s.status === 'done')
+    yield* Effect.promise(() => rejectedDeferred.promise.catch(() => {}))
+    yield* Effect.promise(() => waitFor(actor2, (s) => s.status === 'done'))
     actor2.stop()
-    expect(rejectedSignalListener).not.toHaveBeenCalled()
+    yield* expect({
+      rejectedAbortListenerCalls: rejectedAbortCalls.length,
+    }).toEqual({ rejectedAbortListenerCalls: 0 })
   })
-  it('should not reuse the same signal for different actors with same logic', async () => {
+  it('should not reuse the same signal for different actors with same logic', function*({ expect }) {
     let deferredMap: Map<string, PromiseWithResolvers<number>> = new Map()
-    let signalListenerMap: Map<string, Mock> = new Map()
+    let signalListenerMap: Map<string, unknown[]> = new Map()
     const p = createAsyncLogic({
       run: ({ self, signal }) => {
         const deferred = Promise.withResolvers<number>()
-        const signalListener = vi.fn()
+        const signalListenerCalls: unknown[] = []
         deferredMap.set(self.id, deferred)
-        signalListenerMap.set(self.id, signalListener)
-        signal.addEventListener('abort', signalListener)
+        signalListenerMap.set(self.id, signalListenerCalls)
+        signal.addEventListener('abort', (event) => {
+          signalListenerCalls.push(event)
+        })
         return deferred.promise
       },
     })
@@ -716,23 +857,29 @@ describe('promise logic (createAsyncLogic)', () => {
     actor.send({ type: 'CANCEL_1' })
     p1Deferred.resolve(42)
     p2Deferred.resolve(42)
-    await Promise.all([
-      waitFor(actor, (s) => s.matches('p1.canceled')),
-      waitFor(actor, (s) => s.matches('p2.done')),
-    ])
-    expect(signalListenerMap.get('p1')).toHaveBeenCalled()
-    expect(signalListenerMap.get('p2')).not.toHaveBeenCalled()
+    yield* Effect.promise(() =>
+      Promise.all([
+        waitFor(actor, (s) => s.matches('p1.canceled')),
+        waitFor(actor, (s) => s.matches('p2.done')),
+      ])
+    )
+    yield* expect({
+      p1AbortListenerCalls: signalListenerMap.get('p1')!.length,
+      p2AbortListenerCalls: signalListenerMap.get('p2')!.length,
+    }).toEqual({ p1AbortListenerCalls: 1, p2AbortListenerCalls: 0 })
   })
-  it.skip('should not reuse the same signal for different actors with same logic and id', async () => {
+  it.skip('should not reuse the same signal for different actors with same logic and id', function*({ expect }) {
     let deferredList: PromiseWithResolvers<number>[] = []
-    let signalListenerList: Mock[] = []
+    let signalListenerList: Array<unknown[]> = []
     const p = createAsyncLogic({
       run: ({ signal }) => {
         const deferred = Promise.withResolvers<number>()
-        const fn = vi.fn()
+        const fn: unknown[] = []
         deferredList.push(deferred)
         signalListenerList.push(fn)
-        signal.addEventListener('abort', fn)
+        signal.addEventListener('abort', (event) => {
+          fn.push(event)
+        })
         return deferred.promise
       },
     })
@@ -774,28 +921,34 @@ describe('promise logic (createAsyncLogic)', () => {
     if (p1Deferred === undefined) throw new Error('expected a first deferred')
     const p2Deferred = deferredList[1]
     if (p2Deferred === undefined) throw new Error('expected a second deferred')
-    const p1Fn = signalListenerList[0]
-    const p2Fn = signalListenerList[1]
+    const p1Fn = signalListenerList[0]!
+    const p2Fn = signalListenerList[1]!
     actor.send({ type: 'CANCEL_1' })
     p1Deferred.resolve(42)
     p2Deferred.resolve(42)
-    await Promise.all([
-      waitFor(actor, (s) => s.matches('p1.canceled')),
-      waitFor(actor, (s) => s.matches('p2.done')),
-    ])
-    expect(p1Fn).toHaveBeenCalled()
-    expect(p2Fn).not.toHaveBeenCalled()
+    yield* Effect.promise(() =>
+      Promise.all([
+        waitFor(actor, (s) => s.matches('p1.canceled')),
+        waitFor(actor, (s) => s.matches('p2.done')),
+      ])
+    )
+    yield* expect({
+      p1AbortListenerCalls: p1Fn.length,
+      p2AbortListenerCalls: p2Fn.length,
+    }).toEqual({ p1AbortListenerCalls: 1, p2AbortListenerCalls: 0 })
   })
-  it('should not reuse the same signal for the same actor when restarted', async () => {
+  it('should not reuse the same signal for the same actor when restarted', function*({ expect }) {
     let deferredList: PromiseWithResolvers<number>[] = []
-    let signalListenerList: Mock[] = []
+    let signalListenerList: Array<unknown[]> = []
     const p = createAsyncLogic({
       run: ({ signal }) => {
         const deferred = Promise.withResolvers<number>()
-        const fn = vi.fn()
+        const fn: unknown[] = []
         deferredList.push(deferred)
         signalListenerList.push(fn)
-        signal.addEventListener('abort', fn)
+        signal.addEventListener('abort', (event) => {
+          fn.push(event)
+        })
         return deferred.promise
       },
     })
@@ -825,36 +978,40 @@ describe('promise logic (createAsyncLogic)', () => {
       },
     })
     const actor = createActor(machine).start()
-    // resolve the first promise and no canceling
-    await waitFor(actor, (s) => s.matches('running'))
+    yield* Effect.promise(() => waitFor(actor, (s) => s.matches('running')))
     const deferred1 = deferredList[0]
     if (deferred1 === undefined) throw new Error('expected a first deferred')
-    const fn1 = signalListenerList[0]
+    const fn1 = signalListenerList[0]!
     deferred1.resolve(42)
-    await waitFor(actor, (s) => s.matches('done'))
-    expect(fn1).not.toHaveBeenCalled()
+    yield* Effect.promise(() => waitFor(actor, (s) => s.matches('done')))
+    yield* expect({ fn1AbortListenerCalls: fn1.length }).toEqual({
+      fn1AbortListenerCalls: 0,
+    })
     actor.send({ type: 'restart' })
-    // cancel while running
-    await waitFor(actor, (s) => s.matches('running'))
+    yield* Effect.promise(() => waitFor(actor, (s) => s.matches('running')))
     actor.send({ type: 'cancel' })
-    await waitFor(actor, (s) => s.matches('canceled'))
+    yield* Effect.promise(() => waitFor(actor, (s) => s.matches('canceled')))
     const deferred2 = deferredList[1]
     if (deferred2 === undefined) throw new Error('expected a second deferred')
     deferred2.resolve(42)
-    await deferred2.promise
-    const fn2 = signalListenerList[1]
-    expect(fn2).toHaveBeenCalled()
+    yield* Effect.promise(() => deferred2.promise)
+    const fn2 = signalListenerList[1]!
+    yield* expect({ fn2AbortListenerCalls: fn2.length }).toEqual({
+      fn2AbortListenerCalls: 1,
+    })
   })
 })
 describe('logic as reducer', () => {
-  it('should interpret a reducer-like logic', () => {
+  it('should interpret a reducer-like logic', function*({ expect }) {
     const transitionLogic = createLogic({
       context: { enabled: 'on' as 'off' | 'on' },
       run: ({ context, event }) => {
         if (event.type === 'toggle') {
           return {
             context: {
-              enabled: context.enabled === 'on' ? ('off' as const) : ('on' as const),
+              enabled: context.enabled === 'on'
+                ? ('off' as const)
+                : ('on' as const),
             },
           }
         }
@@ -863,11 +1020,14 @@ describe('logic as reducer', () => {
     })
     const actor = createActor(transitionLogic)
     actor.start()
-    expect(actor.getSnapshot().context.enabled).toBe('on')
+    const enabledBefore = actor.getSnapshot().context.enabled
     actor.send({ type: 'toggle' })
-    expect(actor.getSnapshot().context.enabled).toBe('off')
+    yield* expect({
+      enabledBefore,
+      enabledAfter: actor.getSnapshot().context.enabled,
+    }).toEqual({ enabledBefore: 'on', enabledAfter: 'off' })
   })
-  it('should persist reducer-like logic', () => {
+  it('should persist reducer-like logic', function*({ expect }) {
     const logic = createLogic({
       context: {
         enabled: 'off' as 'off' | 'on',
@@ -883,111 +1043,124 @@ describe('logic as reducer', () => {
     actor.start()
     actor.send({ type: 'activate' })
     const persistedSnapshot = actor.getPersistedSnapshot()
-    expect(persistedSnapshot).toEqual({
-      status: 'active',
-      output: undefined,
-      error: undefined,
-      context: {
-        enabled: 'on',
-      },
-    })
     const restoredActor = createActor(logic, {
       snapshot: persistedSnapshot,
     })
     restoredActor.start()
-    expect(restoredActor.getSnapshot().context.enabled).toBe('on')
+    yield* expect({
+      persistedSnapshot,
+      restoredEnabled: restoredActor.getSnapshot().context.enabled,
+    }).toEqual({
+      persistedSnapshot: {
+        status: 'active',
+        output: undefined,
+        error: undefined,
+        context: {
+          enabled: 'on',
+        },
+      },
+      restoredEnabled: 'on',
+    })
   })
-  it('should have access to the system', () => {
-    expect.assertions(1)
+  it('should have access to the system', function*({ expect }) {
+    let receivedSystem: AnyActorSystem | undefined
     const transitionLogic = createLogic({
       context: 0,
       run: ({ event, system }) => {
         if (event.type === '@xstate.init') {
           return
         }
-        expect(system).toBeDefined()
+        receivedSystem = system
         return { context: 42 }
       },
     })
     const actor = createActor(transitionLogic)
     actor.start()
     actor.send({ type: 'a' })
+    yield* expect(receivedSystem).toBe(actor.system)
   })
-  it('should have reference to self', () => {
-    expect.assertions(1)
+  it('should have reference to self', function*({ expect }) {
+    let receivedSelf: AnyActorRef | undefined
     const transitionLogic = createLogic({
       context: 0,
       run: ({ event, self }) => {
         if (event.type === '@xstate.init') {
           return
         }
-        expect(self.send).toBeDefined()
+        receivedSelf = self
         return { context: 42 }
       },
     })
     const actor = createActor(transitionLogic)
     actor.start()
     actor.send({ type: 'a' })
+    yield* expect(receivedSelf).toBe(actor)
   })
 })
 describe('observable logic (createObservableLogic)', () => {
-  it('should interpret an observable', async () => {
+  it('should interpret an observable', function*({ expect }) {
     const observableLogic = createObservableLogic<number, undefined>(() => toSubscribable(interval(10).pipe(take(4))))
     const actor = createActor(observableLogic).start()
-    const snapshot = await waitFor(actor, (s) => s.status === 'done')
-    expect(snapshot.context).toEqual(3)
+    const snapshot = yield* Effect.promise(() => waitFor(actor, (s) => s.status === 'done'))
+    yield* expect(snapshot.context).toEqual(3)
   })
-  it('should resolve', () => {
+  it('should resolve', function*({ expect }) {
     const actor = createActor(
       createObservableLogic<number, undefined>(() => toSubscribable(of(42))),
     )
-    const spy = vi.fn()
-    actor.subscribe((snapshot) => spy(snapshot.context))
-    actor.start()
-    expect(spy).toHaveBeenCalledWith(42)
-  })
-  it('should resolve (observer .next)', () => {
-    const actor = createActor(
-      createObservableLogic<number, undefined>(() => toSubscribable(of(42))),
-    )
-    const spy = vi.fn()
-    actor.subscribe({
-      next: (snapshot) => spy(snapshot.context),
+    const observedContexts: Array<number | undefined> = []
+    actor.subscribe((snapshot) => {
+      observedContexts.push(snapshot.context)
     })
     actor.start()
-    expect(spy).toHaveBeenCalledWith(42)
+    yield* expect({ sawContext42: observedContexts.includes(42) }).toEqual({
+      sawContext42: true,
+    })
   })
-  it('should reject (observer .error)', () => {
+  it('should resolve (observer .next)', function*({ expect }) {
+    const actor = createActor(
+      createObservableLogic<number, undefined>(() => toSubscribable(of(42))),
+    )
+    const observedContexts: Array<number | undefined> = []
+    actor.subscribe({
+      next: (snapshot) => {
+        observedContexts.push(snapshot.context)
+      },
+    })
+    actor.start()
+    yield* expect({ sawContext42: observedContexts.includes(42) }).toEqual({
+      sawContext42: true,
+    })
+  })
+  it('should reject (observer .error)', function*({ expect }) {
     const actor = createActor(
       createObservableLogic<never, undefined>(
         () => toSubscribable(throwError(() => 'Observable error.')),
       ),
     )
-    const spy = vi.fn()
+    const errors: unknown[] = []
     actor.subscribe({
-      error: spy,
+      error: (error) => {
+        errors.push(error)
+      },
     })
     actor.start()
-    expect(spy.mock.calls).toMatchInlineSnapshot(`
-      [
-        [
-          "Observable error.",
-        ],
-      ]
-    `)
+    yield* expect({ errors }).toEqual({ errors: ['Observable error.'] })
   })
-  it('should complete (observer .complete)', () => {
+  it('should complete (observer .complete)', function*({ expect }) {
     const actor = createActor(
       createObservableLogic<never, undefined>(() => toSubscribable(EMPTY)),
     )
-    const spy = vi.fn()
+    const completions: string[] = []
     actor.subscribe({
-      complete: spy,
+      complete: () => {
+        completions.push('complete')
+      },
     })
     actor.start()
-    expect(spy).toHaveBeenCalled()
+    yield* expect({ completions }).toEqual({ completions: ['complete'] })
   })
-  it('should not execute when reading initial state', () => {
+  it('should not execute when reading initial state', function*({ expect }) {
     let called = false
     const logic = createObservableLogic<never, undefined>(() => {
       called = true
@@ -995,84 +1168,89 @@ describe('observable logic (createObservableLogic)', () => {
     })
     const actor = createActor(logic)
     actor.getSnapshot()
-    expect(called).toBe(false)
+    yield* expect({ called }).toEqual({ called: false })
   })
-  it('should have access to the system', () => {
-    expect.assertions(1)
+  it('should have access to the system', function*({ expect }) {
+    let receivedSystem: AnyActorSystem | undefined
     const observableLogic = createObservableLogic<number, undefined>(
       ({ system }) => {
-        expect(system).toBeDefined()
+        receivedSystem = system
         return toSubscribable(of(42))
       },
     )
-    createActor(observableLogic).start()
+    const actor = createActor(observableLogic).start()
+    yield* expect(receivedSystem).toBe(actor.system)
   })
-  it('should have reference to self', () => {
-    expect.assertions(1)
+  it('should have reference to self', function*({ expect }) {
+    let receivedSelf: AnyActorRef | undefined
     const observableLogic = createObservableLogic<number, undefined>(
       ({ self }) => {
-        expect(self.send).toBeDefined()
+        receivedSelf = self
         return toSubscribable(of(42))
       },
     )
-    createActor(observableLogic).start()
+    const actor = createActor(observableLogic).start()
+    yield* expect(receivedSelf).toBe(actor)
   })
 })
 describe('eventObservable logic (createEventObservableLogic)', () => {
-  it('should have access to the system', () => {
-    expect.assertions(1)
+  it('should have access to the system', function*({ expect }) {
+    let receivedSystem: AnyActorSystem | undefined
     const observableLogic = createEventObservableLogic<
       { type: string },
       undefined
     >(({ system }) => {
-      expect(system).toBeDefined()
+      receivedSystem = system
       return toSubscribable(of({ type: 'a' }))
     })
-    createActor(observableLogic).start()
+    const actor = createActor(observableLogic).start()
+    yield* expect(receivedSystem).toBe(actor.system)
   })
-  it('should have reference to self', () => {
-    expect.assertions(1)
+  it('should have reference to self', function*({ expect }) {
+    let receivedSelf: AnyActorRef | undefined
     const observableLogic = createEventObservableLogic<
       { type: string },
       undefined
     >(({ self }) => {
-      expect(self.send).toBeDefined()
+      receivedSelf = self
       return toSubscribable(of({ type: 'a' }))
     })
-    createActor(observableLogic).start()
+    const actor = createActor(observableLogic).start()
+    yield* expect(receivedSelf).toBe(actor)
   })
 })
 describe('callback logic (createCallbackLogic)', () => {
-  it('should interpret a callback', () => {
-    expect.assertions(1)
+  it('should interpret a callback', function*({ expect }) {
+    const received: unknown[] = []
     const callbackLogic = createCallbackLogic(({ receive }) => {
       receive((event) => {
-        expect(event).toEqual({ type: 'a' })
+        received.push(event)
       })
     })
     const actor = createActor(callbackLogic).start()
     actor.send({ type: 'a' })
+    yield* expect(received).toEqual([{ type: 'a' }])
   })
-  it('should have access to the system', () => {
-    expect.assertions(1)
+  it('should have access to the system', function*({ expect }) {
+    let receivedSystem: AnyActorSystem | undefined
     const callbackLogic = createCallbackLogic(({ system }) => {
-      expect(system).toBeDefined()
+      receivedSystem = system
     })
-    createActor(callbackLogic).start()
+    const actor = createActor(callbackLogic).start()
+    yield* expect(receivedSystem).toBe(actor.system)
   })
-  it('should have reference to self', () => {
-    expect.assertions(1)
+  it('should have reference to self', function*({ expect }) {
+    let receivedSelf: AnyActorRef | undefined
     const callbackLogic = createCallbackLogic(({ self }) => {
-      expect(self.send).toBeDefined()
+      receivedSelf = self
     })
-    createActor(callbackLogic).start()
+    const actor = createActor(callbackLogic).start()
+    yield* expect(receivedSelf).toBe(actor)
   })
-  it('can send self reference in an event to parent', () => {
+  it('can send self reference in an event to parent', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
+    const received: string[] = []
     const machine = createMachine({
-      // types: {} as {
-      //   events: { type: 'PING'; ref: AnyActorRef };
-      // },
       schemas: {
         events: {
           PING: z.object({ ref: z.any() }),
@@ -1083,6 +1261,7 @@ describe('callback logic (createCallbackLogic)', () => {
           receive((event) => {
             switch (event.type) {
               case 'PONG': {
+                received.push(event.type)
                 resolve()
               }
             }
@@ -1094,28 +1273,21 @@ describe('callback logic (createCallbackLogic)', () => {
         }),
       },
       on: {
-        // PING: {
-        //   actions: sendTo(
-        //     ({ event }) => event.ref,
-        //     () => ({ type: 'PONG' })
-        //   )
-        // }
         PING: ({ event }, enq) => {
           enq.sendTo(event.ref, { type: 'PONG' })
         },
       },
     })
     createActor(machine).start()
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect(received).toEqual(['PONG'])
   })
-  // TODO: event sourcing
-  it.skip('should persist the input of a callback', () => {
-    const spy = vi.fn()
+  it.skip('should persist the input of a callback', function*({ expect }) {
+    const receivedInputs: unknown[] = []
     const cb = createCallbackLogic(({ input }) => {
-      spy(input)
+      receivedInputs.push(input)
     })
     const machine = createMachine({
-      // types: {} as { events: { type: 'EV'; data: number } },
       schemas: {
         events: {
           EV: z.object({ data: z.number() }),
@@ -1144,15 +1316,14 @@ describe('callback logic (createCallbackLogic)', () => {
     })
     const snapshot = actor.getPersistedSnapshot()
     actor.stop()
-    spy.mockClear()
+    receivedInputs.length = 0
     const restoredActor = createActor(machine, { snapshot })
     restoredActor.start()
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy).toHaveBeenCalledWith(13)
+    yield* expect(receivedInputs).toEqual([13])
   })
 })
 describe('machine logic', () => {
-  it('should persist a machine', async () => {
+  it('should persist a machine', function*({ expect }) {
     const childMachine = createMachine({
       schemas: {
         context: z.object({
@@ -1198,11 +1369,14 @@ describe('machine logic', () => {
       },
     })
     const actor = createActor(machine).start()
-    await waitFor(actor, (s) => s.matches('success'))
+    yield* Effect.promise(() => waitFor(actor, (s) => s.matches('success')))
     const persistedState = actor.getPersistedSnapshot()!
-    expect((persistedState as any).children.a).toBeUndefined()
-    expect((persistedState as any).children.b.snapshot).toEqual(
-      expect.objectContaining({
+    yield* expect({
+      childA: (persistedState as any).children.a,
+      childB: (persistedState as any).children.b.snapshot,
+    }).toEqual({
+      childA: undefined,
+      childB: expect.objectContaining({
         context: {
           count: 55,
         },
@@ -1215,10 +1389,9 @@ describe('machine logic', () => {
           }),
         },
       }),
-    )
+    })
   })
-  // TODO: event sourcing
-  it.todo('should persist and restore a nested machine', () => {
+  it('should persist and restore a nested machine', function*({ expect }) {
     const childMachine = createMachine({
       initial: 'a',
       states: {
@@ -1249,15 +1422,9 @@ describe('machine logic', () => {
             src: childMachine,
           },
           on: {
-            // NEXT: {
-            //   actions: sendTo('child', { type: 'NEXT' })
-            // },
             NEXT: ({ children }, enq) => {
               enq.sendTo(children['child'], { type: 'NEXT' })
             },
-            // LAST: {
-            //   actions: sendTo('child', { type: 'LAST' })
-            // }
             LAST: ({ children }, enq) => {
               enq.sendTo(children['child'], { type: 'LAST' })
             },
@@ -1266,14 +1433,8 @@ describe('machine logic', () => {
       },
     })
     const actor = createActor(parentMachine).start()
-    // parent is at 'idle'
-    // ...
     actor.send({ type: 'START' })
-    // parent is at 'invoked'
-    // child is at 'a'
-    // ...
     actor.send({ type: 'NEXT' })
-    // child is at 'b'
     const persistedSnapshot = actor.getPersistedSnapshot()!
     const newActor = createActor(parentMachine, {
       snapshot: persistedSnapshot,
@@ -1281,16 +1442,16 @@ describe('machine logic', () => {
     const newSnapshot = newActor.getSnapshot()
     const newChild = newSnapshot.children['child']
     if (newChild === undefined) throw new Error('expected child actor')
-    expect(newChild.getSnapshot().value).toBe('b')
-    // Ensure that the child actor is started
-    // LAST is sent to parent which sends LAST to child
+    const childValueAfterRestore = newChild.getSnapshot().value
     newActor.send({ type: 'LAST' })
-    // child is at 'c'
     const newActorChild = newActor.getSnapshot().children['child']
     if (newActorChild === undefined) throw new Error('expected child actor')
-    expect(newActorChild.getSnapshot().value).toBe('c')
+    yield* expect({
+      childValueAfterRestore,
+      childValueAfterLast: newActorChild.getSnapshot().value,
+    }).toEqual({ childValueAfterRestore: 'b', childValueAfterLast: 'c' })
   })
-  it('should return the initial persisted state of a non-started actor', () => {
+  it('should return the initial persisted state of a non-started actor', function*({ expect }) {
     const machine = createMachine({
       initial: 'idle',
       states: {
@@ -1298,13 +1459,13 @@ describe('machine logic', () => {
       },
     })
     const actor = createActor(machine)
-    expect(actor.getPersistedSnapshot()).toEqual(
+    yield* expect(actor.getPersistedSnapshot()).toEqual(
       expect.objectContaining({
         value: 'idle',
       }),
     )
   })
-  it('the initial state of a child is available before starting the parent', () => {
+  it('the initial state of a child is available before starting the parent', function*({ expect }) {
     const machine = createMachine({
       invoke: {
         id: 'child',
@@ -1315,7 +1476,7 @@ describe('machine logic', () => {
       },
     })
     const actor = createActor(machine)
-    expect(
+    yield* expect(
       (actor.getPersistedSnapshot() as any).children['child'].snapshot,
     ).toEqual(
       expect.objectContaining({
@@ -1323,7 +1484,7 @@ describe('machine logic', () => {
       }),
     )
   })
-  it('should not invoke an actor if it is missing in persisted state', () => {
+  it('should not invoke an actor if it is missing in persisted state', function*({ expect }) {
     const machine = createMachine({
       schemas: {
         events: {
@@ -1377,35 +1538,32 @@ describe('machine logic', () => {
         },
       },
     })
-    expect(actor.getSnapshot().children['child']).not.toBe(undefined)
-    const childRef = actor.getSnapshot().children['child']
-    if (childRef === undefined) throw new Error('expected child actor')
-    expect(childRef.getSnapshot().context).toEqual({
-      value: 'value',
-    })
+    const childBeforeDelete = actor.getSnapshot().children['child']
+    if (childBeforeDelete === undefined) {
+      throw new Error('expected child actor')
+    }
+    const childContext = childBeforeDelete.getSnapshot().context
     const persisted: any = actor.getPersistedSnapshot()
     delete persisted.children['child']
     const rehydratedActor = createActor(machine, {
       snapshot: persisted,
     }).start()
-    expect(rehydratedActor.getSnapshot().children['child']).toBe(undefined)
+    yield* expect({
+      childPresent: childBeforeDelete !== undefined,
+      childContext,
+      rehydratedChild: rehydratedActor.getSnapshot().children['child'],
+    }).toEqual({
+      childPresent: true,
+      childContext: { value: 'value' },
+      rehydratedChild: undefined,
+    })
   })
-  it.skip('should persist a spawned actor with referenced src', () => {
+  it.skip('should persist a spawned actor with referenced src', function*({ expect }) {
     const reducer = createLogic({
       context: { count: 42 },
       run: () => undefined,
     })
     const machine = createMachine({
-      // types: {
-      //   context: {} as {
-      //     ref: AnyActorRef;
-      //   },
-      //   actors: {} as {
-      //     src: 'reducer';
-      //     logic: typeof reducer;
-      //     ids: 'child';
-      //   }
-      // },
       schemas: {
         context: z.object({
           ref: z.custom<AnyActorRef>(),
@@ -1424,17 +1582,22 @@ describe('machine logic', () => {
     })
     const actor = createActor(machine).start()
     const persistedSnapshot = actor.getPersistedSnapshot()!
-    expect((persistedSnapshot as any).children.child.snapshot.context).toEqual({
-      count: 42,
-    })
     const newActor = createActor(machine, {
       snapshot: persistedSnapshot,
     }).start()
     const snapshot = newActor.getSnapshot()
-    expect(snapshot.context.ref).toBe(snapshot.children['child'])
-    expect(snapshot.context.ref.getSnapshot().context.count).toBe(42)
+    yield* expect({
+      persistedChildContext: (persistedSnapshot as any).children.child.snapshot
+        .context,
+      refIsChild: snapshot.context.ref === snapshot.children['child'],
+      childCount: snapshot.context.ref.getSnapshot().context.count,
+    }).toEqual({
+      persistedChildContext: { count: 42 },
+      refIsChild: true,
+      childCount: 42,
+    })
   })
-  it('should not persist a spawned actor with inline src', () => {
+  it('should not persist a spawned actor with inline src', function*({ expect }) {
     const childMachine = createMachine({})
     const machine = createMachine({
       schemas: {
@@ -1449,24 +1612,26 @@ describe('machine logic', () => {
       },
     })
     const actorRef = createActor(machine).start()
-    expect(() => actorRef.getPersistedSnapshot()).toThrowErrorMatchingInlineSnapshot(
-      `[Error: An inline child actor cannot be persisted.]`,
+    yield* expect(() => actorRef.getPersistedSnapshot()).toThrow(
+      new Error('An inline child actor cannot be persisted.'),
     )
   })
-  it('should have access to the system', async () => {
+  it('should have access to the system', function*({ expect }) {
+    let receivedSystem: AnyActorSystem | undefined
     const { resolve, promise } = Promise.withResolvers<void>()
     const machine = createMachine({
       entry: ({ system }) => {
-        expect(system).toBeDefined()
+        receivedSystem = system
         resolve()
       },
     })
-    createActor(machine).start()
-    await promise
+    const actor = createActor(machine).start()
+    yield* Effect.promise(() => promise)
+    yield* expect(receivedSystem).toBe(actor.system)
   })
 })
 describe('composable actor logic', () => {
-  it('should work with machines', () => {
+  it('should work with machines', function*({ expect }) {
     const logs: string[] = []
     function withLogs<T extends AnyActorLogic>(actorLogic: T): T {
       return {
@@ -1495,9 +1660,9 @@ describe('composable actor logic', () => {
     actor.send({ type: 'to_b' })
     actor.send({ type: 'to_c' })
     actor.send({ type: 'to_a' })
-    expect(logs).toEqual(['to_b', 'to_c', 'to_a'])
+    yield* expect(logs).toEqual(['to_b', 'to_c', 'to_a'])
   })
-  it('should work with promises', async () => {
+  it('should work with promises', function*({ expect }) {
     const logs: any[] = []
     function withLogs<T extends AnyActorLogic>(actorLogic: T): T {
       return {
@@ -1512,10 +1677,10 @@ describe('composable actor logic', () => {
     }
     const promiseLogic = createAsyncLogic({ run: () => Promise.resolve(42) })
     const actor = createActor(withLogs(promiseLogic)).start()
-    await waitFor(actor, (s) => s.status === 'done')
-    expect(logs).toEqual([42])
+    yield* Effect.promise(() => waitFor(actor, (s) => s.status === 'done'))
+    yield* expect(logs).toEqual([42])
   })
-  it('should work with functions', () => {
+  it('should work with functions', function*({ expect }) {
     const logs: any[] = []
     function withLogs<T extends AnyActorLogic>(actorLogic: T): T {
       return {
@@ -1536,9 +1701,9 @@ describe('composable actor logic', () => {
     })
     const actor = createActor(withLogs(transitionLogic)).start()
     actor.send({ type: 'a', value: 42 })
-    expect(logs).toEqual([42])
+    yield* expect(logs).toEqual([42])
   })
-  it('should work with observables', () => {
+  it('should work with observables', function*({ expect }) {
     const { resolve, promise } = Promise.withResolvers<void>()
     const logs: any[] = []
     function withLogs<T extends AnyActorLogic>(actorLogic: T): T {
@@ -1558,13 +1723,13 @@ describe('composable actor logic', () => {
     const actor = createActor(withLogs(observableLogic)).start()
     actor.subscribe({
       complete: () => {
-        expect(logs).toEqual([0, 1, 2, 3])
         resolve()
       },
     })
-    return promise
+    yield* Effect.promise(() => promise)
+    yield* expect(logs).toEqual([0, 1, 2, 3])
   })
-  it('higher-level logic wrapping a machine should be able to persist a snapshot', () => {
+  it('higher-level logic wrapping a machine should be able to persist a snapshot', function*({ expect }) {
     const logged: any[] = []
     function withLogging<T extends ActorLogic<any, any>>(actorLogic: T) {
       const enhancedLogic: T = {
@@ -1591,16 +1756,18 @@ describe('composable actor logic', () => {
     const actor = createActor(withLogging(machine)).start()
     actor.send({ type: 'next' })
     actor.send({ type: 'more' })
-    expect(logged).toEqual(['next', 'more'])
-    expect(actor.getSnapshot().value).toBe('done')
-    expect(() => {
-      actor.getPersistedSnapshot()
-    }).not.toThrow()
-    expect(actor.getPersistedSnapshot()).toEqual(
-      expect.objectContaining({
+    const persistedSnapshot = actor.getPersistedSnapshot()
+    yield* expect({
+      logged,
+      value: actor.getSnapshot().value,
+      persistedSnapshot,
+    }).toEqual({
+      logged: ['next', 'more'],
+      value: 'done',
+      persistedSnapshot: expect.objectContaining({
         status: 'active',
         value: 'done',
       }),
-    )
+    })
   })
 })

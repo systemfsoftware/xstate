@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { createMachine, setup } from '../src/index.js'
+import { describe, it } from '@systemfsoftware/vitest'
+import { createMachine, initialTransition, setup } from '../src/index.js'
 
 describe('delay names in `after`', () => {
-  it('rejects undeclared delay names when delays are declared', () => {
+  it('rejects undeclared delay names when delays are declared', function*({ expect }) {
     if (false) {
       setup({ delays: { short: 100 } }).createMachine({
         initial: 'a',
@@ -32,11 +32,16 @@ describe('delay names in `after`', () => {
       })
     }
 
-    expect(true).toBe(true)
+    const machine = setup({ delays: { short: 100 } }).createMachine({
+      initial: 'a',
+      states: { a: { after: { short: { target: 'b' } } }, b: {} },
+    })
+
+    yield* expect(initialTransition(machine)[0].value).toEqual('a')
   })
 
-  it('accepts declared names, numbers and duration strings', () => {
-    setup({ delays: { short: 100 } }).createMachine({
+  it('accepts declared names, numbers and duration strings', function*({ expect }) {
+    const machine = setup({ delays: { short: 100 } }).createMachine({
       initial: 'a',
       states: {
         a: {
@@ -71,11 +76,11 @@ describe('delay names in `after`', () => {
         },
       })
 
-    expect(true).toBe(true)
+    yield* expect(initialTransition(machine)[0].value).toEqual('a')
   })
 
-  it('stays permissive without declared delays', () => {
-    setup({}).createMachine({
+  it('stays permissive without declared delays', function*({ expect }) {
+    const machine = setup({}).createMachine({
       initial: 'a',
       states: { a: { after: { anything: { target: 'b' } } }, b: {} },
     })
@@ -84,10 +89,10 @@ describe('delay names in `after`', () => {
       states: { a: { after: { anything: { target: 'b' } } }, b: {} },
     })
 
-    expect(true).toBe(true)
+    yield* expect(Object.keys(machine.root.states)).toEqual(['a', 'b'])
   })
 
-  it('rejects malformed duration strings', () => {
+  it('rejects malformed duration strings', function*({ expect }) {
     if (false) {
       setup({ delays: { short: 100 } }).createMachine({
         initial: 'a',
@@ -129,11 +134,16 @@ describe('delay names in `after`', () => {
       })
     }
 
-    expect(true).toBe(true)
+    const machine = setup({ delays: { short: 100 } }).createMachine({
+      initial: 'a',
+      states: { a: { after: { short: { target: 'b' } } }, b: {} },
+    })
+
+    yield* expect(initialTransition(machine)[0].value).toEqual('a')
   })
 
-  it('accepts the duration forms the runtime parses', () => {
-    setup({ delays: { short: 100 } }).createMachine({
+  it('accepts the duration forms the runtime parses', function*({ expect }) {
+    const machine = setup({ delays: { short: 100 } }).createMachine({
       initial: 'a',
       states: {
         a: {
@@ -157,6 +167,6 @@ describe('delay names in `after`', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(initialTransition(machine)[0].value).toEqual('a')
   })
 })

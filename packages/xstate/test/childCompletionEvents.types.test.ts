@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { z } from 'zod'
 import { type ActorRefFromLogic, assertEvent, createAsyncLogic, createMachine, setup } from '../src/index.js'
 
@@ -6,7 +6,7 @@ function expectType<T>(_v: T) {}
 
 const fetchUser = createAsyncLogic({
   schemas: { output: z.object({ name: z.string() }) },
-  run: async () => ({ name: 'David' }),
+  run: () => Promise.resolve({ name: 'David' }),
 })
 
 const children = {
@@ -14,8 +14,8 @@ const children = {
 }
 
 describe('child completion events in resolver event unions', () => {
-  it('includes done/error events of declared children in entry', () => {
-    setup({
+  it('includes done/error events of declared children in entry', function*({ expect }) {
+    const setupMachine = setup({
       actors: { fetchUser },
       schemas: {
         events: { go: z.object({ to: z.string() }) },
@@ -36,7 +36,7 @@ describe('child completion events in resolver event unions', () => {
       },
     })
 
-    createMachine({
+    const directMachine = createMachine({
       schemas: {
         events: { go: z.object({}) },
         children,
@@ -48,11 +48,14 @@ describe('child completion events in resolver event unions', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect({
+      setupInvokes: setupMachine.root.invoke.map((invoke) => invoke.id),
+      directInvokes: directMachine.root.invoke.map((invoke) => invoke.id),
+    }).toEqual({ setupInvokes: ['fetch'], directInvokes: ['fetch'] })
   })
 
-  it('keeps `on` handlers narrowed to their event', () => {
-    setup({
+  it('keeps `on` handlers narrowed to their event', function*({ expect }) {
+    const machine = setup({
       schemas: {
         events: { go: z.object({ to: z.string() }) },
         children,
@@ -70,11 +73,11 @@ describe('child completion events in resolver event unions', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(Object.keys(machine.root.on)).toEqual(['go', 'xstate.done.actor'])
   })
 
-  it('narrows completion events when only children are declared', () => {
-    setup({
+  it('narrows completion events when only children are declared', function*({ expect }) {
+    const setupMachine = setup({
       actors: { fetchUser },
       schemas: { children },
     }).createMachine({
@@ -93,7 +96,7 @@ describe('child completion events in resolver event unions', () => {
       },
     })
 
-    createMachine({
+    const directMachine = createMachine({
       schemas: { children },
       invoke: { id: 'fetch', src: fetchUser },
       entry: ({ event }) => {
@@ -103,11 +106,14 @@ describe('child completion events in resolver event unions', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect({
+      setupOn: Object.keys(setupMachine.root.on),
+      directInvokes: directMachine.root.invoke.map((invoke) => invoke.id),
+    }).toEqual({ setupOn: ['go'], directInvokes: ['fetch'] })
   })
 
-  it('does not add completion events without declared children', () => {
-    setup({
+  it('does not add completion events without declared children', function*({ expect }) {
+    const machine = setup({
       schemas: { events: { go: z.object({}) } },
     }).createMachine({
       entry: ({ event }) => {
@@ -115,6 +121,6 @@ describe('child completion events in resolver event unions', () => {
       },
     })
 
-    expect(true).toBe(true)
+    yield* expect(Object.keys(machine.root.on)).toEqual([])
   })
 })

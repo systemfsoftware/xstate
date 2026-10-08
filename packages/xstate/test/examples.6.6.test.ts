@@ -1,4 +1,4 @@
-import { describe } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
 import { createMachine } from '../src/index.js'
 import { testAll } from './utils.js'
 

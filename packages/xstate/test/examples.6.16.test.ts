@@ -1,4 +1,4 @@
-import { describe } from 'vitest'
+import { describe } from '@systemfsoftware/vitest'
 import { checkStateIn, createMachine, type StateValue } from '../src/index.js'
 import { testAll } from './utils.js'
 
@@ -11,10 +11,6 @@ describe('Example 6.16', () => {
         states: {
           C: {
             on: {
-              // 2: {
-              //   target: 'D',
-              //   guard: stateIn('#E')
-              // }
               2: ({ self }) => {
                 if (checkStateIn(self.getSnapshot(), '#E')) {
                   return { target: 'D' }

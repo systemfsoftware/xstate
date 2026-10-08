@@ -25,7 +25,7 @@ interface PendingTimer {
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
 class InMemoryDurableHost implements DurableConformanceHarness {
-  async start<TLogic extends AnyActorLogic>(
+  start<TLogic extends AnyActorLogic>(
     logic: TLogic,
     input?: unknown,
   ): Promise<DurableConformanceExecution<TLogic>> {
@@ -119,9 +119,9 @@ class InMemoryDurableHost implements DurableConformanceHarness {
       },
     }
     const durable = createDurable(logic, {
-      executeAction: async (action, _metadata, runtime) => {
+      executeAction: (action, _metadata, runtime) => {
         operations.push({ type: 'action', actionType: action.type })
-        await action.exec(runtime)
+        return Promise.resolve(action.exec(runtime)).then(() => {})
       },
       ...actorRuntime,
       runtime: () => ({
@@ -144,63 +144,70 @@ class InMemoryDurableHost implements DurableConformanceHarness {
       },
     })
 
-    const result = (async () => {
-      let effects
-      ;[snapshot, effects] = durable.initialTransition(input as never)
-      rootAddress = durable.getActorRef(snapshot)?.address
-      await durable.executeEffects(effects)
-
-      while ((snapshot as Snapshot<unknown>).status === 'active') {
-        const event = await durable.waitForEvent()
-        ;[snapshot, effects] = durable.transition(snapshot, event)
-        await durable.executeEffects(effects)
-      }
-
+    let effects
+    ;[snapshot, effects] = durable.initialTransition(input as never)
+    rootAddress = durable.getActorRef(snapshot)?.address
+    const settle = (): Promise<unknown> => {
       const terminal = snapshot as Snapshot<unknown>
       if (terminal.status === 'done') {
-        return terminal.output
+        return Promise.resolve(terminal.output)
       }
       if (terminal.status === 'error') {
-        throw terminal.error
+        return Promise.reject(terminal.error)
       }
-      throw new DurableExecutionCancelledError()
-    })()
+      return Promise.reject(new DurableExecutionCancelledError())
+    }
+    const pump = (): Promise<unknown> => {
+      if ((snapshot as Snapshot<unknown>).status !== 'active') {
+        return settle()
+      }
+      return durable
+        .waitForEvent()
+        .then((event) => {
+          ;[snapshot, effects] = durable.transition(snapshot, event)
+          return durable.executeEffects(effects)
+        })
+        .then(pump)
+    }
+    const result = durable.executeEffects(effects).then(pump)
     void result.catch(() => {})
     void result.finally(markReady).catch(() => {})
-    await ready
-
-    return {
-      result,
-      operations,
-      async send(event) {
-        enqueue(event)
-        await flush()
-      },
-      async advanceTime(ms) {
-        now += ms
-        while (true) {
-          const due = [...timers.entries()]
-            .filter(([, timer]) => timer.dueAt <= now)
-            .sort(([, a], [, b]) => a.dueAt - b.dueAt)[0]
-          if (!due) {
-            break
-          }
-          const [key, timer] = due
-          timers.delete(key)
-          const timerEvent = { type: 'xstate.timer', id: timer.id }
-          if (timer.source.address === rootAddress) {
-            // Fired root timers are external mailbox events.
-            enqueue(timerEvent)
-          } else {
-            actorRuntime.sendEvent(timer.source, timer.source, timerEvent)
-          }
-          await flush()
-        }
-      },
-      getSnapshot() {
-        return snapshot
-      },
-    } as DurableConformanceExecution<TLogic>
+    return ready.then(
+      () =>
+        ({
+          result,
+          operations,
+          send(event) {
+            enqueue(event)
+            return flush()
+          },
+          advanceTime(ms) {
+            now += ms
+            const tick = (): Promise<void> => {
+              const due = [...timers.entries()]
+                .filter(([, timer]) => timer.dueAt <= now)
+                .sort(([, a], [, b]) => a.dueAt - b.dueAt)[0]
+              if (!due) {
+                return Promise.resolve()
+              }
+              const [key, timer] = due
+              timers.delete(key)
+              const timerEvent = { type: 'xstate.timer', id: timer.id }
+              if (timer.source.address === rootAddress) {
+                // Fired root timers are external mailbox events.
+                enqueue(timerEvent)
+              } else {
+                actorRuntime.sendEvent(timer.source, timer.source, timerEvent)
+              }
+              return flush().then(tick)
+            }
+            return tick()
+          },
+          getSnapshot() {
+            return snapshot
+          },
+        }) as DurableConformanceExecution<TLogic>,
+    )
   }
 }
 

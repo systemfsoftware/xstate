@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
 import { createActor, createMachine, initialTransition, transition } from '../src/index.js'
 import { testAll } from './utils.js'
 
@@ -69,7 +69,7 @@ describe('State node IDs', () => {
 
   testAll(idMachine, expected)
 
-  it('should work with ID + relative path', () => {
+  it('should work with ID + relative path', function*({ expect }) {
     const machine = createMachine({
       initial: 'foo',
       on: {
@@ -103,14 +103,14 @@ describe('State node IDs', () => {
       type: 'ACTION',
     })
 
-    expect(actorRef.getSnapshot().value).toEqual({
+    yield* expect(actorRef.getSnapshot().value).toEqual({
       bar: {
         qux: 'quux',
       },
     })
   })
 
-  it('should work with keys that have escaped periods', () => {
+  it('should work with keys that have escaped periods', function*({ expect }) {
     const machine = createMachine({
       initial: 'start',
       states: {
@@ -135,15 +135,16 @@ describe('State node IDs', () => {
       type: 'escaped',
     })
 
-    expect(escapedState.value).toEqual('foo.bar')
-
     const [unescapedState] = transition(machine, initialState, {
       type: 'unescaped',
     })
-    expect(unescapedState.value).toEqual({ foo: 'bar' })
+    yield* expect({ escaped: escapedState.value, unescaped: unescapedState.value }).toEqual({
+      escaped: 'foo.bar',
+      unescaped: { foo: 'bar' },
+    })
   })
 
-  it('should work with IDs that have escaped periods', () => {
+  it('should work with IDs that have escaped periods', function*({ expect }) {
     const machine = createMachine({
       initial: 'start',
       states: {
@@ -171,15 +172,16 @@ describe('State node IDs', () => {
       type: 'escaped',
     })
 
-    expect(escapedState.value).toEqual('stateWithDot')
-
     const [unescapedState] = transition(machine, initialState, {
       type: 'unescaped',
     })
-    expect(unescapedState.value).toEqual({ foo: 'bar' })
+    yield* expect({ escaped: escapedState.value, unescaped: unescapedState.value }).toEqual({
+      escaped: 'stateWithDot',
+      unescaped: { foo: 'bar' },
+    })
   })
 
-  it("should not treat escaped backslash as period's escape", () => {
+  it("should not treat escaped backslash as period's escape", function*({ expect }) {
     const machine = createMachine({
       initial: 'start',
       states: {
@@ -207,6 +209,6 @@ describe('State node IDs', () => {
       type: 'EV',
     })
 
-    expect(escapedState.value).toEqual({ bar: 'thing' })
+    yield* expect(escapedState.value).toEqual({ bar: 'thing' })
   })
 })

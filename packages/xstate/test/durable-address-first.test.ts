@@ -1,6 +1,54 @@
-import { describe, expect, it } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import { createDurable } from '../src/durable/index.js'
-import { type AnyActor, createCallbackLogic, createMachine, deliverEvent, setup } from '../src/index.js'
+import {
+  type AnyActor,
+  createCallbackLogic,
+  createMachine,
+  deliverEvent,
+  type EffectDescriptor,
+  setup,
+} from '../src/index.js'
+
+interface ThrownSummary {
+  readonly name: string
+  readonly message: string
+}
+
+type Settled =
+  | { readonly resolved: true; readonly value: unknown }
+  | { readonly resolved: false; readonly error: ThrownSummary }
+
+const thrownSummary = (error: unknown): ThrownSummary =>
+  error instanceof Error
+    ? { name: error.name, message: error.message }
+    : { name: typeof error, message: String(error) }
+
+const summaryOf = (run: () => unknown): ThrownSummary | undefined => {
+  try {
+    run()
+    return undefined
+  } catch (error) {
+    return thrownSummary(error)
+  }
+}
+
+const settledError = (
+  promise: PromiseLike<unknown>,
+): Effect.Effect<ThrownSummary | undefined> =>
+  Effect.promise(() => promise.then(() => undefined, (error: unknown) => thrownSummary(error)))
+
+const settledValue = (promise: PromiseLike<unknown>): Effect.Effect<Settled> =>
+  Effect.promise(() =>
+    promise.then(
+      (value: unknown) => ({ resolved: true as const, value }),
+      (error: unknown) => ({ resolved: false as const, error: thrownSummary(error) }),
+    )
+  )
+
+const isSpawnDescriptor = (
+  descriptor: EffectDescriptor,
+): descriptor is Extract<EffectDescriptor, { type: '@xstate.spawn' }> => descriptor.type === '@xstate.spawn'
 
 const workerMachine = setup({}).createMachine({
   id: 'worker',
@@ -40,10 +88,10 @@ const orderMachine = setup({
 })
 
 describe('durable execution with only adapter runtime operations', () => {
-  it('executes spawn effects without a per-effect runtime', async () => {
+  it('executes spawn effects without a per-effect runtime', function*({ expect }) {
     const operations: string[] = []
     const durable = createDurable(orderMachine, {
-      executeAction: async (action) => {
+      executeAction: (action) => {
         operations.push(`action:${action.type}`)
       },
       spawnActor: (_source, actor) => {
@@ -65,27 +113,30 @@ describe('durable execution with only adapter runtime operations', () => {
     })
 
     let [snapshot, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
-    expect(operations).toEqual([
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    yield* expect(operations).toEqual([
       'spawn:order/worker:0',
       'start:order/worker:0',
     ])
     ;[snapshot, effects] = durable.transition(snapshot, { type: 'KICK' })
-    await durable.executeEffects(effects)
-    // The child's reply was produced with no per-actor wiring, captured by
-    // the execution instead of reaching the host's sendEvent, and retained:
-    // `waitForEvent()` hands it out before deferring to the adapter.
-    expect(operations).toContain('send:order->order/worker:0:PING')
-    expect(operations).not.toContain('send:order/worker:0->order:WORKER.READY')
-    const reply = await durable.waitForEvent()
-    expect(reply).toEqual({ type: 'WORKER.READY' })
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    yield* expect({
+      sentRootPing: operations.includes('send:order->order/worker:0:PING'),
+      sentChildReply: operations.includes(
+        'send:order/worker:0->order:WORKER.READY',
+      ),
+    }).toEqual({ sentRootPing: true, sentChildReply: false })
+    const reply = yield* Effect.promise(() => durable.waitForEvent())
     ;[snapshot] = durable.transition(snapshot, reply)
-    expect(snapshot.status).toBe('done')
+    yield* expect({ reply, status: snapshot.status }).toEqual({
+      reply: { type: 'WORKER.READY' },
+      status: 'done',
+    })
   })
 })
 
 describe('durable effect descriptors', () => {
-  it('tags every effect with a JSON-safe descriptor', () => {
+  it('tags every effect with a JSON-safe descriptor', function*({ expect }) {
     const durable = createDurable(orderMachine, {
       executeAction: () => {},
       waitForEvent: () => {
@@ -94,23 +145,22 @@ describe('durable effect descriptors', () => {
     })
 
     const [, effects] = durable.initialTransition()
-    for (const { descriptor } of effects) {
-      expect(JSON.parse(JSON.stringify(descriptor))).toEqual(descriptor)
-    }
-    expect(effects.map(({ descriptor }) => descriptor.type)).toEqual([
-      '@xstate.spawn',
-      '@xstate.start',
-    ])
-    const spawn = effects.find(
-      ({ descriptor }) => descriptor.type === '@xstate.spawn',
-    )!.descriptor
-    expect(spawn).toMatchObject({
-      actor: 'order/worker:0',
-      src: 'worker',
+    const descriptors = effects.map(({ descriptor }) => descriptor)
+    const spawn = descriptors.find(isSpawnDescriptor)
+    yield* expect({
+      roundTripped: descriptors.map((descriptor) => JSON.stringify(JSON.parse(JSON.stringify(descriptor)))),
+      types: descriptors.map(({ type }) => type),
+      spawnActor: spawn?.actor,
+      spawnSrc: spawn?.src,
+    }).toEqual({
+      roundTripped: descriptors.map((descriptor) => JSON.stringify(descriptor)),
+      types: ['@xstate.spawn', '@xstate.start'],
+      spawnActor: 'order/worker:0',
+      spawnSrc: 'worker',
     })
   })
 
-  it('retains an explicitly selected source when aliases share logic', () => {
+  it('retains an explicitly selected source when aliases share logic', function*({ expect }) {
     const shared = createMachine({})
     const machine = setup({
       actors: { first: shared, second: shared },
@@ -128,7 +178,7 @@ describe('durable effect descriptors', () => {
     })
 
     const [, effects] = durable.initialTransition()
-    expect(
+    yield* expect(
       effects.find(({ descriptor }) => descriptor.type === '@xstate.spawn')
         ?.descriptor,
     ).toMatchObject({ actor: 'aliases/worker', src: 'second' })
@@ -136,21 +186,23 @@ describe('durable effect descriptors', () => {
 })
 
 describe('durable rootAddress', () => {
-  it('is the logic name, known before any transition', () => {
+  it('is the logic name, known before any transition', function*({ expect }) {
     const durable = createDurable(orderMachine, {
       executeAction: () => {},
       waitForEvent: () => {
         throw new Error('host-driven loop')
       },
     })
-    expect(durable.rootAddress).toBe('order')
     const [snapshot] = durable.initialTransition()
-    expect(durable.getActorRef(snapshot)?.address).toBe(durable.rootAddress)
+    yield* expect({
+      rootAddress: durable.rootAddress,
+      actorAddress: durable.getActorRef(snapshot)?.address,
+    }).toEqual({ rootAddress: 'order', actorAddress: 'order' })
   })
 })
 
 describe('restored children under a durable execution', () => {
-  it('routes sends to restored remote handles through the system runtime', async () => {
+  it('routes sends to restored remote handles through the system runtime', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -170,7 +222,6 @@ describe('restored children under a durable execution', () => {
       },
     })
 
-    // Persist by address on one placement...
     const seed = createDurable(machine, {
       executeAction: () => {},
       startActor: (actor) => {
@@ -181,12 +232,11 @@ describe('restored children under a durable execution', () => {
       },
     })
     const [seedSnapshot, seedEffects] = seed.initialTransition()
-    await seed.executeEffects(seedEffects)
+    yield* Effect.promise(() => seed.executeEffects(seedEffects))
     const persisted = machine.getPersistedSnapshot(seedSnapshot, {
       embedChildren: false,
     } as never)
 
-    // ...and resume on another, where the child is a remote handle.
     const sent: string[] = []
     const durable = createDurable(machine, {
       executeAction: () => {},
@@ -201,13 +251,13 @@ describe('restored children under a durable execution', () => {
     const [, effects] = durable.transition(restored as never, {
       type: 'KICK',
     })
-    await durable.executeEffects(effects)
-    expect(sent).toEqual(['order/worker:0:PING'])
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    yield* expect(sent).toEqual(['order/worker:0:PING'])
   })
 })
 
 describe('review findings: durable runtime edges', () => {
-  it('serializes nested operations behind the running one', async () => {
+  it('serializes nested operations behind the running one', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -220,27 +270,30 @@ describe('review findings: durable runtime edges', () => {
     })
 
     const order: string[] = []
+    const inFlightObservations: boolean[] = []
     let inFlight = false
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
     const durable = createDurable(machine, {
       executeAction: () => {},
-      // startActor initiates a nested operation without awaiting it, the way
-      // a stop cascade does. Hosts with exclusive step models require that
-      // nested operation to wait for this one to finish.
-      startActor: async (actor) => {
-        expect(inFlight).toBe(false)
+      startActor: (actor) => {
+        inFlightObservations.push(inFlight)
         inFlight = true
         order.push('start')
         void actor.system.scheduleTimer(actor, 'nested', 5)
-        await new Promise((resolve) => setTimeout(resolve, 5))
-        order.push('start:done')
-        inFlight = false
+        started.resolve()
+        return release.promise.then(() => {
+          order.push('start:done')
+          inFlight = false
+        })
       },
-      scheduleTimer: async (_source, id) => {
-        expect(inFlight).toBe(false)
+      scheduleTimer: (_source, id) => {
+        inFlightObservations.push(inFlight)
         inFlight = true
         order.push(`timer:${id}`)
-        await Promise.resolve()
-        inFlight = false
+        return Promise.resolve().then(() => {
+          inFlight = false
+        })
       },
       waitForEvent: () => {
         throw new Error('host-driven loop')
@@ -248,12 +301,19 @@ describe('review findings: durable runtime edges', () => {
     })
 
     const [, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
-    expect(order).toEqual(['start', 'start:done', 'timer:nested'])
-  }, 2000)
+    const execution = durable.executeEffects(effects)
+    yield* Effect.promise(() => started.promise)
+    release.resolve()
+    yield* Effect.promise(() => execution)
+    yield* expect({ order, inFlightObservations }).toEqual({
+      order: ['start', 'start:done', 'timer:nested'],
+      inFlightObservations: [false, false],
+    })
+  })
 
-  it('hands custom actions the system runtime when no per-effect runtime exists', async () => {
+  it('hands custom actions the system runtime when no per-effect runtime exists', function*({ expect }) {
     const sent: string[] = []
+    const sendEventTypes: string[] = []
     const machine = setup({
       actions: {
         notify: () => {},
@@ -268,14 +328,16 @@ describe('review findings: durable runtime edges', () => {
     })
 
     const durable = createDurable(machine, {
-      executeAction: async (_action, _metadata, runtime) => {
-        expect(typeof runtime.sendEvent).toBe('function')
-        await runtime.sendEvent!(undefined, { address: 'elsewhere' } as never, {
-          type: 'X',
-        })
+      executeAction: (_action, _metadata, runtime) => {
+        sendEventTypes.push(typeof runtime.sendEvent)
+        return Promise.resolve(
+          runtime.sendEvent!(undefined, { address: 'elsewhere' } as never, {
+            type: 'X',
+          }),
+        ).then(() => {})
       },
       sendEvent: (_source, target, event) => {
-        sent.push(`${(target as { address: string }).address}:${event.type}`)
+        sent.push(`${target.address}:${event.type}`)
       },
       waitForEvent: () => {
         throw new Error('host-driven loop')
@@ -283,13 +345,16 @@ describe('review findings: durable runtime edges', () => {
     })
 
     const [, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
-    expect(sent).toEqual(['elsewhere:X'])
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    yield* expect({ sent, sendEventTypes }).toEqual({
+      sent: ['elsewhere:X'],
+      sendEventTypes: ['function'],
+    })
   })
 })
 
 describe('review findings: fourth round', () => {
-  it('a failed runtime operation rejects executeEffects even after settling early', async () => {
+  it('a failed runtime operation rejects executeEffects even after settling early', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -301,11 +366,14 @@ describe('review findings: fourth round', () => {
       states: { a: {} },
     })
 
+    let spawnAttempted = false
     const durable = createDurable(machine, {
       executeAction: () => {},
-      spawnActor: async () => {
-        await Promise.resolve()
-        throw new Error('host rejected the spawn')
+      spawnActor: () => {
+        spawnAttempted = true
+        return Promise.resolve().then(() => {
+          throw new Error('host rejected the spawn')
+        })
       },
       startActor: () => {},
       waitForEvent: () => {
@@ -314,15 +382,14 @@ describe('review findings: fourth round', () => {
     })
 
     const [, effects] = durable.initialTransition()
-    // Give the rejection time to settle (and leave the pending set) before
-    // executeEffects awaits it.
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await expect(durable.executeEffects(effects)).rejects.toThrow(
-      'host rejected the spawn',
-    )
+    const outcome = yield* settledError(durable.executeEffects(effects))
+    yield* expect({ spawnAttempted, outcome }).toEqual({
+      spawnAttempted: true,
+      outcome: { name: 'Error', message: 'host rejected the spawn' },
+    })
   })
 
-  it('failed batches do not leak captured root events into later calls', async () => {
+  it('failed batches do not leak captured root events into later calls', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
       actions: { boom: () => {} },
@@ -359,19 +426,17 @@ describe('review findings: fourth round', () => {
     })
 
     const [snapshot, effects] = durable.initialTransition()
-    await expect(durable.executeEffects(effects)).rejects.toThrow(
-      'step failed',
-    )
-    // The child's WORKER-bound reply (none here) and any captured root events
-    // from the failed batch are gone; a fresh batch starts clean.
+    const batchFailure = yield* settledError(durable.executeEffects(effects))
     const [, kickEffects] = durable.transition(snapshot, { type: 'KICK' })
-    await durable.executeEffects(kickEffects)
-    // Nothing was retained from the failed batch: `waitForEvent()` falls
-    // straight through to the adapter.
-    await expect(durable.waitForEvent()).rejects.toThrow('host-driven loop')
+    yield* Effect.promise(() => durable.executeEffects(kickEffects))
+    const waitFailure = yield* settledError(durable.waitForEvent())
+    yield* expect({ batchFailure, waitFailure }).toEqual({
+      batchFailure: { name: 'Error', message: 'step failed' },
+      waitFailure: { name: 'Error', message: 'host-driven loop' },
+    })
   })
 
-  it('a per-effect runtime falls back to the system runtime for omitted operations', async () => {
+  it('a per-effect runtime falls back to the system runtime for omitted operations', function*({ expect }) {
     const operations: string[] = []
     const machine = setup({
       actors: { worker: workerMachine },
@@ -392,8 +457,6 @@ describe('review findings: fourth round', () => {
       startActor: (actor) => {
         operations.push(`system-start:${actor.address}`)
       },
-      // The per-effect runtime implements only sendEvent; spawn/start must
-      // keep the system runtime's behavior.
       runtime: () => ({
         sendEvent: () => {},
       }),
@@ -403,8 +466,8 @@ describe('review findings: fourth round', () => {
     })
 
     const [, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
-    expect(operations).toEqual([
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    yield* expect(operations).toEqual([
       'system-spawn:order/worker:0',
       'system-start:order/worker:0',
     ])
@@ -412,7 +475,7 @@ describe('review findings: fourth round', () => {
 })
 
 describe('review findings: fifth round', () => {
-  it('a retried batch succeeds after a transient host operation failure', async () => {
+  it('a retried batch succeeds after a transient host operation failure', function*({ expect }) {
     let attempt = 0
     const machine = setup({
       actors: { worker: workerMachine },
@@ -427,12 +490,14 @@ describe('review findings: fifth round', () => {
 
     const durable = createDurable(machine, {
       executeAction: () => {},
-      spawnActor: async () => {
+      spawnActor: () => {
         attempt++
         if (attempt === 1) {
-          await Promise.resolve()
-          throw new Error('transient host failure')
+          return Promise.resolve().then(() => {
+            throw new Error('transient host failure')
+          })
         }
+        return undefined
       },
       startActor: () => {},
       waitForEvent: () => {
@@ -441,18 +506,19 @@ describe('review findings: fifth round', () => {
     })
 
     const [, effects] = durable.initialTransition()
-    await expect(durable.executeEffects(effects)).rejects.toThrow(
-      'transient host failure',
-    )
-    // A retrying host re-executes the same effects; the previous batch's
-    // failure must not be replayed.
-    await expect(durable.executeEffects(effects)).resolves.toBeUndefined()
+    const firstAttempt = yield* settledError(durable.executeEffects(effects))
+    const retry = yield* settledValue(durable.executeEffects(effects))
+    yield* expect({ firstAttempt, retry }).toEqual({
+      firstAttempt: { name: 'Error', message: 'transient host failure' },
+      retry: { resolved: true, value: undefined },
+    })
   })
 })
 
 describe('review findings: sixth round', () => {
-  it('root-bound events sent while the loop is parked reach the host runtime', async () => {
+  it('root-bound events sent while the loop is parked reach the host runtime', function*({ expect }) {
     const sent: string[] = []
+    const replyDelivered = Promise.withResolvers<void>()
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -472,7 +538,9 @@ describe('review findings: sixth round', () => {
       },
       sendEvent: (_source, target, event) => {
         sent.push(`${target.address}:${event.type}`)
-        if (target.address !== durable.rootAddress) {
+        if (target.address === durable.rootAddress) {
+          replyDelivered.resolve()
+        } else {
           deliverEvent(_source, target, event)
         }
       },
@@ -482,30 +550,32 @@ describe('review findings: sixth round', () => {
     })
 
     const [snapshot, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
+    yield* Effect.promise(() => durable.executeEffects(effects))
 
-    // The loop is now parked. The host delivers an event to the live child,
-    // whose reply is addressed to the root: it must reach the host runtime's
-    // sendEvent (the host's mailbox), not the execution's capture buffer.
-    const worker = (snapshot as any).children['worker:0']
-    durable.getActorRef(snapshot)!.system.runtime!.sendEvent!(
-      undefined,
-      worker,
-      { type: 'PING' },
+    const worker = snapshot.children['worker:0'] as AnyActor
+    yield* Effect.promise(() =>
+      Promise.resolve(
+        durable.getActorRef(snapshot)!.system.runtime!.sendEvent!(
+          undefined,
+          worker,
+          { type: 'PING' },
+        ),
+      )
     )
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(sent).toContain('order:WORKER.READY')
+    yield* Effect.promise(() => replyDelivered.promise)
+    yield* expect(sent).toEqual(['order/worker:0:PING', 'order:WORKER.READY'])
 
-    // A later, unrelated batch must not surface that host-owned delivery:
-    // nothing was retained, so `waitForEvent()` falls through to the adapter.
     const [, nextEffects] = durable.transition(snapshot, {
       type: 'WORKER.READY',
     })
-    await durable.executeEffects(nextEffects)
-    await expect(durable.waitForEvent()).rejects.toThrow('host-driven loop')
+    yield* Effect.promise(() => durable.executeEffects(nextEffects))
+    yield* expect(yield* settledError(durable.waitForEvent())).toEqual({
+      name: 'Error',
+      message: 'host-driven loop',
+    })
   })
 
-  it('an operation that fails while the loop is parked does not fail the next batch', async () => {
+  it('an operation that fails while the loop is parked does not fail the next batch', function*({ expect }) {
     let parked = false
     const machine = setup({
       actors: { worker: workerMachine },
@@ -532,11 +602,12 @@ describe('review findings: sixth round', () => {
       startActor: (actor) => {
         actor.start()
       },
-      sendEvent: async (source, target, event) => {
+      sendEvent: (source, target, event) => {
         if (parked) {
-          throw new Error('host-owned delivery failed')
+          return Promise.reject(new Error('host-owned delivery failed'))
         }
         deliverEvent(source, target, event)
+        return undefined
       },
       waitForEvent: () => {
         throw new Error('host-driven loop')
@@ -544,29 +615,32 @@ describe('review findings: sixth round', () => {
     })
 
     const [snapshot, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
+    yield* Effect.promise(() => durable.executeEffects(effects))
 
-    // While parked, a host-initiated operation rejects. That failure belongs
-    // to the host, which awaits its own delivery chain.
     parked = true
-    const worker = (snapshot as any).children['worker:0']
-    await expect(
-      durable.getActorRef(snapshot)!.system.runtime!.sendEvent!(
-        undefined,
-        worker,
-        { type: 'PING' },
+    const worker = snapshot.children['worker:0'] as AnyActor
+    const parkedFailure = yield* settledError(
+      Promise.resolve(
+        durable.getActorRef(snapshot)!.system.runtime!.sendEvent!(
+          undefined,
+          worker,
+          { type: 'PING' },
+        ),
       ),
-    ).rejects.toThrow('host-owned delivery failed')
+    )
 
-    // The next batch succeeds on its own merits.
     parked = false
     const [, kickEffects] = durable.transition(snapshot, { type: 'KICK' })
-    await expect(durable.executeEffects(kickEffects)).resolves.toBeUndefined()
+    const retry = yield* settledValue(durable.executeEffects(kickEffects))
+    yield* expect({ parkedFailure, retry }).toEqual({
+      parkedFailure: { name: 'Error', message: 'host-owned delivery failed' },
+      retry: { resolved: true, value: undefined },
+    })
   })
 })
 
 describe('review findings: seventh round', () => {
-  it('a per-effect runtime keeps local behavior for operations neither implements', async () => {
+  it('a per-effect runtime keeps local behavior for operations neither implements', function*({ expect }) {
     const machine = setup({
       actors: { worker: workerMachine },
     }).createMachine({
@@ -579,8 +653,6 @@ describe('review findings: seventh round', () => {
     })
 
     const durable = createDurable(machine, {
-      // Neither runtime implements spawnActor/startActor: adding a
-      // per-effect runtime for sendEvent must not break them.
       sendEvent: () => {},
       runtime: () => ({ sendEvent: () => {} }),
       executeAction: () => {},
@@ -590,14 +662,14 @@ describe('review findings: seventh round', () => {
     })
 
     const [snapshot, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
+    yield* Effect.promise(() => durable.executeEffects(effects))
     const child = snapshot.children['worker:0'] as AnyActor
-    expect(child.getSnapshot().status).toBe('active')
+    yield* expect(child.getSnapshot().status).toBe('active')
   })
 })
 
 describe('review findings: eighth round', () => {
-  it('rejects overlapping executeEffects calls', async () => {
+  it('rejects overlapping executeEffects calls', function*({ expect }) {
     const durable = createDurable(orderMachine, {
       executeAction: () => {},
       spawnActor: () => {},
@@ -609,13 +681,15 @@ describe('review findings: eighth round', () => {
 
     const [, effects] = durable.initialTransition()
     const first = durable.executeEffects(effects)
-    await expect(durable.executeEffects(effects)).rejects.toThrow(
-      'must not overlap',
-    )
-    await first
+    const overlapFailure = yield* settledError(durable.executeEffects(effects))
+    yield* Effect.promise(() => first)
+    yield* expect(overlapFailure).toEqual({
+      name: 'Error',
+      message: 'executeEffects calls must not overlap: await the previous call before starting the next batch.',
+    })
   })
 
-  it('a parked root-addressed event without a host mailbox hook fails loudly', async () => {
+  it('a parked root-addressed event without a host mailbox hook fails loudly', function*({ expect }) {
     let send: ((event: { type: string }) => void) | undefined
     const emitter = createCallbackLogic(({ sendBack }) => {
       send = sendBack
@@ -623,7 +697,7 @@ describe('review findings: eighth round', () => {
     const machine = createMachine({
       id: 'order',
       initial: 'a',
-      entry: (_: any, enq: any) => {
+      entry: (_, enq) => {
         enq.spawn(emitter)
       },
       states: { a: {} },
@@ -631,8 +705,6 @@ describe('review findings: eighth round', () => {
 
     const durable = createDurable(machine, {
       executeAction: () => {},
-      // A runtime operation makes the adapter the system runtime, but there
-      // is no root mailbox hook to receive root-addressed events.
       cancelTimer: () => {},
       waitForEvent: () => {
         throw new Error('host-driven loop')
@@ -640,11 +712,11 @@ describe('review findings: eighth round', () => {
     })
 
     const [, effects] = durable.initialTransition()
-    await durable.executeEffects(effects)
-    // The loop is parked: delivering locally would enqueue into the inert
-    // root's mailbox and silently lose the event.
-    expect(() => send!({ type: 'LATE' })).toThrow(
-      /parked.*no enqueueRootEvent or sendEvent/,
-    )
+    yield* Effect.promise(() => durable.executeEffects(effects))
+    yield* expect(summaryOf(() => send!({ type: 'LATE' }))).toEqual({
+      name: 'Error',
+      message:
+        'A root-addressed event ("LATE") was produced while the durable loop was parked, but the adapter has no enqueueRootEvent or sendEvent to receive it. Implement enqueueRootEvent to place root-addressed events in the host\'s mailbox.',
+    })
   })
 })

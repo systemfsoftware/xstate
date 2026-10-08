@@ -1,8 +1,8 @@
-import { setTimeout as sleep } from 'node:timers/promises'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, it } from '@systemfsoftware/vitest'
+import { Effect } from 'effect'
 import z from 'zod'
 import { builtInActions } from '../src/actions.js'
-import { createActor, createMachine, setup } from '../src/index.js'
+import { createActor, createMachine, setup, SimulatedClock } from '../src/index.js'
 
 const lightMachine = createMachine({
   schemas: {
@@ -34,13 +34,9 @@ const lightMachine = createMachine({
   },
 })
 
-afterEach(() => {
-  vi.useRealTimers()
-})
-
 describe('delayed transitions', () => {
-  it('resolves a named delay with context updated by the same state entry', () => {
-    vi.useFakeTimers()
+  it('resolves a named delay with context updated by the same state entry', function*({ expect }) {
+    const clock = new SimulatedClock()
 
     const machine = setup({
       delays: { d: ({ context }) => context['ms'] },
@@ -55,23 +51,32 @@ describe('delayed transitions', () => {
         },
       },
     })
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
 
     actor.send({ type: 'go' })
-    expect(actor.getSnapshot().context['ms']).toBe(300)
+    const contextMs = actor.getSnapshot().context['ms']
 
-    vi.advanceTimersByTime(299)
-    expect(actor.getSnapshot().value).toBe('b')
+    clock.increment(299)
+    const after299 = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(1)
-    expect(actor.getSnapshot().value).toBe('a')
+    clock.increment(1)
+    const after300 = actor.getSnapshot().value
     actor.stop()
+
+    yield* expect({ contextMs, after299, after300 }).toEqual({
+      contextMs: 300,
+      after299: 'b',
+      after300: 'a',
+    })
   })
 
-  it('resolves all initial state delays after an enqueue entry context patch', () => {
-    vi.useFakeTimers()
+  it('resolves all initial state delays after an enqueue entry context patch', function*({ expect }) {
+    const clock = new SimulatedClock()
     const order: string[] = []
-    const effect = vi.fn()
+    const effectCalls: unknown[][] = []
+    const effect = (...args: unknown[]) => {
+      effectCalls.push(args)
+    }
     const machine = setup({
       delays: {
         first: ({ context }) => {
@@ -101,27 +106,32 @@ describe('delayed transitions', () => {
         done: {},
       },
     })
-    const actor = createActor(machine).start()
+    const actor = createActor(machine, { clock }).start()
 
-    expect(order).toEqual(['entry', 'first', 'second'])
-    expect(effect).toHaveBeenCalledOnce()
-    expect(
-      Object.values(actor.getSnapshot().timers).map((timer) => timer.delay),
-    ).toEqual([320, 620])
+    const delays = Object.values(actor.getSnapshot().timers).map((timer) => timer.delay)
 
-    vi.advanceTimersByTime(319)
-    expect(actor.getSnapshot().value).toBe('waiting')
+    clock.increment(319)
+    const after319 = actor.getSnapshot().value
 
-    vi.advanceTimersByTime(1)
-    expect(actor.getSnapshot().value).toBe('done')
-    expect(actor.getSnapshot().timers).toEqual({})
+    clock.increment(1)
+    const after320 = actor.getSnapshot().value
+    const timersAfter = actor.getSnapshot().timers
     actor.stop()
+
+    yield* expect({ order, effectCalls, delays, after319, after320, timersAfter }).toEqual({
+      order: ['entry', 'first', 'second'],
+      effectCalls: [[]],
+      delays: [320, 620],
+      after319: 'waiting',
+      after320: 'done',
+      timersAfter: {},
+    })
   })
 
   it.each([false, true])(
     'schedules after entry cancellation and honors later cancellation (cancel after entry: %s)',
-    (cancelAfterEntry) => {
-      vi.useFakeTimers()
+    function*(cancelAfterEntry, { expect }) {
+      const clock = new SimulatedClock()
       const timerId = 'xstate.after.100.(machine).waiting'
       const machine = createMachine({
         initial: 'waiting',
@@ -140,27 +150,33 @@ describe('delayed transitions', () => {
           done: {},
         },
       })
-      const actor = createActor(machine).start()
+      const actor = createActor(machine, { clock }).start()
 
-      expect(actor.getSnapshot().timers[timerId]).toMatchObject({ delay: 100 })
-      vi.advanceTimersByTime(50)
-      expect(actor.getSnapshot().value).toBe('waiting')
+      const scheduledDelay = actor.getSnapshot().timers[timerId]?.delay
+      clock.increment(50)
+      const after50 = actor.getSnapshot().value
 
+      let afterCancel: unknown = undefined
       if (cancelAfterEntry) {
         actor.send({ type: 'cancel' })
-        expect(actor.getSnapshot().timers).toEqual({})
+        afterCancel = actor.getSnapshot().timers
       }
 
-      vi.advanceTimersByTime(100)
-      expect(actor.getSnapshot().value).toBe(
-        cancelAfterEntry ? 'waiting' : 'done',
-      )
+      clock.increment(100)
+      const finalValue = actor.getSnapshot().value
       actor.stop()
+
+      yield* expect({ scheduledDelay, after50, afterCancel, finalValue }).toEqual({
+        scheduledDelay: 100,
+        after50: 'waiting',
+        afterCancel: cancelAfterEntry ? {} : undefined,
+        finalValue: cancelAfterEntry ? 'waiting' : 'done',
+      })
     },
   )
 
-  it('does not rely on inferred function names for built-in timer effects', () => {
-    vi.useFakeTimers()
+  it('does not rely on inferred function names for built-in timer effects', function*({ expect }) {
+    const clock = new SimulatedClock()
     const raise = builtInActions['@xstate.raise']
     const originalName = Object.getOwnPropertyDescriptor(raise, 'name')!
     Object.defineProperty(raise, 'name', { ...originalName, value: 'a' })
@@ -174,18 +190,22 @@ describe('delayed transitions', () => {
             done: {},
           },
         }),
+        { clock },
       ).start()
 
-      vi.advanceTimersByTime(10)
-      expect(actor.getSnapshot().value).toBe('done')
+      clock.increment(10)
+      yield* expect(actor.getSnapshot().value).toBe('done')
     } finally {
       Object.defineProperty(raise, 'name', originalName)
     }
   })
 
-  it('uses a canonical after event with delay and state identity', () => {
-    vi.useFakeTimers()
-    const spy = vi.fn()
+  it('uses a canonical after event with delay and state identity', function*({ expect }) {
+    const clock = new SimulatedClock()
+    const afterEventCalls: unknown[][] = []
+    const spy = (...args: unknown[]) => {
+      afterEventCalls.push(args)
+    }
     const actor = createActor(
       createMachine({
         id: 'job',
@@ -196,33 +216,37 @@ describe('delayed transitions', () => {
           },
         },
       }),
+      { clock },
     ).start()
 
-    vi.advanceTimersByTime(10)
-
-    expect(spy).toHaveBeenCalledWith({
-      type: 'xstate.after',
-      delay: 10,
-      stateId: 'job',
-    })
+    clock.increment(10)
     actor.stop()
+
+    yield* expect(afterEventCalls).toEqual([[{ type: 'xstate.after', delay: 10, stateId: 'job' }]])
   })
 
-  it('should transition after delay', () => {
-    vi.useFakeTimers()
+  it('should transition after delay', function*({ expect }) {
+    const clock = new SimulatedClock()
 
-    const actorRef = createActor(lightMachine).start()
-    expect(actorRef.getSnapshot().value).toBe('green')
+    const actorRef = createActor(lightMachine, { clock }).start()
+    const start = actorRef.getSnapshot().value
 
-    vi.advanceTimersByTime(500)
-    expect(actorRef.getSnapshot().value).toBe('green')
+    clock.increment(500)
+    const after500 = actorRef.getSnapshot().value
 
-    vi.advanceTimersByTime(510)
-    expect(actorRef.getSnapshot().value).toBe('yellow')
+    clock.increment(510)
+    const after1010 = actorRef.getSnapshot().value
+    actorRef.stop()
+
+    yield* expect({ start, after500, after1010 }).toEqual({
+      start: 'green',
+      after500: 'green',
+      after1010: 'yellow',
+    })
   })
 
-  it('should transition after an ISO8601 duration without a delay source', () => {
-    vi.useFakeTimers()
+  it('should transition after an ISO8601 duration without a delay source', function*({ expect }) {
+    const clock = new SimulatedClock()
 
     const actorRef = createActor(
       createMachine({
@@ -236,16 +260,20 @@ describe('delayed transitions', () => {
           done: {},
         },
       }),
+      { clock },
     ).start()
 
-    vi.advanceTimersByTime(499)
-    expect(actorRef.getSnapshot().value).toBe('pending')
+    clock.increment(499)
+    const after499 = actorRef.getSnapshot().value
 
-    vi.advanceTimersByTime(1)
-    expect(actorRef.getSnapshot().value).toBe('done')
+    clock.increment(1)
+    const after500 = actorRef.getSnapshot().value
+    actorRef.stop()
+
+    yield* expect({ after499, after500 }).toEqual({ after499: 'pending', after500: 'done' })
   })
 
-  it('should error on a delay that is neither a delay name nor a duration', () => {
+  it('should error on a delay that is neither a delay name nor a duration', function*({ expect }) {
     const actorRef = createActor(
       createMachine({
         initial: 'pending',
@@ -263,12 +291,16 @@ describe('delayed transitions', () => {
     actorRef.start()
 
     const snapshot = actorRef.getSnapshot()
-    expect(snapshot.status).toBe('error')
-    expect((snapshot.error as Error).message).toMatch(/Invalid delay "Pfoo"/)
+
+    yield* expect({ status: snapshot.status, message: (snapshot.error as Error).message }).toEqual({
+      status: 'error',
+      message:
+        'Invalid delay "Pfoo": not a configured delay name or a valid duration string (e.g. "500ms", "1.5s", "PT1M30S").',
+    })
   })
 
-  it('should prefer a delay source value over the parsed ISO8601 duration', () => {
-    vi.useFakeTimers()
+  it('should prefer a delay source value over the parsed ISO8601 duration', function*({ expect }) {
+    const clock = new SimulatedClock()
 
     const actorRef = createActor(
       createMachine({
@@ -285,68 +317,79 @@ describe('delayed transitions', () => {
           done: {},
         },
       }),
+      { clock },
     ).start()
 
-    vi.advanceTimersByTime(19)
-    expect(actorRef.getSnapshot().value).toBe('pending')
+    clock.increment(19)
+    const after19 = actorRef.getSnapshot().value
 
-    vi.advanceTimersByTime(2)
-    expect(actorRef.getSnapshot().value).toBe('done')
+    clock.increment(2)
+    const after21 = actorRef.getSnapshot().value
+    actorRef.stop()
+
+    yield* expect({ after19, after21 }).toEqual({ after19: 'pending', after21: 'done' })
   })
 
-  it('should not try to clear an undefined timeout when exiting source state of a delayed transition', async () => {
-    // https://github.com/statelyai/xstate/issues/5001
-    const spy = vi.fn()
-
-    const machine = createMachine({
-      initial: 'green',
-      states: {
-        green: {
-          after: {
-            1: { target: 'yellow' },
-          },
+  it(
+    'should not try to clear an undefined timeout when exiting source state of a delayed transition',
+    function*({ expect }) {
+      // https://github.com/statelyai/xstate/issues/5001
+      const clock = new SimulatedClock()
+      const clearTimeoutCalls: unknown[][] = []
+      const recordingClock = {
+        now: () => clock.now(),
+        setTimeout: (fn: (...args: unknown[]) => void, milliseconds: number) => clock.setTimeout(fn, milliseconds),
+        clearTimeout: (id: number) => {
+          clearTimeoutCalls.push([id])
+          clock.clearTimeout(id)
         },
-        yellow: {},
-      },
-    })
+      }
 
-    const actorRef = createActor(machine, {
-      clock: {
-        setTimeout,
-        clearTimeout: spy,
-      },
-    }).start()
+      const machine = createMachine({
+        initial: 'green',
+        states: {
+          green: {
+            after: {
+              1: { target: 'yellow' },
+            },
+          },
+          yellow: {},
+        },
+      })
 
-    // when the after transition gets executed it tries to clear its own timer when exiting its source state
-    await sleep(5)
-    expect(actorRef.getSnapshot().value).toBe('yellow')
-    expect(spy.mock.calls.length).toBe(0)
-  })
+      const actorRef = createActor(machine, { clock: recordingClock }).start()
 
-  it('should format transitions properly', () => {
+      clock.increment(1)
+
+      yield* expect({ value: actorRef.getSnapshot().value, clearCalls: clearTimeoutCalls }).toEqual({
+        value: 'yellow',
+        clearCalls: [],
+      })
+    },
+  )
+
+  it('should format transitions properly', function*({ expect }) {
     const greenNode = lightMachine.states['green']
     if (greenNode === undefined) {
       throw new Error('expected a green state node')
     }
 
     const transitions = greenNode.transitions
+    const keys = [...transitions.keys()]
 
-    expect([...transitions.keys()]).toMatchInlineSnapshot(`
-      [
-        "xstate.after",
-      ]
-    `)
     const afterTransition = transitions.get('xstate.after')?.[0]
     if (afterTransition === undefined) {
       throw new Error('expected an after transition')
     }
-    expect(afterTransition.matches).toEqual({
-      delay: 1000,
-      stateId: 'light.green',
+
+    yield* expect({ keys, matches: afterTransition.matches }).toEqual({
+      keys: ['xstate.after'],
+      matches: { delay: 1000, stateId: 'light.green' },
     })
   })
 
-  it('should be able to transition with delay from nested initial state', () => {
+  it('should be able to transition with delay from nested initial state', function*({ expect }) {
+    const clock = new SimulatedClock()
     const { resolve, promise } = Promise.withResolvers<void>()
 
     const machine = createMachine({
@@ -369,18 +412,22 @@ describe('delayed transitions', () => {
       },
     })
 
-    const actor = createActor(machine)
+    const actor = createActor(machine, { clock })
     actor.subscribe({
       complete: () => {
         resolve()
       },
     })
     actor.start()
+    clock.increment(10)
 
-    return promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect(actor.getSnapshot().status).toBe('done')
   })
 
-  it('parent state should enter child state without re-entering self (relative target)', () => {
+  it('parent state should enter child state without re-entering self (relative target)', function*({ expect }) {
+    const clock = new SimulatedClock()
     const { resolve, promise } = Promise.withResolvers<void>()
 
     const actual: string[] = []
@@ -417,35 +464,34 @@ describe('delayed transitions', () => {
       },
     })
 
-    const actor = createActor(machine)
+    const actor = createActor(machine, { clock })
     actor.subscribe({
       complete: () => {
-        expect(actual).toEqual(['entered one', 'entered two', 'entered three'])
         resolve()
       },
     })
     actor.start()
+    clock.increment(10)
 
-    return promise
+    yield* Effect.promise(() => promise)
+
+    yield* expect({ actual, status: actor.getSnapshot().status }).toEqual({
+      actual: ['entered one', 'entered two', 'entered three'],
+      status: 'done',
+    })
   })
 
-  it('should defer a single send event for a delayed conditional transition (#886)', () => {
-    vi.useFakeTimers()
-    const spy = vi.fn()
+  it('should defer a single send event for a delayed conditional transition (#886)', function*({ expect }) {
+    const clock = new SimulatedClock()
+    const sendCalls: unknown[][] = []
+    const spy = (...args: unknown[]) => {
+      sendCalls.push(args)
+    }
     const machine = createMachine({
       initial: 'X',
       states: {
         X: {
           after: {
-            // 1: [
-            //   {
-            //     target: 'Y',
-            //     guard: () => true
-            //   },
-            //   {
-            //     target: 'Z'
-            //   }
-            // ]
             1: () => {
               if (1 + 1 === 2) {
                 return { target: 'Y' }
@@ -457,9 +503,6 @@ describe('delayed transitions', () => {
         },
         Y: {
           on: {
-            // '*': {
-            //   actions: spy
-            // }
             '*': (_, enq) => enq(spy),
           },
         },
@@ -467,48 +510,51 @@ describe('delayed transitions', () => {
       },
     })
 
-    createActor(machine).start()
+    createActor(machine, { clock }).start()
 
-    vi.advanceTimersByTime(10)
-    expect(spy).not.toHaveBeenCalled()
+    clock.increment(10)
+    yield* expect(sendCalls).toEqual([])
   })
 
-  // TODO: figure out correct behavior for restoring delayed transitions
-  it.skip('should execute an after transition after starting from a state resolved using `.getPersistedSnapshot`', () => {
-    const { resolve, promise } = Promise.withResolvers<void>()
+  it.skip(
+    'should execute an after transition after starting from a state resolved using `.getPersistedSnapshot`',
+    function*({ expect }) {
+      const clock = new SimulatedClock()
 
-    const machine = createMachine({
-      id: 'machine',
-      initial: 'a',
-      states: {
-        a: {
-          on: { next: { target: 'withAfter' } },
-        },
+      const machine = createMachine({
+        id: 'machine',
+        initial: 'a',
+        states: {
+          a: {
+            on: { next: { target: 'withAfter' } },
+          },
 
-        withAfter: {
-          after: {
-            1: { target: 'done' },
+          withAfter: {
+            after: {
+              1: { target: 'done' },
+            },
+          },
+
+          done: {
+            type: 'final',
           },
         },
+      })
 
-        done: {
-          type: 'final',
-        },
-      },
-    })
+      const actorRef1 = createActor(machine, { clock }).start()
+      actorRef1.send({ type: 'next' })
+      const withAfterState = actorRef1.getPersistedSnapshot()
 
-    const actorRef1 = createActor(machine).start()
-    actorRef1.send({ type: 'next' })
-    const withAfterState = actorRef1.getPersistedSnapshot()
+      const actorRef2 = createActor(machine, { clock, snapshot: withAfterState })
+      actorRef2.start()
+      clock.increment(1)
 
-    const actorRef2 = createActor(machine, { snapshot: withAfterState })
-    actorRef2.subscribe({ complete: () => resolve() })
-    actorRef2.start()
+      yield* expect(actorRef2.getSnapshot().value).toBe('done')
+    },
+  )
 
-    return promise
-  })
-
-  it('should execute an after transition after starting from a persisted state', () => {
+  it('should execute an after transition after starting from a persisted state', function*({ expect }) {
+    const clock = new SimulatedClock()
     const { resolve, promise } = Promise.withResolvers<void>()
     const createMyMachine = () =>
       createMachine({
@@ -530,25 +576,32 @@ describe('delayed transitions', () => {
         },
       })
 
-    let service = createActor(createMyMachine()).start()
+    let service = createActor(createMyMachine(), { clock }).start()
 
     const persistedSnapshot = JSON.parse(JSON.stringify(service.getSnapshot()))
 
     service = createActor(createMyMachine(), {
+      clock,
       snapshot: persistedSnapshot,
     }).start()
 
-    service.send({ type: 'NEXT' })
-
     service.subscribe({ complete: () => resolve() })
 
-    return promise
+    service.send({ type: 'NEXT' })
+    clock.increment(1)
+
+    yield* Effect.promise(() => promise)
+
+    yield* expect(service.getSnapshot().status).toBe('done')
   })
 
   describe('delay expressions', () => {
-    it('should evaluate the expression (function) to determine the delay', () => {
-      vi.useFakeTimers()
-      const spy = vi.fn()
+    it('should evaluate the expression (function) to determine the delay', function*({ expect }) {
+      const clock = new SimulatedClock()
+      const delayCalls: unknown[][] = []
+      const spy = (...args: unknown[]) => {
+        delayCalls.push(args)
+      }
       const context = {
         delay: 500,
       }
@@ -574,21 +627,31 @@ describe('delayed transitions', () => {
         },
       })
 
-      const actor = createActor(machine).start()
+      const actor = createActor(machine, { clock }).start()
 
-      expect(spy).toBeCalledWith(context)
-      expect(actor.getSnapshot().value).toBe('inactive')
+      const initial = actor.getSnapshot().value
 
-      vi.advanceTimersByTime(300)
-      expect(actor.getSnapshot().value).toBe('inactive')
+      clock.increment(300)
+      const after300 = actor.getSnapshot().value
 
-      vi.advanceTimersByTime(200)
-      expect(actor.getSnapshot().value).toBe('active')
+      clock.increment(200)
+      const after500 = actor.getSnapshot().value
+      actor.stop()
+
+      yield* expect({ delayCalls, initial, after300, after500 }).toEqual({
+        delayCalls: [[context]],
+        initial: 'inactive',
+        after300: 'inactive',
+        after500: 'active',
+      })
     })
 
-    it('should evaluate the expression (string) to determine the delay', () => {
-      vi.useFakeTimers()
-      const spy = vi.fn()
+    it('should evaluate the expression (string) to determine the delay', function*({ expect }) {
+      const clock = new SimulatedClock()
+      const delayCalls: unknown[][] = []
+      const spy = (...args: unknown[]) => {
+        delayCalls.push(args)
+      }
       const machine = createMachine({
         initial: 'inactive',
         schemas: {
@@ -616,7 +679,7 @@ describe('delayed transitions', () => {
         },
       })
 
-      const actor = createActor(machine).start()
+      const actor = createActor(machine, { clock }).start()
 
       const event = {
         type: 'ACTIVATE',
@@ -624,21 +687,31 @@ describe('delayed transitions', () => {
       } as const
       actor.send(event)
 
-      expect(spy).toBeCalledWith(event)
-      expect(actor.getSnapshot().value).toBe('active')
+      const afterSend = actor.getSnapshot().value
 
-      vi.advanceTimersByTime(300)
-      expect(actor.getSnapshot().value).toBe('active')
+      clock.increment(300)
+      const after300 = actor.getSnapshot().value
 
-      vi.advanceTimersByTime(200)
-      expect(actor.getSnapshot().value).toBe('inactive')
+      clock.increment(200)
+      const after500 = actor.getSnapshot().value
+      actor.stop()
+
+      yield* expect({ delayCalls, afterSend, after300, after500 }).toEqual({
+        delayCalls: [[event]],
+        afterSend: 'active',
+        after300: 'active',
+        after500: 'inactive',
+      })
     })
   })
 
   describe('stateNode in delay functions', () => {
-    it('should pass stateNode to delay expression', () => {
-      vi.useFakeTimers()
-      const spy = vi.fn()
+    it('should pass stateNode to delay expression', function*({ expect }) {
+      const clock = new SimulatedClock()
+      const delayCalls: unknown[][] = []
+      const spy = (...args: unknown[]) => {
+        delayCalls.push(args)
+      }
 
       const machine = createMachine({
         initial: 'waiting',
@@ -674,22 +747,31 @@ describe('delayed transitions', () => {
         },
       })
 
-      const actor = createActor(machine).start()
+      const actor = createActor(machine, { clock }).start()
 
-      expect(spy).toHaveBeenCalledWith('waiting')
-      expect(actor.getSnapshot().value).toBe('waiting')
+      const initial = actor.getSnapshot().value
 
-      vi.advanceTimersByTime(300)
-      expect(actor.getSnapshot().value).toBe('active')
-      expect(spy).toHaveBeenCalledWith('active')
+      clock.increment(300)
+      const after300 = actor.getSnapshot().value
 
-      vi.advanceTimersByTime(500)
-      expect(actor.getSnapshot().value).toBe('done')
+      clock.increment(500)
+      const after800 = actor.getSnapshot().value
+      actor.stop()
+
+      yield* expect({ delayCalls, initial, after300, after800 }).toEqual({
+        delayCalls: [['waiting'], ['active']],
+        initial: 'waiting',
+        after300: 'active',
+        after800: 'done',
+      })
     })
 
-    it('should pass stateNode with correct id', () => {
-      vi.useFakeTimers()
-      const spy = vi.fn()
+    it('should pass stateNode with correct id', function*({ expect }) {
+      const clock = new SimulatedClock()
+      const delayCalls: unknown[][] = []
+      const spy = (...args: unknown[]) => {
+        delayCalls.push(args)
+      }
 
       const machine = createMachine({
         id: 'test',
@@ -708,9 +790,11 @@ describe('delayed transitions', () => {
         },
       })
 
-      createActor(machine).start()
+      createActor(machine, { clock }).start()
 
-      expect(spy).toHaveBeenCalledWith('test.a')
+      clock.increment(100)
+
+      yield* expect(delayCalls).toEqual([['test.a']])
     })
   })
 })
