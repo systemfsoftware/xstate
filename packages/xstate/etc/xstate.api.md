@@ -1869,14 +1869,17 @@ export type Mapper<TContext extends MachineContext, TExpressionEvent extends Eve
     , TODO>, TEvent, AnyEventObject>;
 } & OutputArg<TExpressionEvent>) => TResult;
 
-// Warning: (ae-forgotten-export) The symbol "StateSchemaMapper" needs to be exported by the entry point index.d.ts
-// Warning: (ae-forgotten-export) The symbol "StateSchemaFromSnapshot" needs to be exported by the entry point index.d.ts
-//
 // @public
-export function mapState<T extends AnyMachineSnapshot, TResult>(snapshot: T, mapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>): {
-    stateNode: AnyStateNode;
-    result: TResult;
-}[];
+export const mapState: {
+    <T extends AnyMachineSnapshot, TResult>(mapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>): (snapshot: T) => {
+        stateNode: AnyStateNode;
+        result: TResult;
+    }[];
+    <T extends AnyMachineSnapshot, TResult>(snapshot: T, mapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>): {
+        stateNode: AnyStateNode;
+        result: TResult;
+    }[];
+};
 
 // @public (undocumented)
 export const matchesState: {
@@ -3447,17 +3450,19 @@ export type WithRootSetupStateSchemas<TStateSchemas extends Record<string, Setup
 // Warnings were encountered during analysis:
 //
 // dist/base.types-3VgiVUy_.d.ts:199:3 - (ae-forgotten-export) The symbol "EventTypeFromSchemaKey" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:229:5 - (ae-forgotten-export) The symbol "ConditionJSON" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:277:3 - (ae-forgotten-export) The symbol "PersistedSnapshotFromEntry" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:284:3 - (ae-forgotten-export) The symbol "SnapshotSourceVersion" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:334:3 - (ae-forgotten-export) The symbol "MachineForVersion" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:433:3 - (ae-forgotten-export) The symbol "SetupGuardSources" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:434:3 - (ae-forgotten-export) The symbol "SetupDelaySources" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:1271:3 - (ae-forgotten-export) The symbol "StateTransitionConfigOrTarget" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:1271:3 - (ae-forgotten-export) The symbol "SetupStateTarget" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:1271:3 - (ae-forgotten-export) The symbol "KnownSetupStateTarget" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:1399:5 - (ae-forgotten-export) The symbol "ValidateSetupSchemas" needs to be exported by the entry point index.d.ts
-// dist/index-D5irjk9o.d.ts:1399:5 - (ae-forgotten-export) The symbol "InlineMachineSchemas" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:229:5 - (ae-forgotten-export) The symbol "ConditionJSON" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:277:3 - (ae-forgotten-export) The symbol "PersistedSnapshotFromEntry" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:284:3 - (ae-forgotten-export) The symbol "SnapshotSourceVersion" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:334:3 - (ae-forgotten-export) The symbol "MachineForVersion" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:371:3 - (ae-forgotten-export) The symbol "StateSchemaMapper" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:371:3 - (ae-forgotten-export) The symbol "StateSchemaFromSnapshot" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:441:3 - (ae-forgotten-export) The symbol "SetupGuardSources" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:442:3 - (ae-forgotten-export) The symbol "SetupDelaySources" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:1279:3 - (ae-forgotten-export) The symbol "StateTransitionConfigOrTarget" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:1279:3 - (ae-forgotten-export) The symbol "SetupStateTarget" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:1279:3 - (ae-forgotten-export) The symbol "KnownSetupStateTarget" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:1407:5 - (ae-forgotten-export) The symbol "ValidateSetupSchemas" needs to be exported by the entry point index.d.ts
+// dist/index-BQ19eqwS.d.ts:1407:5 - (ae-forgotten-export) The symbol "InlineMachineSchemas" needs to be exported by the entry point index.d.ts
 // dist/index-DEEHVDUq.d.ts:71:3 - (ae-forgotten-export) The symbol "LogicTransition" needs to be exported by the entry point index.d.ts
 // dist/index-DEEHVDUq.d.ts:171:3 - (ae-forgotten-export) The symbol "Receiver" needs to be exported by the entry point index.d.ts
 // dist/index-DEEHVDUq.d.ts:362:3 - (ae-forgotten-export) The symbol "ObservableActor" needs to be exported by the entry point index.d.ts

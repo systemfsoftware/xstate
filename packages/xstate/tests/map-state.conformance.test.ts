@@ -1,9 +1,10 @@
 import { Conformance } from '@systemfsoftware/conformance-spec'
 import { And, Gherkin, Given, it, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import { createActor, mapState, setup, types } from '@systemfsoftware/xstate'
-import { Effect, Layer } from 'effect'
+import { Effect, Layer, pipe } from 'effect'
 import { failReportOf, passReportOf } from './__fixtures__/checkReports.js'
 import {
+  makeDeepestFirstSubject,
   makeRootFirstSubject,
   makeStateMappingSubject,
   type MappingSubject,
@@ -24,6 +25,8 @@ const typedResults = mapState<typeof typedSnapshot, number>(typedSnapshot, {
   states: { parent: { states: { child: { map: ({ context }) => context.name.length } } }, idle: {} },
 })
 
+const pipedResults = pipe(typedSnapshot, mapState({ map: ({ context }) => context.name }))
+
 export const typeLevelContract = [
   typedResults[0]?.result satisfies number | undefined,
   // @ts-expect-error the result type is the mapper's TResult, never a wider one
@@ -41,6 +44,14 @@ export const typeLevelContract = [
     // @ts-expect-error a nested map must return the same TResult as the root map
     states: { parent: { states: { child: { map: () => 'one' } } } },
   }),
+  pipedResults[0]?.result satisfies string | undefined,
+  // @ts-expect-error the data-last form infers TResult from the mapper, here string
+  pipedResults[0]?.result satisfies number | undefined,
+  pipe(
+    typedSnapshot,
+    // @ts-expect-error the data-last form reads state names from the piped snapshot's machine
+    mapState({ states: { nonexistent: {} } }),
+  ),
 ] as const
 
 const Feature = makeFeature({ it })
@@ -63,7 +74,7 @@ Feature('Judging the published mapState against a model of active state nodes', 
   .live('each scenario drives the simulation kernel itself, and a conformance check cannot run inside a kernel run')
   .body(({ scenario, scenarioOutline }) => {
     scenarioOutline(
-      'Every machine and mapper the model draws from seed <seed> map to the active states it names, leaf first',
+      'Every machine and mapper the model draws from seed <seed> map their active states, each before its ancestors and otherwise in state order',
       [{ seed: 1 }, { seed: 2 }, { seed: 3 }],
       (row) =>
         Gherkin.Do.pipe(
@@ -85,21 +96,21 @@ Feature('Judging the published mapState against a model of active state nodes', 
             'observed',
             (s) => Effect.succeed(s.subject.observed),
           ),
-          And('some snapshots mapped several states and some mapped none')((s, expect) =>
-            expect(s.observed, JSON.stringify(s.observed)).toSatisfy(
-              (observed) => observed.mappedResults > observed.calls && observed.emptyResults > 0,
-              'the run mapped more states than snapshots, and at least one snapshot mapped no state',
-            )
+          And('some snapshots mapped no state, some several, and some two states neither of which contains the other')(
+            (s, expect) =>
+              expect(s.observed, JSON.stringify(s.observed)).toSatisfy(
+                (observed) => observed.emptyResults > 0 && observed.severalResults > 0 && observed.unrelatedResults > 0,
+                'the run mapped no state for at least one snapshot, several for another, and two unrelated states for another',
+              ),
           ),
         ),
     )
 
-    scenario(
-      'A mapping that lists the root before the leaves is caught as a model divergence',
+    const divergesFromTheModel = (makeSubject: () => MappingSubject) =>
       Gherkin.Do.pipe(
-        Given('a subject that returns the published results in reverse, root first')(
+        Given('a planted subject that orders the published results differently')(
           'subject',
-          () => Effect.succeed(makeRootFirstSubject()),
+          () => Effect.succeed(makeSubject()),
         ),
         When('the same check runs the machines drawn from seed 1 through it')(
           'report',
@@ -117,6 +128,14 @@ Feature('Judging the published mapState against a model of active state nodes', 
               'the run diverged from the model at a numbered step, reported as the model-diverged judgement',
             )
         }),
-      ),
+      )
+
+    scenario(
+      'A mapping that lists the root before the leaves is caught as a model divergence',
+      divergesFromTheModel(makeRootFirstSubject),
+    )
+    scenario(
+      'A mapping that lists the deepest states first and loses state order is caught as a model divergence',
+      divergesFromTheModel(makeDeepestFirstSubject),
     )
   })

@@ -1,12 +1,9 @@
 import { createActor, mapState, setup, types } from '@systemfsoftware/xstate'
-import { Context, Effect, Layer, Match } from 'effect'
+import { Context, Effect, Layer, Match, pipe } from 'effect'
 import {
   distinctChildrenOf,
-  inCanonicalOrder,
-  listsEachStateBeforeItsAncestors,
-  type MappedState,
   mappedResultOf,
-  type MappingResponse,
+  type MappedState,
   type MapStateCommand,
   type StateTree,
 } from './stateMapping.model.js'
@@ -29,7 +26,10 @@ const nodeConfigOf = (tree: StateTree): NodeConfig =>
       const [initial = ''] = children[compound.initial % children.length] ?? []
       return { initial, states: statesOf(children) }
     }),
-    Match.tag('Parallel', (parallel): NodeConfig => ({ type: 'parallel', states: statesOf(distinctChildrenOf(parallel.children)) })),
+    Match.tag(
+      'Parallel',
+      (parallel): NodeConfig => ({ type: 'parallel', states: statesOf(distinctChildrenOf(parallel.children)) }),
+    ),
     Match.exhaustive,
   )
 
@@ -63,7 +63,7 @@ const mapperOf = (tree: StateTree, path: readonly string[]): Mapper | undefined 
   if (tree.mapper === 'absent') {
     return undefined
   }
-  const map = (snapshot: TaggedSnapshot): string => mappedResultOf(path, snapshot.context.tag)
+  const map = (snapshot: TaggedSnapshot): string => mappedResultOf(path)(snapshot.context.tag)
   const children = Match.value(tree).pipe(
     Match.tag('Compound', 'Parallel', (branch) => distinctChildrenOf(branch.children)),
     Match.orElse(() => []),
@@ -73,15 +73,28 @@ const mapperOf = (tree: StateTree, path: readonly string[]): Mapper | undefined 
 }
 
 export interface MappingLedger {
-  mappedResults: number
-  emptyResults: number
   calls: number
+  emptyResults: number
+  severalResults: number
+  unrelatedResults: number
 }
+
+const isAncestorPath = (ancestor: readonly string[], descendant: readonly string[]): boolean =>
+  ancestor.length < descendant.length && ancestor.every((key, index) => descendant[index] === key)
+
+const mapsUnrelatedStates = (results: ReadonlyArray<MappedState>): boolean =>
+  results.some((left, index) =>
+    results.slice(index + 1).some((right) =>
+      !isAncestorPath(left.path, right.path) && !isAncestorPath(right.path, left.path)
+    )
+  )
 
 export interface MappingSubject {
   readonly layer: Layer.Layer<StateMapping>
   readonly observed: MappingLedger
 }
+
+type MappingResponse = ReadonlyArray<MappedState>
 
 export class StateMapping extends Context.Service<StateMapping, (command: MapStateCommand) => MappingResponse>()(
   '@systemfsoftware/xstate/tests/map-state/StateMapping',
@@ -91,22 +104,29 @@ type Mapping = (command: MapStateCommand) => ReadonlyArray<MappedState>
 
 const publishedMapping: Mapping = (command) => {
   const snapshot = createActor(machineFor(command.machine), { input: { tag: command.tag } }).getSnapshot()
-  return mapState(snapshot, mapperOf(command.machine, []) ?? {}).map(({ stateNode, result }) => ({
-    path: stateNode.path,
-    result,
-  }))
+  const mapper = mapperOf(command.machine, []) ?? {}
+  const results = Match.value(command.call).pipe(
+    Match.when('data-first', () => mapState(snapshot, mapper)),
+    Match.when('data-last', () => pipe(snapshot, mapState(mapper))),
+    Match.exhaustive,
+  )
+  return results.map(({ stateNode, result }) => ({ path: stateNode.path, result }))
 }
 
 const rootFirstMapping: Mapping = (command) => publishedMapping(command).toReversed()
 
+const deepestFirstMapping: Mapping = (command) =>
+  publishedMapping(command).toSorted((left, right) => right.path.length - left.path.length)
+
 const subjectOf = (mapping: Mapping): MappingSubject => {
-  const observed: MappingLedger = { mappedResults: 0, emptyResults: 0, calls: 0 }
+  const observed: MappingLedger = { calls: 0, emptyResults: 0, severalResults: 0, unrelatedResults: 0 }
   const run = (command: MapStateCommand): MappingResponse => {
     const results = mapping(command)
     observed.calls += 1
-    observed.mappedResults += results.length
     observed.emptyResults += results.length === 0 ? 1 : 0
-    return { mapped: inCanonicalOrder(results), leafFirst: listsEachStateBeforeItsAncestors(results) }
+    observed.severalResults += results.length > 1 ? 1 : 0
+    observed.unrelatedResults += mapsUnrelatedStates(results) ? 1 : 0
+    return results
   }
   return { observed, layer: Layer.succeed(StateMapping, run) }
 }
@@ -114,6 +134,8 @@ const subjectOf = (mapping: Mapping): MappingSubject => {
 export const makeStateMappingSubject = (): MappingSubject => subjectOf(publishedMapping)
 
 export const makeRootFirstSubject = (): MappingSubject => subjectOf(rootFirstMapping)
+
+export const makeDeepestFirstSubject = (): MappingSubject => subjectOf(deepestFirstMapping)
 
 export const runMapStateCommand = (
   command: MapStateCommand,
