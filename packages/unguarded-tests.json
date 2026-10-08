@@ -62,8 +62,6 @@
     "packages/xstate/test/actorLogic.test.ts",
     "packages/xstate/test/addressFirstIdentity.test.ts",
     "packages/xstate/test/after.test.ts",
-    "packages/xstate/test/assert.test.ts",
-    "packages/xstate/test/assert.v6.test.ts",
     "packages/xstate/test/assign.test.ts",
     "packages/xstate/test/asyncErrorSchema.types.test.ts",
     "packages/xstate/test/asyncTransition.test.ts",

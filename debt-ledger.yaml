@@ -1,9 +1,5 @@
 entries:
   - rule: XS1
-    scope: "@systemfsoftware/xstate"
-    reason: No mutation script until the core rewrite finishes; the verbatim import has no mutated set yet.
-    removedBy: U9 core definitions and enrollment
-  - rule: XS1
     scope: "@systemfsoftware/xstate-effect"
     reason: No mutation script until the xstate-effect rewrite finishes.
     removedBy: U11 xstate-effect rewrite and enrollment
