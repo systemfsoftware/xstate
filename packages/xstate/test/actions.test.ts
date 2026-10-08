@@ -10,6 +10,7 @@ import {
   createMachine,
   type EventObject,
   type EventRejection,
+  SimulatedClock,
 } from '../src/index.js'
 
 const recorder = () => {
@@ -1524,9 +1525,10 @@ describe('entry/exit actions', () => {
           },
         },
       })
-      const actor = createActor(machine).start()
+      const clock = new SimulatedClock()
+      createActor(machine, { clock }).start()
       tracked.length = 0
-      yield* Effect.promise(() => sleep(50))
+      clock.increment(10)
       yield* expect(tracked).toEqual([])
     })
   })
@@ -3429,12 +3431,14 @@ describe('sendTo', () => {
           },
         },
       })
+      const clock = new SimulatedClock()
       const actorRef = createActor(machine, {
+        clock,
         onRejectedEvent: (r) => rejections.push(r),
         warn: (message) => warned.push(message),
       }).start()
       actorRef.send({ type: 'START' })
-      yield* Effect.promise(() => sleep(10))
+      clock.increment(1)
       yield* expect({
         spy1: spy1.calls,
         spy2: spy2.calls,
@@ -3610,17 +3614,10 @@ describe('raise', () => {
     yield* expect(service.getSnapshot().value).toEqual('b')
   })
   it('should be able to raise a delayed event and respond to it in the same state', function*({ expect }) {
-    const { resolve, promise } = Promise.withResolvers<void>()
     const machine = createMachine({
       initial: 'a',
       states: {
         a: {
-          // entry: raise(
-          //   { type: 'TO_B' },
-          //   {
-          //     delay: 100
-          //   }
-          // ),
           entry: (_, enq) => {
             enq.raise({ type: 'TO_B' }, { delay: 100 })
           },
@@ -3633,13 +3630,16 @@ describe('raise', () => {
         },
       },
     })
-    const service = createActor(machine).start()
-    service.subscribe({ complete: () => resolve() })
-    yield* Effect.promise(() => sleep(50))
-    // didn't transition yet
-    yield* expect(service.getSnapshot().value).toEqual('a')
-    yield* Effect.promise(() => promise)
-    yield* expect(service.getSnapshot().value).toEqual('b')
+    const clock = new SimulatedClock()
+    const service = createActor(machine, { clock }).start()
+    clock.increment(50)
+    const before = service.getSnapshot().value
+    clock.increment(50)
+    yield* expect({ before, after: service.getSnapshot().value, status: service.getSnapshot().status }).toEqual({
+      before: 'a',
+      after: 'b',
+      status: 'done',
+    })
   })
   it('should accept event expression', function*({ expect }) {
     const machine = createMachine({
@@ -3750,12 +3750,11 @@ describe('cancel', () => {
         b: {},
       },
     })
-    const actor = createActor(machine).start()
-    // This should raise the 'RAISED' event after 1ms
+    const clock = new SimulatedClock()
+    const actor = createActor(machine, { clock }).start()
     actor.send({ type: 'NEXT' })
-    // This should cancel the 'RAISED' event
     actor.send({ type: 'CANCEL' })
-    yield* Effect.promise(() => sleep(10))
+    clock.increment(1)
     yield* expect(actor.getSnapshot().value).toBe('a')
   })
   it(
@@ -3802,12 +3801,13 @@ describe('cancel', () => {
           cancelFoo: ({ children }, enq) => enq.sendTo(children['foo'], { type: 'cancel' }),
         },
       })
-      const actor = createActor(machine).start()
-      yield* Effect.promise(() => sleep(50))
+      const clock = new SimulatedClock()
+      const actor = createActor(machine, { clock }).start()
+      clock.increment(50)
       // This will cause the foo actor to cancel its 'sameId' delayed event
       // This should NOT cancel the 'sameId' delayed event in the other actor
       actor.send({ type: 'cancelFoo' })
-      yield* Effect.promise(() => sleep(55))
+      clock.increment(55)
       yield* expect({ foo: fooSpy.calls, bar: barSpy.calls }).toEqual({
         foo: [],
         bar: [[]],
@@ -3863,12 +3863,13 @@ describe('cancel', () => {
           },
         },
       })
-      const actor = createActor(machine).start()
-      yield* Effect.promise(() => sleep(50))
+      const clock = new SimulatedClock()
+      const actor = createActor(machine, { clock }).start()
+      clock.increment(50)
       // This will cause the bar actor to cancel its 'sameId' delayed event
       // This should NOT cancel the 'sameId' delayed event in the other actor
       actor.send({ type: 'cancelBar' })
-      yield* Effect.promise(() => sleep(55))
+      clock.increment(55)
       yield* expect({ foo: fooSpy.calls, bar: barSpy.calls }).toEqual({
         foo: [[]],
         bar: [],
@@ -3939,11 +3940,12 @@ describe('cancel', () => {
         },
       },
     })
-    const actorRef = createActor(machine).start()
+    const clock = new SimulatedClock()
+    const actorRef = createActor(machine, { clock }).start()
     actorRef.send({
       type: 'START',
     })
-    yield* Effect.promise(() => sleep(10))
+    clock.increment(0)
     yield* expect(spy.calls.length).toBe(0)
   })
   it('should not be able to cancel a just scheduled non-delayed event to a just invoked child', function*({ expect }) {
