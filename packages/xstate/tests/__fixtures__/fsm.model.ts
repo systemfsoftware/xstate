@@ -48,7 +48,6 @@ const Driver = Schema.Literals(['pure', 'entry', 'actor', 'persisted'])
 export type FsmDriver = Schema.Schema.Type<typeof Driver>
 
 const Factory = Schema.Literals(['createFSM', 'setup'])
-export type FsmFactory = Schema.Schema.Type<typeof Factory>
 
 export const FsmCommand = Schema.TaggedStruct('Run', {
   machine: FsmMachine,
@@ -87,9 +86,9 @@ const slotFor = (machine: FsmMachine, event: FsmEvent): FsmSlot =>
     Match.orElse(() => emptySlot),
   )
 
-export const bumpBy = (event: FsmEvent): number => event.type === 'bump' ? event.by : 0
+const bumpBy = (event: FsmEvent): number => event.type === 'bump' ? event.by : 0
 
-export const targetValue = (choice: 'same' | 'idle' | 'active' | 'done'): string | undefined =>
+const targetValue = (choice: 'same' | 'idle' | 'active' | 'done'): string | undefined =>
   choice === 'same' ? undefined : choice
 
 const countEntry = (choice: 'keep' | 0 | 1 | 2): { readonly count?: number } =>
@@ -170,7 +169,7 @@ const expectedEmissions = (command: FsmCommand, start: FsmSim): ReadonlyArray<st
     Match.orElse(() => []),
   )
 
-export const ownSnapshotKeys = ['status,value,context,output,error']
+const ownSnapshotKeys = ['status,value,context,output,error']
 
 const observationOf = (command: FsmCommand): FsmObservation => {
   const start: FsmSim = { value: command.machine.initial, context: initialContextOf(command.machine) }
@@ -187,8 +186,8 @@ const observationOf = (command: FsmCommand): FsmObservation => {
   }
 }
 
-export const FsmModelState = Schema.Struct({})
-export type FsmModelState = Schema.Schema.Type<typeof FsmModelState>
+const FsmModelState = Schema.Struct({})
+type FsmModelState = Schema.Schema.Type<typeof FsmModelState>
 
 export const fsmModel = {
   state: FsmModelState,
