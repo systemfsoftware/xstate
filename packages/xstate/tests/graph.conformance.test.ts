@@ -367,6 +367,33 @@ const initOnceExplicitFromState = () => {
   return { shortest: run('shortest'), simple: run('simple'), replay: run('replay') }
 }
 
+const countedContextMachine = () => {
+  let calls = 0
+  const machine = createMachine({
+    context: () => {
+      calls += 1
+      return { count: 0 }
+    },
+    initial: 'idle',
+    states: { idle: {} },
+  })
+  return { machine, calls: () => calls }
+}
+
+const initOnceMachine = () => {
+  const run = (mode: 'shortest' | 'simple' | 'replay') => {
+    const counted = countedContextMachine()
+    const options = { fromState: undefined, events: [] }
+    const paths = mode === 'replay'
+      ? getPathsFromEvents(counted.machine, [], options)
+      : mode === 'shortest'
+      ? getShortestPaths(counted.machine, options)
+      : getSimplePaths(counted.machine, options)
+    return { length: paths.length, calls: counted.calls() }
+  }
+  return { shortest: run('shortest'), simple: run('simple'), replay: run('replay') }
+}
+
 const prototypeKeys = ['__proto__', 'constructor', 'toString', 'hasOwnProperty', ''] as const
 
 const prototypeKeyCoverage = () =>
@@ -415,7 +442,7 @@ const sameSourceSequences = (): ReadonlyArray<string> => {
       c: { on: { GO_TO_A: { target: 'a' } } },
     },
   })
-  return getSimplePaths(machine).map((path) => path.steps.map((step) => step.event.type).join(' → '))
+  return getSimplePaths(machine).map((path) => path.steps.map((step) => step.event.type).join(' → ')).sort()
 }
 
 const expectedEntrypointNames = [
@@ -657,6 +684,23 @@ Feature('Judging the published graph walk against a model of its traversal', { t
     )
 
     scenario(
+      'A machine initializes exactly once per traversal call with an explicit undefined from-state',
+      Gherkin.Do.pipe(
+        Given('the context-factory invocation counts of a machine across the path generators')(
+          'observed',
+          () => Effect.succeed(initOnceMachine()),
+        ),
+        Then('each generator initializes the machine exactly once')((s, expect) =>
+          expect(s.observed, JSON.stringify(s.observed)).toEqual({
+            shortest: { length: 1, calls: 1 },
+            simple: { length: 1, calls: 1 },
+            replay: { length: 1, calls: 1 },
+          })
+        ),
+      ),
+    )
+
+    scenario(
       'Serialized state and event keys that collide with Object.prototype members address real entries',
       Gherkin.Do.pipe(
         Given('the adjacency and paths of a counter logic serialized under prototype-colliding keys')(
@@ -676,13 +720,12 @@ Feature('Judging the published graph walk against a model of its traversal', { t
           'sequences',
           () => Effect.succeed(sameSourceSequences()),
         ),
-        Then('both transitions appear as their own one-step path')((s, expect) =>
-          expect(s.sequences, JSON.stringify(s.sequences)).toSatisfy(
-            (sequences) =>
-              sequences.includes('@xstate.init → GO_TO_B') &&
-              sequences.includes('@xstate.init → GO_TO_C'),
-            'both transitions out of the source state are considered',
-          )
+        Then('the exact simple-path sequences of the source state are drawn')((s, expect) =>
+          expect(s.sequences, JSON.stringify(s.sequences)).toEqual([
+            '@xstate.init',
+            '@xstate.init → GO_TO_B',
+            '@xstate.init → GO_TO_C',
+          ])
         ),
       ),
     )
