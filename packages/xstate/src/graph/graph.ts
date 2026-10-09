@@ -176,14 +176,6 @@ function isMachineLogic(logic: object): logic is AnyStateMachine {
   return 'root' in logic
 }
 
-const isObjectLike = (value: unknown): value is object => typeof value === 'object' && value !== null
-
-const hasTransitionFunction = (value: object): boolean =>
-  'transition' in value && typeof value.transition === 'function'
-
-export const isActorLogicLike = (value: unknown): value is AnyActorLogic =>
-  isObjectLike(value) && hasTransitionFunction(value)
-
 function transitionEventType(transition: { eventType: string }): string {
   return transition.eventType
 }

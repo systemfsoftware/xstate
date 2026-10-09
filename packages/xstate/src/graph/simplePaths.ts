@@ -10,7 +10,7 @@ import type {
 import { createMockActorScope } from './actorScope.js'
 import { getAdjacencyMap } from './adjacency.js'
 import { alterPath } from './alterPath.js'
-import { isActorLogicLike, resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
+import { resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
 import type {
   AdjacencyMap,
   AnySnapshot,
@@ -249,6 +249,10 @@ type SimplePaths<TLogic extends AnyActorLogic> = Array<
   StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>
 >
 
+const isActorLogicLike = <TLogic extends AnyActorLogic>(
+  value: TLogic | SimpleOptions<TLogic> | undefined,
+): value is TLogic => value !== undefined && 'transition' in value
+
 const resolveSimple = <TLogic extends AnyActorLogic>(
   first: TLogic | SimpleOptions<TLogic> | undefined,
   second: SimpleOptions<TLogic> | undefined,
@@ -277,9 +281,6 @@ export function getSimplePaths<TLogic extends AnyActorLogic>(
     | readonly [logic: TLogic, options?: SimpleOptions<TLogic> | undefined]
     | readonly [options?: SimpleOptions<TLogic> | undefined]
 ): SimplePaths<TLogic> | ((logic: TLogic) => SimplePaths<TLogic>) {
-  if (args.length === 2) {
-    return computeSimplePaths(args[0], args[1])
-  }
   const [first, second] = args
   return resolveSimple(first, second)
 }

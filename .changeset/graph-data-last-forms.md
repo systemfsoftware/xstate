@@ -9,4 +9,4 @@ The graph functions `getShortestPaths`, `getSimplePaths`, `getAdjacencyMap`, `ge
 - `getPathsFromEvents(events, options?)` returns a function of the actor logic.
 - `joinPaths(tailPath)` returns a function of the head path, so `pipe(headPath, joinPaths(tailPath))` equals `joinPaths(headPath, tailPath)`.
 
-Data-first calls are unchanged. The implementation tells the forms apart by an exact runtime shape check: `getShortestPaths` and `getSimplePaths` read a lone argument as actor logic when it has a `transition` function and as options otherwise; `getPathsFromEvents` reads an array first argument as data-last events.
+Data-first calls are unchanged. A lone argument that has a `transition` member is read as actor logic (actor logic always has one, `TraversalOptions` has none) and any other lone argument as options; `getPathsFromEvents` reads an array first argument as data-last events.

@@ -10,7 +10,7 @@ import type {
 import { createMockActorScope } from './actorScope.js'
 import { getAdjacencyMap } from './adjacency.js'
 import { alterPath } from './alterPath.js'
-import { isActorLogicLike, resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
+import { resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
 import type {
   AdjacencyMap,
   AnySnapshot,
@@ -279,6 +279,10 @@ type ShortestPaths<TLogic extends AnyActorLogic> = Array<
   StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>
 >
 
+const isActorLogicLike = <TLogic extends AnyActorLogic>(
+  value: TLogic | ShortestOptions<TLogic> | undefined,
+): value is TLogic => value !== undefined && 'transition' in value
+
 const resolveShortest = <TLogic extends AnyActorLogic>(
   first: TLogic | ShortestOptions<TLogic> | undefined,
   second: ShortestOptions<TLogic> | undefined,
@@ -307,9 +311,6 @@ export function getShortestPaths<TLogic extends AnyActorLogic>(
     | readonly [logic: TLogic, options?: ShortestOptions<TLogic> | undefined]
     | readonly [options?: ShortestOptions<TLogic> | undefined]
 ): ShortestPaths<TLogic> | ((logic: TLogic) => ShortestPaths<TLogic>) {
-  if (args.length === 2) {
-    return computeShortestPaths(args[0], args[1])
-  }
   const [first, second] = args
   return resolveShortest(first, second)
 }
