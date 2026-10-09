@@ -176,6 +176,14 @@ function isMachineLogic(logic: object): logic is AnyStateMachine {
   return 'root' in logic
 }
 
+const isObjectLike = (value: unknown): value is object => typeof value === 'object' && value !== null
+
+const hasTransitionFunction = (value: object): boolean =>
+  'transition' in value && typeof value.transition === 'function'
+
+export const isActorLogicLike = (value: unknown): value is AnyActorLogic =>
+  isObjectLike(value) && hasTransitionFunction(value)
+
 function transitionEventType(transition: { eventType: string }): string {
   return transition.eventType
 }
@@ -239,8 +247,13 @@ function resolveDefaultOptions<TLogic extends AnyActorLogic>(
 }
 
 export function resolveTraversalOptions<TLogic extends AnyActorLogic>(
-  logic: TLogic,
-  traversalOptions?: OptionsOf<TLogic>,
+  {
+    logic,
+    options: traversalOptions,
+  }: {
+    logic: TLogic
+    options?: OptionsOf<TLogic> | undefined
+  },
 ): TraversalConfig<SnapshotFrom<TLogic>, EventFromLogic<TLogic>> {
   const resolvedDefaultOptions = resolveDefaultOptions(logic, traversalOptions)
   const serializeState: SerializeState<TLogic> = firstDefined(
@@ -283,14 +296,13 @@ function requireFirstStep<TSnapshot extends AnySnapshot, TEvent extends EventObj
   return firstStep
 }
 
-/** @public */
-export function joinPaths<
+const joinPathsDataFirst = <
   TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 >(
   headPath: StatePath<TSnapshot, TEvent>,
   tailPath: StatePath<TSnapshot, TEvent>,
-): StatePath<TSnapshot, TEvent> {
+): StatePath<TSnapshot, TEvent> => {
   const firstTailStep = requireFirstStep(tailPath)
 
   if (firstTailStep.state !== headPath.state) {
@@ -303,4 +315,23 @@ export function joinPaths<
     steps: headPath.steps.concat(tailPath.steps.slice(1)),
     weight: headPath.weight + tailPath.weight,
   }
+}
+
+export function joinPaths<TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  tailPath: StatePath<TSnapshot, TEvent>,
+): (headPath: StatePath<TSnapshot, TEvent>) => StatePath<TSnapshot, TEvent>
+export function joinPaths<TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  headPath: StatePath<TSnapshot, TEvent>,
+  tailPath: StatePath<TSnapshot, TEvent>,
+): StatePath<TSnapshot, TEvent>
+export function joinPaths<TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  ...args:
+    | readonly [headPath: StatePath<TSnapshot, TEvent>, tailPath: StatePath<TSnapshot, TEvent>]
+    | readonly [tailPath: StatePath<TSnapshot, TEvent>]
+): StatePath<TSnapshot, TEvent> | ((headPath: StatePath<TSnapshot, TEvent>) => StatePath<TSnapshot, TEvent>) {
+  if (args.length === 2) {
+    return joinPathsDataFirst(args[0], args[1])
+  }
+  const [tailPath] = args
+  return (headPath: StatePath<TSnapshot, TEvent>) => joinPathsDataFirst(headPath, tailPath)
 }

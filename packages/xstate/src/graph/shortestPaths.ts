@@ -10,7 +10,7 @@ import type {
 import { createMockActorScope } from './actorScope.js'
 import { getAdjacencyMap } from './adjacency.js'
 import { alterPath } from './alterPath.js'
-import { resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
+import { isActorLogicLike, resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
 import type {
   AdjacencyMap,
   AnySnapshot,
@@ -241,8 +241,7 @@ const seed = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context.unvisited.add(serialized)
 }
 
-/** @public */
-export function getShortestPaths<TLogic extends AnyActorLogic>(
+function computeShortestPaths<TLogic extends AnyActorLogic>(
   logic: TLogic,
   options?: TraversalOptions<
     SnapshotFrom<TLogic>,
@@ -253,7 +252,7 @@ export function getShortestPaths<TLogic extends AnyActorLogic>(
   type TInternalState = SnapshotFrom<TLogic>
   type TEvent = EventFromLogic<TLogic>
 
-  const resolvedOptions = resolveTraversalOptions(logic, options)
+  const resolvedOptions = resolveTraversalOptions({ logic, options })
   const fromState = resolvedOptions.fromState ??
     initialSnapshotOf<TInternalState>(logic, inputOf(options), createMockActorScope())
   const adjacency = getAdjacencyMap(logic, { ...resolvedOptions, fromState })
@@ -268,4 +267,49 @@ export function getShortestPaths<TLogic extends AnyActorLogic>(
   seed(context, fromState)
   runTraversal(context)
   return applyTarget(collectPaths(context.stateMap, context.weightMap), resolvedOptions.toState)
+}
+
+type ShortestOptions<TLogic extends AnyActorLogic> = TraversalOptions<
+  SnapshotFrom<TLogic>,
+  EventFromLogic<TLogic>,
+  InputFrom<TLogic>
+>
+
+type ShortestPaths<TLogic extends AnyActorLogic> = Array<
+  StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>
+>
+
+const resolveShortest = <TLogic extends AnyActorLogic>(
+  first: TLogic | ShortestOptions<TLogic> | undefined,
+  second: ShortestOptions<TLogic> | undefined,
+): ShortestPaths<TLogic> | ((logic: TLogic) => ShortestPaths<TLogic>) =>
+  isActorLogicLike(first)
+    ? computeShortestPaths(first, second)
+    : (logic: TLogic) => computeShortestPaths(logic, first)
+
+export function getShortestPaths<TLogic extends AnyActorLogic>(
+  logic: TLogic,
+  options?: TraversalOptions<
+    SnapshotFrom<TLogic>,
+    EventFromLogic<TLogic>,
+    InputFrom<TLogic>
+  >,
+): Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>
+export function getShortestPaths<TLogic extends AnyActorLogic>(
+  options?: TraversalOptions<
+    SnapshotFrom<TLogic>,
+    EventFromLogic<TLogic>,
+    InputFrom<TLogic>
+  >,
+): (logic: TLogic) => Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>
+export function getShortestPaths<TLogic extends AnyActorLogic>(
+  ...args:
+    | readonly [logic: TLogic, options?: ShortestOptions<TLogic> | undefined]
+    | readonly [options?: ShortestOptions<TLogic> | undefined]
+): ShortestPaths<TLogic> | ((logic: TLogic) => ShortestPaths<TLogic>) {
+  if (args.length === 2) {
+    return computeShortestPaths(args[0], args[1])
+  }
+  const [first, second] = args
+  return resolveShortest(first, second)
 }

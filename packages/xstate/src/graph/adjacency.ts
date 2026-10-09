@@ -292,8 +292,7 @@ const drain = <
   }
 }
 
-/** @public */
-export function getAdjacencyMap<
+function computeAdjacencyMap<
   TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
   TInput,
@@ -303,7 +302,7 @@ export function getAdjacencyMap<
   options: TraversalOptions<TSnapshot, TEvent, TInput>,
 ): AdjacencyMap<TSnapshot, TEvent> {
   'use strict'
-  const config = resolveTraversalOptions(logic, options)
+  const config = resolveTraversalOptions({ logic, options })
   const actorScope = createMockActorScope()
   const traversal: Traversal<TSnapshot, TEvent, TInput, TSystem> = {
     config,
@@ -318,6 +317,46 @@ export function getAdjacencyMap<
   ]
   drain(adj, queue, traversal)
   return adj
+}
+
+export function getAdjacencyMap<
+  TSnapshot extends AnySnapshot,
+  TEvent extends EventObject,
+  TInput,
+  TSystem extends AnyActorSystem = AnyActorSystem,
+>(
+  options: TraversalOptions<TSnapshot, TEvent, TInput>,
+): (logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>) => AdjacencyMap<TSnapshot, TEvent>
+export function getAdjacencyMap<
+  TSnapshot extends AnySnapshot,
+  TEvent extends EventObject,
+  TInput,
+  TSystem extends AnyActorSystem = AnyActorSystem,
+>(
+  logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>,
+  options: TraversalOptions<TSnapshot, TEvent, TInput>,
+): AdjacencyMap<TSnapshot, TEvent>
+export function getAdjacencyMap<
+  TSnapshot extends AnySnapshot,
+  TEvent extends EventObject,
+  TInput,
+  TSystem extends AnyActorSystem = AnyActorSystem,
+>(
+  ...args:
+    | readonly [
+      logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>,
+      options: TraversalOptions<TSnapshot, TEvent, TInput>,
+    ]
+    | readonly [options: TraversalOptions<TSnapshot, TEvent, TInput>]
+):
+  | AdjacencyMap<TSnapshot, TEvent>
+  | ((logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>) => AdjacencyMap<TSnapshot, TEvent>)
+{
+  if (args.length === 1) {
+    const [options] = args
+    return (logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>) => computeAdjacencyMap(logic, options)
+  }
+  return computeAdjacencyMap(args[0], args[1])
 }
 
 /** @public */

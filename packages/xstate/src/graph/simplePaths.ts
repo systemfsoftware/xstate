@@ -10,7 +10,7 @@ import type {
 import { createMockActorScope } from './actorScope.js'
 import { getAdjacencyMap } from './adjacency.js'
 import { alterPath } from './alterPath.js'
-import { resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
+import { isActorLogicLike, resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
 import type {
   AdjacencyMap,
   AnySnapshot,
@@ -209,8 +209,7 @@ const applyTarget = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   return paths.filter((path) => target(path.state)).map(alterPath)
 }
 
-/** @public */
-export function getSimplePaths<TLogic extends AnyActorLogic>(
+function computeSimplePaths<TLogic extends AnyActorLogic>(
   logic: TLogic,
   options?: TraversalOptions<
     SnapshotFrom<TLogic>,
@@ -221,7 +220,7 @@ export function getSimplePaths<TLogic extends AnyActorLogic>(
   type TState = SnapshotFrom<TLogic>
   type TEvent = EventFromLogic<TLogic>
 
-  const resolvedOptions = resolveTraversalOptions(logic, options)
+  const resolvedOptions = resolveTraversalOptions({ logic, options })
   const actorScope = createMockActorScope()
   const fromState = resolvedOptions.fromState ??
     initialSnapshotOf<TState>(logic, inputOf(options), actorScope)
@@ -238,4 +237,49 @@ export function getSimplePaths<TLogic extends AnyActorLogic>(
   visitEachStart(context, fromSerialized)
   const simplePaths = Object.values(context.pathMap).flatMap((plan) => plan.paths)
   return applyTarget(simplePaths, resolvedOptions.toState)
+}
+
+type SimpleOptions<TLogic extends AnyActorLogic> = TraversalOptions<
+  SnapshotFrom<TLogic>,
+  EventFromLogic<TLogic>,
+  InputFrom<TLogic>
+>
+
+type SimplePaths<TLogic extends AnyActorLogic> = Array<
+  StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>
+>
+
+const resolveSimple = <TLogic extends AnyActorLogic>(
+  first: TLogic | SimpleOptions<TLogic> | undefined,
+  second: SimpleOptions<TLogic> | undefined,
+): SimplePaths<TLogic> | ((logic: TLogic) => SimplePaths<TLogic>) =>
+  isActorLogicLike(first)
+    ? computeSimplePaths(first, second)
+    : (logic: TLogic) => computeSimplePaths(logic, first)
+
+export function getSimplePaths<TLogic extends AnyActorLogic>(
+  logic: TLogic,
+  options?: TraversalOptions<
+    SnapshotFrom<TLogic>,
+    EventFromLogic<TLogic>,
+    InputFrom<TLogic>
+  >,
+): Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>
+export function getSimplePaths<TLogic extends AnyActorLogic>(
+  options?: TraversalOptions<
+    SnapshotFrom<TLogic>,
+    EventFromLogic<TLogic>,
+    InputFrom<TLogic>
+  >,
+): (logic: TLogic) => Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>
+export function getSimplePaths<TLogic extends AnyActorLogic>(
+  ...args:
+    | readonly [logic: TLogic, options?: SimpleOptions<TLogic> | undefined]
+    | readonly [options?: SimpleOptions<TLogic> | undefined]
+): SimplePaths<TLogic> | ((logic: TLogic) => SimplePaths<TLogic>) {
+  if (args.length === 2) {
+    return computeSimplePaths(args[0], args[1])
+  }
+  const [first, second] = args
+  return resolveSimple(first, second)
 }

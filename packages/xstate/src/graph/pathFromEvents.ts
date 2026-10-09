@@ -244,8 +244,7 @@ const buildPaths = <
   ]
 }
 
-/** @public */
-export function getPathsFromEvents<
+function computePathsFromEvents<
   TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
   TInput,
@@ -255,9 +254,12 @@ export function getPathsFromEvents<
   events: TEvent[],
   options?: TraversalOptions<TSnapshot, TEvent, TInput>,
 ): Array<StatePath<TSnapshot, TEvent>> {
-  const config = resolveTraversalOptions(logic, {
-    events,
-    ...options,
+  const config = resolveTraversalOptions({
+    logic,
+    options: {
+      events,
+      ...options,
+    },
   })
   const actorScope = createMockActorScope()
   const context: ReplayContext<TSnapshot, TEvent, TInput, TSystem> = {
@@ -272,4 +274,62 @@ export function getPathsFromEvents<
     replay = replayOne(context, replay, event)
   }
   return buildPaths(context, replay)
+}
+
+type ReplayArgs<
+  TSnapshot extends AnySnapshot,
+  TEvent extends EventObject,
+  TInput,
+  TSystem extends AnyActorSystem,
+> =
+  | readonly [
+    logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>,
+    events: TEvent[],
+    options?: TraversalOptions<TSnapshot, TEvent, TInput> | undefined,
+  ]
+  | readonly [events: TEvent[], options?: TraversalOptions<TSnapshot, TEvent, TInput> | undefined]
+
+const isDataLastReplay = <
+  TSnapshot extends AnySnapshot,
+  TEvent extends EventObject,
+  TInput,
+  TSystem extends AnyActorSystem,
+>(
+  args: ReplayArgs<TSnapshot, TEvent, TInput, TSystem>,
+): args is readonly [events: TEvent[], options?: TraversalOptions<TSnapshot, TEvent, TInput> | undefined] =>
+  Array.isArray(args[0])
+
+export function getPathsFromEvents<
+  TSnapshot extends AnySnapshot,
+  TEvent extends EventObject,
+  TInput,
+  TSystem extends AnyActorSystem = AnyActorSystem,
+>(
+  logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>,
+  events: TEvent[],
+  options?: TraversalOptions<TSnapshot, TEvent, TInput>,
+): Array<StatePath<TSnapshot, TEvent>>
+export function getPathsFromEvents<
+  TSnapshot extends AnySnapshot,
+  TEvent extends EventObject,
+  TInput,
+  TSystem extends AnyActorSystem = AnyActorSystem,
+>(
+  events: TEvent[],
+  options?: TraversalOptions<TSnapshot, TEvent, TInput>,
+): (logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>) => Array<StatePath<TSnapshot, TEvent>>
+export function getPathsFromEvents<
+  TSnapshot extends AnySnapshot,
+  TEvent extends EventObject,
+  TInput,
+  TSystem extends AnyActorSystem = AnyActorSystem,
+>(
+  ...args: ReplayArgs<TSnapshot, TEvent, TInput, TSystem>
+):
+  | Array<StatePath<TSnapshot, TEvent>>
+  | ((logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>) => Array<StatePath<TSnapshot, TEvent>>)
+{
+  return isDataLastReplay(args)
+    ? (logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>) => computePathsFromEvents(logic, args[0], args[1])
+    : computePathsFromEvents(args[0], args[1], args[2])
 }

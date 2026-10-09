@@ -71,6 +71,9 @@ export type DirectedGraphNode = JSONSerializable<{
 // Warning: (ae-forgotten-export) The symbol "ActorLogic" needs to be exported by the entry point graph.d.ts
 //
 // @public (undocumented)
+export function getAdjacencyMap<TSnapshot extends AnySnapshot, TEvent extends EventObject, TInput, TSystem extends AnyActorSystem = AnyActorSystem>(options: TraversalOptions<TSnapshot, TEvent, TInput>): (logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>) => AdjacencyMap<TSnapshot, TEvent>;
+
+// @public (undocumented)
 export function getAdjacencyMap<TSnapshot extends AnySnapshot, TEvent extends EventObject, TInput, TSystem extends AnyActorSystem = AnyActorSystem>(logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>, options: TraversalOptions<TSnapshot, TEvent, TInput>): AdjacencyMap<TSnapshot, TEvent>;
 
 // @public
@@ -81,6 +84,9 @@ export function getDescendantStateNodes(stateNode: {
 // @public (undocumented)
 export function getPathsFromEvents<TSnapshot extends AnySnapshot, TEvent extends EventObject, TInput, TSystem extends AnyActorSystem = AnyActorSystem>(logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>, events: TEvent[], options?: TraversalOptions<TSnapshot, TEvent, TInput>): Array<StatePath<TSnapshot, TEvent>>;
 
+// @public (undocumented)
+export function getPathsFromEvents<TSnapshot extends AnySnapshot, TEvent extends EventObject, TInput, TSystem extends AnyActorSystem = AnyActorSystem>(events: TEvent[], options?: TraversalOptions<TSnapshot, TEvent, TInput>): (logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>) => Array<StatePath<TSnapshot, TEvent>>;
+
 // Warning: (ae-forgotten-export) The symbol "AnyActorLogic" needs to be exported by the entry point graph.d.ts
 // Warning: (ae-forgotten-export) The symbol "SnapshotFrom" needs to be exported by the entry point graph.d.ts
 // Warning: (ae-forgotten-export) The symbol "EventFromLogic" needs to be exported by the entry point graph.d.ts
@@ -90,7 +96,16 @@ export function getPathsFromEvents<TSnapshot extends AnySnapshot, TEvent extends
 export function getShortestPaths<TLogic extends AnyActorLogic>(logic: TLogic, options?: TraversalOptions<SnapshotFrom<TLogic>, EventFromLogic<TLogic>, InputFrom<TLogic>>): Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>;
 
 // @public (undocumented)
+export function getShortestPaths<TLogic extends AnyActorLogic>(options?: TraversalOptions<SnapshotFrom<TLogic>, EventFromLogic<TLogic>, InputFrom<TLogic>>): (logic: TLogic) => Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>;
+
+// @public (undocumented)
 export function getSimplePaths<TLogic extends AnyActorLogic>(logic: TLogic, options?: TraversalOptions<SnapshotFrom<TLogic>, EventFromLogic<TLogic>, InputFrom<TLogic>>): Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>;
+
+// @public (undocumented)
+export function getSimplePaths<TLogic extends AnyActorLogic>(options?: TraversalOptions<SnapshotFrom<TLogic>, EventFromLogic<TLogic>, InputFrom<TLogic>>): (logic: TLogic) => Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>;
+
+// @public (undocumented)
+export function joinPaths<TSnapshot extends AnySnapshot, TEvent extends EventObject>(tailPath: StatePath<TSnapshot, TEvent>): (headPath: StatePath<TSnapshot, TEvent>) => StatePath<TSnapshot, TEvent>;
 
 // @public (undocumented)
 export function joinPaths<TSnapshot extends AnySnapshot, TEvent extends EventObject>(headPath: StatePath<TSnapshot, TEvent>, tailPath: StatePath<TSnapshot, TEvent>): StatePath<TSnapshot, TEvent>;
