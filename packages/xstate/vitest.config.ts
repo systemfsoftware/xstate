@@ -88,6 +88,7 @@ const unguarded = [
   'test/machineVersions.test.ts',
   'test/machineVersions.types.test.ts',
   'test/macrostepBound.test.ts',
+
   'test/memory.test.ts',
   'test/meta.test.ts',
   'test/microstep.test.ts',

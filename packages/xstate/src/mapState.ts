@@ -1,4 +1,3 @@
-import { dual } from 'effect/Function'
 import type { MachineSnapshot } from './State.js'
 import type { AnyMachineSnapshot, AnyStateNode, StateSchema } from './types.js'
 
@@ -80,12 +79,21 @@ const mapActiveStates = <TSnapshot extends AnyMachineSnapshot, TResult>(
  *
  * @public
  */
-export const mapState: {
-  <T extends AnyMachineSnapshot, TResult>(
-    mapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>,
-  ): (snapshot: T) => { stateNode: AnyStateNode; result: TResult }[]
-  <T extends AnyMachineSnapshot, TResult>(
-    snapshot: T,
-    mapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>,
-  ): { stateNode: AnyStateNode; result: TResult }[]
-} = dual(2, mapActiveStates)
+export function mapState<T extends AnyMachineSnapshot, TResult>(
+  mapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>,
+): (snapshot: T) => { stateNode: AnyStateNode; result: TResult }[]
+export function mapState<T extends AnyMachineSnapshot, TResult>(
+  snapshot: T,
+  mapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>,
+): { stateNode: AnyStateNode; result: TResult }[]
+export function mapState<TSnapshot extends AnyMachineSnapshot, TResult>(
+  ...args:
+    | readonly [mapper: NodeMapper<TSnapshot, TResult>]
+    | readonly [snapshot: TSnapshot, mapper: NodeMapper<TSnapshot, TResult>]
+): MappedStateNode<TResult>[] | ((snapshot: TSnapshot) => MappedStateNode<TResult>[]) {
+  if (args.length === 1) {
+    const [mapper] = args
+    return (snapshot: TSnapshot) => mapActiveStates(snapshot, mapper)
+  }
+  return mapActiveStates(args[0], args[1])
+}

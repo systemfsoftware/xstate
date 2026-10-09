@@ -132,6 +132,7 @@
     "packages/xstate/test/machineVersions.test.ts",
     "packages/xstate/test/machineVersions.types.test.ts",
     "packages/xstate/test/macrostepBound.test.ts",
+
     "packages/xstate/test/memory.test.ts",
     "packages/xstate/test/meta.test.ts",
     "packages/xstate/test/microstep.test.ts",

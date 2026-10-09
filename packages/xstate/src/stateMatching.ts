@@ -1,4 +1,3 @@
-import { dual } from 'effect/Function'
 import type { StateValue, StateValueMap } from './types.js'
 
 const segmentAfterDot = /\.((?:\\[\s\S]|\\$|[^.\\])*)/g
@@ -39,7 +38,14 @@ const valueMatches = (parentStateValue: StateValue, childStateValue: StateValue)
   regionsMatch(toStateValue(parentStateValue), toStateValue(childStateValue))
 
 /** @public */
-export const matchesState: {
-  (childStateValue: StateValue): (parentStateValue: StateValue) => boolean
-  (parentStateValue: StateValue, childStateValue: StateValue): boolean
-} = dual(2, valueMatches)
+export function matchesState(childStateValue: StateValue): (parentStateValue: StateValue) => boolean
+export function matchesState(parentStateValue: StateValue, childStateValue: StateValue): boolean
+export function matchesState(
+  ...args: readonly [childStateValue: StateValue] | readonly [parentStateValue: StateValue, childStateValue: StateValue]
+): boolean | ((parentStateValue: StateValue) => boolean) {
+  if (args.length === 1) {
+    const [childStateValue] = args
+    return (parentStateValue: StateValue) => valueMatches(parentStateValue, childStateValue)
+  }
+  return valueMatches(args[0], args[1])
+}
