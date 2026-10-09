@@ -1,6 +1,10 @@
-import type { AnyActorScope } from '../index.js'
+import type { AnyActorScope, AnyActorSystem } from '../index.js'
 import { createEmptyActor } from '../index.js'
 import { defaultWarn } from '../warnSink.js'
+
+function actorSystem(actor: Pick<AnyActorScope, 'system'>): AnyActorSystem {
+  return actor.system
+}
 
 export function createMockActorScope(): AnyActorScope {
   const emptyActor = createEmptyActor()
@@ -9,9 +13,9 @@ export function createMockActorScope(): AnyActorScope {
     logger: console.log,
     warn: defaultWarn,
     id: '',
-    sessionId: Math.random().toString(32).slice(2),
+    sessionId: 'mock-actor-scope',
     defer: () => {},
-    system: emptyActor.system, // TODO: mock system?
+    system: actorSystem(emptyActor),
     stopChild: () => {},
     emit: () => {},
     actionExecutor: () => {},

@@ -4,14 +4,6 @@ import { defineConfig } from 'vitest/config'
 const sourceCondition = '@systemfsoftware/source'
 const excluded = ['**/.stryker-tmp/**', '**/node_modules/**']
 const unguarded = [
-  'src/graph/test/adjacency.test.ts',
-  'src/graph/test/dieHard.test.ts',
-  'src/graph/test/graph.test.ts',
-  'src/graph/test/index.test.ts',
-  'src/graph/test/paths.test.ts',
-  'src/graph/test/shortestPaths.test.ts',
-  'src/graph/test/traversal-regressions.test.ts',
-  'src/graph/types.test.ts',
   'test/actions.test.ts',
   'test/activities.test.ts',
   'test/actor.test.ts',

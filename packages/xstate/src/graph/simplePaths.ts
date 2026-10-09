@@ -1,19 +1,222 @@
-import type { AnyActorLogic, EventFromLogic, InputFrom, SnapshotFrom } from '../index.js'
+import type {
+  AnyActorLogic,
+  AnyActorScope,
+  EventFromLogic,
+  EventObject,
+  InputFrom,
+  NonReducibleUnknown,
+  SnapshotFrom,
+} from '../index.js'
 import { createMockActorScope } from './actorScope.js'
 import { getAdjacencyMap } from './adjacency.js'
 import { alterPath } from './alterPath.js'
-import { resolveTraversalOptions } from './graph.js'
+import {
+  logicFirstOrLast,
+  type OptionsOf,
+  type PathsOf,
+  resolveTraversalOptions,
+  toSerializedEvent,
+  toSerializedSnapshot,
+} from './graph.js'
 import type {
+  AdjacencyMap,
+  AnySnapshot,
   SerializedEvent,
   SerializedSnapshot,
   StatePath,
+  StatePlanMap,
   Steps,
+  TraversalConfig,
   TraversalOptions,
   VisitedContext,
 } from './types.js'
 
-/** @public */
-export function getSimplePaths<TLogic extends AnyActorLogic>(
+interface PathPlan<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
+  state: TSnapshot
+  paths: Array<StatePath<TSnapshot, TEvent>>
+}
+
+interface Transition<TSnapshot, TEvent> {
+  event: TEvent
+  state: TSnapshot
+}
+
+interface SimpleContext<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
+  adjacency: AdjacencyMap<TSnapshot, TEvent>
+  serializeState: TraversalConfig<TSnapshot, TEvent>['serializeState']
+  stateMap: Map<SerializedSnapshot, TSnapshot>
+  visitCtx: VisitedContext<TSnapshot, TEvent>
+  steps: Steps<TSnapshot, TEvent>
+  pathMap: StatePlanMap<TSnapshot, TEvent>
+}
+
+const createNullDict = <TValue>(): Record<string, TValue> => {
+  const dict: Record<string, TValue> = {}
+  Object.setPrototypeOf(dict, null)
+  return dict
+}
+
+const inputOf = <TInput>(options: { input?: TInput } | undefined): TInput | undefined =>
+  options === undefined ? undefined : options.input
+
+const initialSnapshotOf = <TSnapshot>(
+  logic: { getInitialSnapshot(actorScope: AnyActorScope, input: NonReducibleUnknown): TSnapshot },
+  input: NonReducibleUnknown,
+  actorScope: AnyActorScope,
+): TSnapshot => logic.getInitialSnapshot(actorScope, input)
+
+const mustGet = <TKey, TValue>(map: Map<TKey, TValue>, key: TKey): TValue => {
+  const value = map.get(key)
+  if (value === undefined) {
+    throw new Error('Missing traversal entry')
+  }
+  return value
+}
+
+const createPlan = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  pathMap: StatePlanMap<TSnapshot, TEvent>,
+  stateMap: Map<SerializedSnapshot, TSnapshot>,
+  serialized: SerializedSnapshot,
+): PathPlan<TSnapshot, TEvent> => {
+  const plan: PathPlan<TSnapshot, TEvent> = { state: mustGet(stateMap, serialized), paths: [] }
+  pathMap[serialized] = plan
+  return plan
+}
+
+const planAt = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  pathMap: StatePlanMap<TSnapshot, TEvent>,
+  stateMap: Map<SerializedSnapshot, TSnapshot>,
+  serialized: SerializedSnapshot,
+): PathPlan<TSnapshot, TEvent> => {
+  const existing = pathMap[serialized]
+  return existing === undefined ? createPlan(pathMap, stateMap, serialized) : existing
+}
+
+const recordPath = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  toSerialized: SerializedSnapshot,
+  fromState: TSnapshot,
+): void => {
+  const plan = planAt(context.pathMap, context.stateMap, toSerialized)
+  plan.paths.push({
+    state: fromState,
+    weight: context.steps.length,
+    steps: [...context.steps],
+  })
+}
+
+function expandInto<TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  fromSerialized: SerializedSnapshot,
+  toSerialized: SerializedSnapshot,
+  serializedEvent: SerializedEvent,
+  event: TEvent,
+  nextSerialized: SerializedSnapshot,
+): void {
+  context.visitCtx.edges.add(serializedEvent)
+  context.steps.push({ state: mustGet(context.stateMap, fromSerialized), event })
+  visit(context, nextSerialized, toSerialized)
+}
+
+const descendInto = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  fromSerialized: SerializedSnapshot,
+  toSerialized: SerializedSnapshot,
+  serializedEvent: SerializedEvent,
+  transition: Transition<TSnapshot, TEvent>,
+): void => {
+  const nextSerialized = toSerializedSnapshot(
+    context.serializeState(transition.state, transition.event, context.stateMap.get(fromSerialized)),
+  )
+  context.stateMap.set(nextSerialized, transition.state)
+  if (!context.visitCtx.vertices.has(nextSerialized)) {
+    expandInto(context, fromSerialized, toSerialized, serializedEvent, transition.event, nextSerialized)
+  }
+}
+
+const descendTransition = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  fromSerialized: SerializedSnapshot,
+  toSerialized: SerializedSnapshot,
+  transitions: AdjacencyMap<TSnapshot, TEvent>[SerializedSnapshot]['transitions'],
+  serializedEvent: SerializedEvent,
+): void => {
+  const transition = transitions[serializedEvent]
+  if (transition === undefined) {
+    return
+  }
+  descendInto(context, fromSerialized, toSerialized, serializedEvent, transition)
+}
+
+const descendTransitions = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  fromSerialized: SerializedSnapshot,
+  toSerialized: SerializedSnapshot,
+  adjacencyValue: AdjacencyMap<TSnapshot, TEvent>[SerializedSnapshot],
+): void => {
+  for (const serializedEvent of Object.keys(adjacencyValue.transitions).map(toSerializedEvent)) {
+    descendTransition(context, fromSerialized, toSerialized, adjacencyValue.transitions, serializedEvent)
+  }
+}
+
+const descend = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  fromSerialized: SerializedSnapshot,
+  toSerialized: SerializedSnapshot,
+): void => {
+  const adjacencyValue = context.adjacency[fromSerialized]
+  if (adjacencyValue === undefined) {
+    return
+  }
+  descendTransitions(context, fromSerialized, toSerialized, adjacencyValue)
+}
+
+function visit<TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  fromSerialized: SerializedSnapshot,
+  toSerialized: SerializedSnapshot,
+): void {
+  const fromState = mustGet(context.stateMap, fromSerialized)
+  context.visitCtx.vertices.add(fromSerialized)
+  if (fromSerialized === toSerialized) {
+    recordPath(context, toSerialized, fromState)
+  } else {
+    descend(context, fromSerialized, toSerialized)
+  }
+  context.steps.pop()
+  context.visitCtx.vertices.delete(fromSerialized)
+}
+
+const seed = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  fromState: TSnapshot,
+): SerializedSnapshot => {
+  const serialized = toSerializedSnapshot(context.serializeState(fromState, undefined))
+  context.stateMap.set(serialized, fromState)
+  return serialized
+}
+
+const visitEachStart = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  fromSerialized: SerializedSnapshot,
+): void => {
+  for (const nextSerialized of Object.keys(context.adjacency).map(toSerializedSnapshot)) {
+    visit(context, fromSerialized, nextSerialized)
+  }
+}
+
+const applyTarget = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  paths: Array<StatePath<TSnapshot, TEvent>>,
+  toState: ((state: TSnapshot) => boolean) | undefined,
+): Array<StatePath<TSnapshot, TEvent>> => {
+  const target = toState
+  if (target === undefined) {
+    return paths.map(alterPath)
+  }
+  return paths.filter((path) => target(path.state)).map(alterPath)
+}
+
+function computeSimplePaths<TLogic extends AnyActorLogic>(
   logic: TLogic,
   options?: TraversalOptions<
     SnapshotFrom<TLogic>,
@@ -24,102 +227,45 @@ export function getSimplePaths<TLogic extends AnyActorLogic>(
   type TState = SnapshotFrom<TLogic>
   type TEvent = EventFromLogic<TLogic>
 
-  const resolvedOptions = resolveTraversalOptions(logic, options)
+  const resolvedOptions = resolveTraversalOptions({ logic, options })
   const actorScope = createMockActorScope()
   const fromState = resolvedOptions.fromState ??
-    logic.getInitialSnapshot(actorScope, options?.input)
-  const serializeState = resolvedOptions.serializeState as (
-    ...args: Parameters<typeof resolvedOptions.serializeState>
-  ) => SerializedSnapshot
+    initialSnapshotOf<TState>(logic, inputOf(options), actorScope)
   const adjacency = getAdjacencyMap(logic, { ...resolvedOptions, fromState })
-  const stateMap = new Map<SerializedSnapshot, TState>()
-  const visitCtx: VisitedContext<TState, TEvent> = {
-    vertices: new Set(),
-    edges: new Set(),
+  const context: SimpleContext<TState, TEvent> = {
+    adjacency,
+    serializeState: resolvedOptions.serializeState,
+    stateMap: new Map(),
+    visitCtx: { vertices: new Set(), edges: new Set() },
+    steps: [],
+    pathMap: createNullDict<PathPlan<TState, TEvent>>(),
   }
-  const steps: Steps<TState, TEvent> = []
-  const pathMap: Record<
-    SerializedSnapshot,
-    { state: TState; paths: Array<StatePath<TState, TEvent>> }
-  > = Object.create(null)
+  const fromSerialized = seed(context, fromState)
+  visitEachStart(context, fromSerialized)
+  const simplePaths = Object.values(context.pathMap).flatMap((plan) => plan.paths)
+  return applyTarget(simplePaths, resolvedOptions.toState)
+}
 
-  function util(
-    fromStateSerial: SerializedSnapshot,
-    toStateSerial: SerializedSnapshot,
-  ) {
-    const fromState = stateMap.get(fromStateSerial)!
-    visitCtx.vertices.add(fromStateSerial)
-
-    if (fromStateSerial === toStateSerial) {
-      if (!pathMap[toStateSerial]) {
-        pathMap[toStateSerial] = {
-          state: stateMap.get(toStateSerial)!,
-          paths: [],
-        }
-      }
-
-      const toStatePlan = pathMap[toStateSerial]
-
-      const path2: StatePath<TState, TEvent> = {
-        state: fromState,
-        weight: steps.length,
-        steps: [...steps],
-      }
-
-      toStatePlan.paths.push(path2)
-    } else {
-      if (!adjacency[fromStateSerial]) {
-        return
-      }
-      for (
-        const serializedEvent of Object.keys(
-          adjacency[fromStateSerial].transitions,
-        ) as SerializedEvent[]
-      ) {
-        const transition = adjacency[fromStateSerial].transitions[serializedEvent]
-        if (!transition) {
-          continue
-        }
-        const { state: nextState, event: subEvent } = transition
-
-        const prevState = stateMap.get(fromStateSerial)
-
-        const nextStateSerial = serializeState(nextState, subEvent, prevState)
-        stateMap.set(nextStateSerial, nextState)
-
-        if (!visitCtx.vertices.has(nextStateSerial)) {
-          visitCtx.edges.add(serializedEvent)
-          steps.push({
-            state: stateMap.get(fromStateSerial)!,
-            event: subEvent,
-          })
-          util(nextStateSerial, toStateSerial)
-        }
-      }
-    }
-
-    steps.pop()
-    visitCtx.vertices.delete(fromStateSerial)
-  }
-
-  const fromStateSerial = serializeState(fromState, undefined)
-  stateMap.set(fromStateSerial, fromState)
-
-  for (
-    const nextStateSerial of Object.keys(
-      adjacency,
-    ) as SerializedSnapshot[]
-  ) {
-    util(fromStateSerial, nextStateSerial)
-  }
-
-  const simplePaths = Object.values(pathMap).flatMap((p) => p.paths)
-
-  if (resolvedOptions.toState) {
-    return simplePaths
-      .filter((path) => resolvedOptions.toState!(path.state))
-      .map(alterPath)
-  }
-
-  return simplePaths.map(alterPath)
+export function getSimplePaths<TLogic extends AnyActorLogic>(
+  logic: TLogic,
+  options?: TraversalOptions<
+    SnapshotFrom<TLogic>,
+    EventFromLogic<TLogic>,
+    InputFrom<TLogic>
+  >,
+): Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>
+export function getSimplePaths<TLogic extends AnyActorLogic>(
+  options?: TraversalOptions<
+    SnapshotFrom<TLogic>,
+    EventFromLogic<TLogic>,
+    InputFrom<TLogic>
+  >,
+): (logic: TLogic) => Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>
+export function getSimplePaths<TLogic extends AnyActorLogic>(
+  ...args:
+    | readonly [logic: TLogic, options?: OptionsOf<TLogic> | undefined]
+    | readonly [options?: OptionsOf<TLogic> | undefined]
+): PathsOf<TLogic> | ((logic: TLogic) => PathsOf<TLogic>) {
+  const [first, second] = args
+  return logicFirstOrLast(computeSimplePaths<TLogic>)(first, second)
 }

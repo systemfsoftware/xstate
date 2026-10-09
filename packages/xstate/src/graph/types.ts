@@ -1,7 +1,12 @@
-import type { ActorLogic, EventObject, Snapshot, StateNode, TransitionDefinition } from '../index.js'
+import type { ActorLogic, AnyTransitionDefinition, EventObject, Snapshot, StateNode } from '../index.js'
+
+/**
+ * @public
+ */
+export type AnySnapshot<TOutput = unknown> = Snapshot<TOutput>
 
 /** @public */
-export type AnyStateNode = StateNode<any, any>
+export type AnyStateNode = StateNode
 
 type JSONSerializable<T extends object, U> = T & {
   toJSON: () => U
@@ -23,7 +28,7 @@ export type DirectedGraphEdge = JSONSerializable<
     source: AnyStateNode
     target: AnyStateNode
     label: DirectedGraphLabel
-    transition: TransitionDefinition<any, any>
+    transition: AnyTransitionDefinition
   },
   {
     source: string
@@ -49,7 +54,7 @@ export type DirectedGraphNode = JSONSerializable<
 >
 
 interface StatePlan<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 > {
   /** The target state. */
@@ -60,7 +65,7 @@ interface StatePlan<
 
 /** @public */
 export interface StatePath<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 > {
   /** The ending state of the path. */
@@ -76,7 +81,7 @@ export interface StatePath<
 
 /** @public */
 export interface StatePlanMap<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 > {
   [key: string]: StatePlan<TSnapshot, TEvent>
@@ -84,7 +89,7 @@ export interface StatePlanMap<
 
 /** @public */
 export interface Step<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 > {
   /** The event that resulted in the current state */
@@ -95,7 +100,7 @@ export interface Step<
 
 /** @public */
 export type Steps<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 > = Array<Step<TSnapshot, TEvent>>
 
@@ -108,7 +113,7 @@ export interface VisitedContext<TState, TEvent> {
 
 /** @public */
 export interface SerializationConfig<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 > {
   serializeState: (
@@ -120,7 +125,7 @@ export interface SerializationConfig<
 }
 
 type SerializationOptions<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 > = Partial<
   Pick<
@@ -131,7 +136,7 @@ type SerializationOptions<
 
 /** @public */
 export type TraversalOptions<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
   TInput,
 > =
@@ -148,7 +153,7 @@ export type TraversalOptions<
 
 /** @public */
 export interface TraversalConfig<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 > extends SerializationConfig<TSnapshot, TEvent> {
   events: readonly TEvent[] | ((state: TSnapshot) => readonly TEvent[])
@@ -175,7 +180,7 @@ export type SerializedEvent = Brand<string, 'event'>
 
 /** @public */
 export type PathGenerator<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
   TInput,
 > = (
