@@ -45,6 +45,11 @@ export interface WallClock {
   now(): number
 }
 
+export interface CryptoSource {
+  getRandomValues?(array: Uint32Array<ArrayBuffer>): Uint32Array<ArrayBuffer>
+  randomUUID?(): string
+}
+
 const defaultWallClock: WallClock = { now: () => Date.now() }
 
 interface Scheduler {
@@ -61,18 +66,18 @@ export const transitionEffectSignal = new Error('Transition effect')
 /** @internal */
 export const transitionEffectTargets: AnyActor[] = []
 
-function createSystemIdPrefix(): string {
-  let crypto: Crypto | undefined
+function readGlobalCrypto(): CryptoSource | undefined {
   try {
-    crypto = globalThis.crypto
+    return globalThis.crypto
   } catch {
-    // Use the process-local fallback below.
+    return undefined
   }
+}
 
+function createSystemIdPrefix(crypto: CryptoSource | undefined): string {
   if (crypto?.getRandomValues) {
     try {
-      const values = new Uint32Array(4)
-      crypto.getRandomValues(values)
+      const values = crypto.getRandomValues(new Uint32Array(4))
       return Array.from(values, (value) => value.toString(36).padStart(7, '0')).join('')
     } catch {
       // Try randomUUID next.
@@ -94,9 +99,11 @@ function createSystemIdPrefix(): string {
   }`
 }
 
-function createSystemId(): string {
-  systemIdPrefix ??= createSystemIdPrefix()
-  return `${systemIdPrefix}:${(nextSystemId++).toString(36)}`
+function createSystemId(crypto: CryptoSource | undefined): string {
+  const prefix = crypto === undefined
+    ? (systemIdPrefix ??= createSystemIdPrefix(readGlobalCrypto()))
+    : createSystemIdPrefix(crypto)
+  return `${prefix}:${(nextSystemId++).toString(36)}`
 }
 
 /**
@@ -567,11 +574,19 @@ interface RuntimeSystem<T extends ActorSystemInfo> {
   _rejectionListeners?: Set<(rejection: EventRejection) => void>
 }
 
+interface RuntimeSystemOptions<T extends ActorSystemInfo> {
+  clock: Clock
+  wallClock?: WallClock | undefined
+  crypto?: CryptoSource | undefined
+  logger: (...args: unknown[]) => void
+  reportUnhandledError?: ((error: unknown) => void) | undefined
+  warn: (message: string) => void
+  snapshot?: unknown
+  createActorRef: ActorSystem<T>['createActorRef']
+}
+
 class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
-  public _identity = ambientExecutionIdentity ?? {
-    systemId: createSystemId(),
-    nextSessionId: 0,
-  }
+  public _identity: ExecutionIdentity
   public _snapshot: ActorSystem<T>['_snapshot']
   public _snapshotVersion = 0
   public scheduler: Scheduler = this
@@ -629,16 +644,12 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
 
   constructor(
     private _rootActor: AnyActor,
-    options: {
-      clock: Clock
-      wallClock?: WallClock | undefined
-      logger: (...args: any[]) => void
-      reportUnhandledError?: ((error: unknown) => void) | undefined
-      warn: (message: string) => void
-      snapshot?: unknown
-      createActorRef: ActorSystem<T>['createActorRef']
-    },
+    options: RuntimeSystemOptions<T>,
   ) {
+    this._identity = ambientExecutionIdentity ?? {
+      systemId: createSystemId(options.crypto),
+      nextSessionId: 0,
+    }
     const restoredSnapshot = typeof options.snapshot === 'object' && options.snapshot !== null
       ? (options.snapshot as {
         scheduler?: Record<ScheduledTimerId, ScheduledTimer>
@@ -1098,15 +1109,7 @@ class RuntimeSystem<T extends ActorSystemInfo> implements ActorSystem<T> {
 /** @internal */
 export function createRuntimeSystem<T extends ActorSystemInfo>(
   rootActor: AnyActor,
-  options: {
-    clock: Clock
-    wallClock?: WallClock | undefined
-    logger: (...args: any[]) => void
-    reportUnhandledError?: ((error: unknown) => void) | undefined
-    warn: (message: string) => void
-    snapshot?: unknown
-    createActorRef: ActorSystem<T>['createActorRef']
-  },
+  options: RuntimeSystemOptions<T>,
 ): ActorSystem<T> {
   return new RuntimeSystem(rootActor, options)
 }

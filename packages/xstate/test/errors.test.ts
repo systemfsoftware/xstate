@@ -1147,12 +1147,6 @@ describe('error handling', () => {
   })
 
   it('actor continues to work normally after emit callback errors', async () => {
-    // const machine = setup({
-    //   types: {
-    //     emitted: {} as { type: 'emitted'; foo: string }
-    //   }
-    // }).
-
     const machine = createMachine({
       schemas: {
         emitted: {
@@ -1163,9 +1157,6 @@ describe('error handling', () => {
         },
       },
       on: {
-        // someEvent: {
-        //   actions: emit({ type: 'emitted', foo: 'bar' })
-        // }
         someEvent: (_, enq) => {
           enq.emit({
             type: 'emitted',
@@ -1175,28 +1166,27 @@ describe('error handling', () => {
       },
     })
 
-    const actor = createActor(machine).start()
-    let errorThrown = false
+    const reported: string[] = []
+    const actor = createActor(machine, {
+      reportUnhandledError: (error) => reported.push(getErrorMessage(error)),
+    }).start()
 
     actor.on('emitted', () => {
-      errorThrown = true
       throw new Error('oops')
     })
 
-    // Send first event - should trigger error but actor should remain active
     actor.send({ type: 'someEvent' })
-    await new Promise((resolve) => setTimeout(resolve, 10))
 
-    expect(errorThrown).toBe(true)
+    expect(reported).toEqual(['oops'])
     expect(actor.getSnapshot().status).toEqual('active')
 
-    // Send second event - should work normally without error
     const event = await new Promise<AnyEventObject>((res) => {
       actor.on('emitted', res)
       actor.send({ type: 'someEvent' })
     })
 
     expect(event['foo']).toBe('bar')
+    expect(reported).toEqual(['oops', 'oops'])
     expect(actor.getSnapshot().status).toEqual('active')
   })
 
