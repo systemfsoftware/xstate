@@ -69,7 +69,6 @@ export type Refusal =
   | { readonly _tag: 'PlannedProjectEscapesRoot'; readonly project: string }
   | { readonly _tag: 'MutationPackageWithoutMutants'; readonly package: string }
   | { readonly _tag: 'VacuousPlan' }
-  | { readonly _tag: 'ShardUnknown'; readonly shard: string; readonly labels: readonly string[] }
 
 export const renderRefusal = (refusal: Refusal): string => {
   switch (refusal._tag) {
@@ -91,8 +90,6 @@ export const renderRefusal = (refusal: Refusal): string => {
       return `${refusal.package}: declares a mutation script but stryker plan scheduled no mutants for it, and no ${MUTATION_EXEMPTION_RULE} debt-ledger entry exempts it`
     case 'VacuousPlan':
       return 'stryker plan scheduled no mutants and no debt-ledger entry exempts anything; the release gate refuses a vacuous set'
-    case 'ShardUnknown':
-      return `unknown shard ${refusal.shard}; plan has ${refusal.labels.join(', ')}`
   }
 }
 
@@ -413,32 +410,9 @@ export const gatePlan = async ({ root, planFile, changed }: GateInput): Promise<
   }
 }
 
-export interface ShardProjects {
-  readonly index: number
-  readonly projects: readonly string[]
-}
-
-export type ShardSelection =
-  | { readonly ok: true; readonly selected: ShardProjects }
-  | { readonly ok: false; readonly refusal: Refusal }
-
-export const selectShardProjects = async (
-  { root, planFile, shard }: { readonly root: string; readonly planFile: string; readonly shard: string },
-): Promise<ShardSelection> => {
-  const resolvedPlanFile = resolve(root, planFile)
-  const planText = await readText(resolvedPlanFile)
-  if (planText === undefined) return { ok: false, refusal: { _tag: 'PlanMissing', file: resolvedPlanFile } }
-  const read = decodePlan(resolvedPlanFile, planText)
-  if (!read.ok) return read
-  const found = read.plan.shards.find((candidate) => labelOf(candidate) === shard)
-  return found === undefined
-    ? { ok: false, refusal: { _tag: 'ShardUnknown', shard, labels: read.plan.shards.map(labelOf) } }
-    : { ok: true, selected: { index: found.index, projects: found.projects.map((entry) => entry.project) } }
-}
-
 if (import.meta.main) {
   const args = parseArgs(Deno.args, {
-    string: ['root', 'plan', 'out', 'changed', 'scope-out', 'shard'],
+    string: ['root', 'plan', 'out', 'changed', 'scope-out'],
     default: { root: '.' },
   })
   const mode = args._[0]
@@ -462,21 +436,6 @@ if (import.meta.main) {
     const projects = resolved.scope.map((entry) => entry.project).sort()
     await emit(`${projects.join(',')}\n`)
     if (args['scope-out'] !== undefined) await Deno.writeTextFile(args['scope-out'], `${renderScope(resolved.scope)}\n`)
-    Deno.exit(0)
-  }
-
-  if (mode === 'shard') {
-    if (args.plan === undefined || args.shard === undefined) {
-      console.error('stryker-plan-gate: shard needs --plan <file> --shard <index/count>')
-      Deno.exit(2)
-    }
-    const selection = await selectShardProjects({ root: args.root, planFile: args.plan, shard: args.shard })
-    if (!selection.ok) {
-      console.error(`stryker-plan-gate: ${renderRefusal(selection.refusal)}`)
-      Deno.exit(2)
-    }
-    const { index, projects } = selection.selected
-    await emit(projects.map((project) => `${index}\t${project}\n`).join(''))
     Deno.exit(0)
   }
 
