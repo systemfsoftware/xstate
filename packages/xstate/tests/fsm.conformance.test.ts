@@ -153,6 +153,7 @@ export const typeLevelContract = () => {
 
   const singleSnapshot = singleStateMachine.initialState
   const singleActor = createActor(singleStateMachine)
+  const [, singleEffects] = singleStateMachine.transition(singleSnapshot, { type: 'inc' })
 
   return [
     singleStateMachine satisfies ActorLogic<FSMSnapshot<{ count: number }, 'active'>, { type: 'inc' }>,
@@ -161,7 +162,7 @@ export const typeLevelContract = () => {
     singleSnapshot.value satisfies 'active',
     singleSnapshot.context.count satisfies number,
     singleStateMachine.transition(singleSnapshot, { type: 'inc' })[0].context.count satisfies number,
-    singleStateMachine.transition(singleSnapshot, { type: 'inc' })[1] satisfies never[],
+    true satisfies Equal<typeof singleEffects, never[]>,
     initialTransition(singleStateMachine)[0].value satisfies 'active',
     transition(incMachine, incMachine.initialState, { type: 'inc' })[0].value satisfies 'active' | 'stopped',
     singleActor.getSnapshot().value satisfies 'active',
@@ -268,6 +269,8 @@ const liveness = (observed: FsmLedger): boolean =>
     observed.inheritedEventsIgnored,
     observed.inheritedPatchKeys,
     observed.unchangedPatches,
+    observed.absentReturns,
+    observed.bareStateEvents,
     observed.bareContexts,
     observed.emissions,
     observed.drivers.pure,
@@ -316,7 +319,7 @@ Feature('Judging the published FSM against a model of its flat event table', { t
             (s) => Effect.succeed(s.subject.observed),
           ),
           And(
-            'no-op transitions, target changes, context patches, patches that change nothing, function transitions, ignored inherited events and patch keys, bare contexts and actor emissions all occurred, for every driver and factory',
+            'no-op transitions, target changes, context patches, patches that change nothing, function transitions, transition functions that return nothing, events in a state without an on table, ignored inherited events and patch keys, bare contexts and actor emissions all occurred, for every driver and factory',
           )(
             (s, expect) =>
               expect(s.observed, JSON.stringify(s.observed)).toSatisfy(

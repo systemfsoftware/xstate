@@ -387,12 +387,14 @@ type FSMResolution = {
   readonly patch: FSMContextPatch<MachineContext> | undefined
 }
 
+const noTransition: FSMTransitionConfig<MachineContext, string> = {}
+
 const resolutionOfConfig = (
   config: FSMTransitionConfig<MachineContext, string> | undefined,
-): FSMResolution =>
-  config === undefined
-    ? { target: undefined, patch: undefined }
-    : { target: config.target, patch: config.context }
+): FSMResolution => {
+  const resolved = config ?? noTransition
+  return { target: resolved.target, patch: resolved.context }
+}
 
 const configTransitionOf = (
   transition: AnyFSMTransition | undefined,
@@ -417,10 +419,16 @@ const ownTransitionOf = (
   type: string,
 ): AnyFSMTransition | undefined => Object.hasOwn(on, type) ? on[type] : undefined
 
+const noOn: FSMOn<MachineContext, EventObject, string> = {}
+
+const onTableOr = (
+  on: FSMOn<MachineContext, EventObject, string> | undefined,
+): FSMOn<MachineContext, EventObject, string> => on ?? noOn
+
 const onTableFor = (
   config: AnyFSMConfig,
   value: string,
-): FSMOn<MachineContext, EventObject, string> | undefined => config.states[value]?.on
+): FSMOn<MachineContext, EventObject, string> => onTableOr(config.states[value]?.on)
 
 const patchChangesContext = (
   patch: FSMContextPatch<MachineContext> | undefined,
@@ -465,12 +473,8 @@ const fsmOf = (config: AnyFSMConfig): AnyFSM => {
     getInitialSnapshot: () => initialState,
     getPersistedSnapshot: (snapshot) => snapshot,
     transition(snapshot, event) {
-      const on = onTableFor(config, snapshot.value)
-      if (on === undefined) {
-        return [snapshot, []]
-      }
       const resolution = resolvedTransitionOf(
-        ownTransitionOf(on, event.type),
+        ownTransitionOf(onTableFor(config, snapshot.value), event.type),
         snapshot.context,
         event,
       )

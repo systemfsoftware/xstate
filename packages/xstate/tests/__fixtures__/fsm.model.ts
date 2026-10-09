@@ -16,11 +16,13 @@ const ConfigSlot = Schema.TaggedStruct('Config', {
   inherited: InheritedPatchChoice,
 })
 const AddSlot = Schema.TaggedStruct('Add', { target: TargetChoice })
+const AbsentSlot = Schema.TaggedStruct('Absent', {})
 
 const PlainSlot = Schema.Union([EmptySlot, TargetSlot, ConfigSlot])
-const BumpSlot = Schema.Union([EmptySlot, TargetSlot, ConfigSlot, AddSlot])
+const BumpSlot = Schema.Union([EmptySlot, TargetSlot, ConfigSlot, AddSlot, AbsentSlot])
 
 const PrototypeChoice = Schema.Union([Schema.Literals(['keep']), StateName])
+const BareStateChoice = Schema.Union([Schema.Literals(['none']), StateName])
 
 export const FsmMachine = Schema.Struct({
   initial: StateName,
@@ -29,9 +31,10 @@ export const FsmMachine = Schema.Struct({
   noop: PlainSlot,
   bump: BumpSlot,
   inheritedToggle: PrototypeChoice,
+  bareState: BareStateChoice,
 })
 export type FsmMachine = Schema.Schema.Type<typeof FsmMachine>
-export type FsmSlot = Schema.Schema.Type<typeof PlainSlot> | Schema.Schema.Type<typeof AddSlot>
+export type FsmSlot = Schema.Schema.Type<typeof BumpSlot>
 
 export type FsmStateName = Schema.Schema.Type<typeof StateName>
 
@@ -87,6 +90,9 @@ const slotFor = (machine: FsmMachine, event: FsmEvent): FsmSlot =>
     Match.orElse(() => emptySlot),
   )
 
+const slotIn = (machine: FsmMachine, value: string, event: FsmEvent): FsmSlot =>
+  value === machine.bareState ? emptySlot : slotFor(machine, event)
+
 const bumpBy = (event: FsmEvent): number => event.type === 'bump' ? event.by : 0
 
 const targetValue = (choice: 'same' | 'idle' | 'active' | 'done'): string | undefined =>
@@ -124,6 +130,7 @@ const resolveSlot = (slot: FsmSlot, event: FsmEvent, context: FsmContext): SlotR
       target: targetValue(add.target),
       patch: { count: (context.count ?? 0) + bumpBy(event) },
     }),
+    Absent: (): SlotResolution => ({ target: undefined, patch: undefined }),
   })
 
 const entryDiffers = (key: string, value: string | number, context: FsmContext): boolean =>
@@ -138,7 +145,7 @@ interface FsmSim {
 }
 
 const stepOf = (machine: FsmMachine, sim: FsmSim, event: FsmEvent): FsmSim => {
-  const resolution = resolveSlot(slotFor(machine, event), event, sim.context)
+  const resolution = resolveSlot(slotIn(machine, sim.value, event), event, sim.context)
   const value = resolution.target ?? sim.value
   const context = patchChanges(resolution.patch, sim.context)
     ? { ...sim.context, ...resolution.patch }

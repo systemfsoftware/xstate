@@ -99,12 +99,15 @@ const addTransition = (
   context: { count: (context.count ?? 0) + event.by },
 })
 
+const absentTransition = (): FSMTransitionFunction<Ctx, Extract<Ev, { type: 'bump' }>, St> => () => undefined
+
 const plainEntryOf = (slot: FsmSlot, behaviour: Behaviour): St | FSMTransitionConfig<Ctx, St> | undefined =>
   Match.valueTags(slot, {
     Empty: () => undefined,
     Target: (target) => stateOf(target.target),
     Config: (config) => configTransition(config, behaviour),
     Add: () => undefined,
+    Absent: () => undefined,
   })
 
 const bumpEntryOf = (
@@ -116,6 +119,7 @@ const bumpEntryOf = (
     Target: (target) => stateOf(target.target),
     Config: (config) => configTransition(config, behaviour),
     Add: (add) => addTransition(add.target),
+    Absent: () => absentTransition(),
   })
 
 const toggleEntry = (slot: FsmSlot, behaviour: Behaviour): { toggle?: St | FSMTransitionConfig<Ctx, St> } => {
@@ -150,10 +154,13 @@ const onTableOf = (spec: FsmMachine, behaviour: Behaviour) =>
     ? { ...ownEntriesOf(spec, behaviour), ...prototypeEntriesOf(spec) }
     : Object.setPrototypeOf(ownEntriesOf(spec, behaviour), prototypeEntriesOf(spec))
 
+const stateEntryOf = <TOn>(spec: FsmMachine, state: St, on: TOn): { readonly on?: TOn } =>
+  spec.bareState === state ? {} : { on }
+
 const statesOf = (spec: FsmMachine, behaviour: Behaviour) => ({
-  idle: { on: onTableOf(spec, behaviour) },
-  active: { on: onTableOf(spec, behaviour) },
-  done: { on: onTableOf(spec, behaviour) },
+  idle: stateEntryOf(spec, 'idle', onTableOf(spec, behaviour)),
+  active: stateEntryOf(spec, 'active', onTableOf(spec, behaviour)),
+  done: stateEntryOf(spec, 'done', onTableOf(spec, behaviour)),
 })
 
 const eventSchemas = {
@@ -201,13 +208,17 @@ const slotOf = (spec: FsmMachine, event: FsmEvent): FsmSlot | undefined =>
     Match.orElse(() => undefined),
   )
 
-const slotIsAdd = (spec: FsmMachine, event: FsmEvent): boolean => slotOf(spec, event)?._tag === 'Add'
+const activeSlotOf = (spec: FsmMachine, previous: Snapshot, event: FsmEvent): FsmSlot | undefined =>
+  previous.value === spec.bareState ? undefined : slotOf(spec, event)
 
-const slotCarriesPatch = (spec: FsmMachine, event: FsmEvent): boolean =>
-  ['Config', 'Add'].includes(slotOf(spec, event)?._tag ?? 'Empty')
+const activeSlotIs = (tag: FsmSlot['_tag'], spec: FsmMachine, previous: Snapshot, event: FsmEvent): boolean =>
+  activeSlotOf(spec, previous, event)?._tag === tag
+
+const slotCarriesPatch = (spec: FsmMachine, previous: Snapshot, event: FsmEvent): boolean =>
+  ['Config', 'Add'].includes(activeSlotOf(spec, previous, event)?._tag ?? 'Empty')
 
 const keepsPatchedContext = (spec: FsmMachine, event: FsmEvent, previous: Snapshot, next: Snapshot): boolean =>
-  slotCarriesPatch(spec, event) && next.context === previous.context
+  slotCarriesPatch(spec, previous, event) && next.context === previous.context
 
 type Transition = Fsm['transition']
 
@@ -232,8 +243,8 @@ const subjectMachineOf = (command: FsmCommand, behaviour: Behaviour): Fsm => {
   return { ...fsm, transition: transitionWith[behaviour.fault](fsm, command.machine) }
 }
 
-const slotCarriesInheritedPatch = (spec: FsmMachine, event: FsmEvent): boolean => {
-  const slot = slotOf(spec, event)
+const slotCarriesInheritedPatch = (spec: FsmMachine, previous: Snapshot, event: FsmEvent): boolean => {
+  const slot = activeSlotOf(spec, previous, event)
   return slot?._tag === 'Config' && slot.inherited !== 'none'
 }
 
@@ -245,6 +256,8 @@ export interface FsmLedger {
   inheritedEventsIgnored: number
   inheritedPatchKeys: number
   unchangedPatches: number
+  absentReturns: number
+  bareStateEvents: number
   bareContexts: number
   emissions: number
   drivers: Record<FsmDriver, number>
@@ -255,10 +268,12 @@ const noteStep = (ledger: FsmLedger, spec: FsmMachine, event: FsmEvent, previous
   ledger.noopTransitions += count(previous === next)
   ledger.targetChanges += count(previous.value !== next.value)
   ledger.contextPatches += count(previous.context !== next.context)
-  ledger.functionTransitions += count(slotIsAdd(spec, event))
+  ledger.functionTransitions += count(activeSlotIs('Add', spec, previous, event))
   ledger.inheritedEventsIgnored += count(isInherited(event.type) && previous === next)
-  ledger.inheritedPatchKeys += count(slotCarriesInheritedPatch(spec, event))
+  ledger.inheritedPatchKeys += count(slotCarriesInheritedPatch(spec, previous, event))
   ledger.unchangedPatches += count(keepsPatchedContext(spec, event, previous, next))
+  ledger.absentReturns += count(activeSlotIs('Absent', spec, previous, event))
+  ledger.bareStateEvents += count(previous.value === spec.bareState)
 }
 
 type JsonValue = object | string | number | boolean | null | undefined
@@ -389,6 +404,8 @@ const emptyLedger = (): FsmLedger => ({
   inheritedEventsIgnored: 0,
   inheritedPatchKeys: 0,
   unchangedPatches: 0,
+  absentReturns: 0,
+  bareStateEvents: 0,
   bareContexts: 0,
   emissions: 0,
   drivers: { pure: 0, entry: 0, actor: 0, persisted: 0 },
