@@ -25,8 +25,13 @@ export const FlatMachine = Schema.Struct({
 })
 export type FlatMachine = Schema.Schema.Type<typeof FlatMachine>
 
-const TraverseQuery = Schema.Struct({
-  operation: Schema.Literals(['adjacency', 'shortest', 'simple']),
+const Call = Schema.Literals(['data-first', 'data-first-default', 'data-last', 'data-last-default'])
+export type Call = Schema.Schema.Type<typeof Call>
+
+const AdjacencyCall = Schema.Literals(['data-first', 'data-last'])
+export type AdjacencyCall = Schema.Schema.Type<typeof AdjacencyCall>
+
+const traversalFields = {
   events: Schema.Literals(['default', 'array', 'function']),
   filter: Schema.Boolean,
   stop: Schema.Boolean,
@@ -35,11 +40,21 @@ const TraverseQuery = Schema.Struct({
   fromSecond: Schema.Boolean,
   serialize: Schema.Literals(['default', 'value']),
   input: Schema.Literals(['zero', 'one']),
-})
+}
+
+const TraversalQuery = Schema.Struct(traversalFields)
+export type TraversalQuery = Schema.Schema.Type<typeof TraversalQuery>
+
+const TraverseQuery = Schema.Union([
+  Schema.Struct({ operation: Schema.Literals(['shortest']), call: Call, ...traversalFields }),
+  Schema.Struct({ operation: Schema.Literals(['simple']), call: Call, ...traversalFields }),
+  Schema.Struct({ operation: Schema.Literals(['adjacency']), call: AdjacencyCall, ...traversalFields }),
+])
 export type TraverseQuery = Schema.Schema.Type<typeof TraverseQuery>
 
 const ReplayQuery = Schema.Struct({
   candidate: Schema.Literals(['none', 'last']),
+  call: Call,
   filter: Schema.Boolean,
   stop: Schema.Boolean,
   target: Schema.Boolean,
@@ -80,13 +95,37 @@ export type ParallelRegion = Schema.Schema.Type<typeof ParallelRegion>
 export const ParallelSpec = Schema.Struct({ left: ParallelRegion, right: ParallelRegion })
 export type ParallelSpec = Schema.Schema.Type<typeof ParallelSpec>
 
+const PathRow = Schema.Struct({ state: StateName, event: EventName })
+export type PathRow = Schema.Schema.Type<typeof PathRow>
+
+const PathSpec = Schema.Struct({
+  state: StateName,
+  weight: Schema.Literals([0, 1, 2]),
+  steps: Schema.Array(PathRow),
+})
+export type PathSpec = Schema.Schema.Type<typeof PathSpec>
+
+const JoinTail = Schema.Struct({
+  state: StateName,
+  weight: Schema.Literals([0, 1, 2]),
+  event: EventName,
+  rest: Schema.Array(PathRow),
+  starts: Schema.Literals(['head', 'wayward', 'nothing']),
+})
+export type JoinTail = Schema.Schema.Type<typeof JoinTail>
+
+const JoinCall = Schema.Literals(['data-first', 'data-last'])
+export type JoinCall = Schema.Schema.Type<typeof JoinCall>
+
 export const GraphCommand = Schema.Union([
   Schema.TaggedStruct('Traverse', { machine: FlatMachine, query: TraverseQuery }),
   Schema.TaggedStruct('Replay', { machine: FlatMachine, sequence: Schema.Array(EventName), query: ReplayQuery }),
   Schema.TaggedStruct('Structure', { tree: TreeSpec }),
   Schema.TaggedStruct('Parallel', { spec: ParallelSpec }),
+  Schema.TaggedStruct('Join', { head: PathSpec, tail: JoinTail, call: JoinCall }),
 ])
 export type GraphCommand = Schema.Schema.Type<typeof GraphCommand>
+export type JoinCommand = Extract<GraphCommand, { readonly _tag: 'Join' }>
 
 export interface Sim {
   readonly value: StateName
@@ -129,6 +168,12 @@ export type GraphResponse =
     readonly shortest: ReadonlyArray<ReadonlyArray<string>>
     readonly simple: ReadonlyArray<ReadonlyArray<string>>
     readonly descendantIds: ReadonlyArray<string>
+  }
+  | {
+    readonly _tag: 'joined'
+    readonly state: string
+    readonly weight: number
+    readonly steps: ReadonlyArray<{ readonly state: string; readonly event: string }>
   }
   | { readonly _tag: 'failed'; readonly message: string }
 
@@ -295,8 +340,40 @@ const traversalFrom = (
   serialize: serializerOf(query.serialize),
 })
 
+export const isDefaultCall = (call: Call | AdjacencyCall): boolean =>
+  call === 'data-first-default' || call === 'data-last-default'
+
+const effectiveTraversalQuery = (query: TraverseQuery): TraversalQuery =>
+  isDefaultCall(query.call)
+    ? {
+      events: 'default',
+      filter: false,
+      stop: false,
+      target: false,
+      limit: 'unbounded',
+      fromSecond: false,
+      serialize: 'default',
+      input: 'zero',
+    }
+    : query
+
+const effectiveReplayQuery = (query: ReplayQuery): ReplayQuery =>
+  isDefaultCall(query.call)
+    ? {
+      ...query,
+      candidate: 'none',
+      filter: false,
+      stop: false,
+      target: false,
+      limit: 'unbounded',
+      fromSecond: false,
+      serialize: 'default',
+      input: 'zero',
+    }
+    : query
+
 const traversalOf = (machine: FlatMachine, query: TraverseQuery): Traversal =>
-  traversalFrom(machine, machineStates(machine.states), query)
+  traversalFrom(machine, machineStates(machine.states), effectiveTraversalQuery(query))
 
 interface AdjTransition {
   readonly event: EventObjectView
@@ -789,10 +866,11 @@ const replayResponse = (
   sequence: ReadonlyArray<string>,
   query: ReplayQuery,
 ): GraphResponse => {
-  const traversal = replayTraversal(machine, query)
+  const effective = effectiveReplayQuery(query)
+  const traversal = replayTraversal(machine, effective)
   return attempt((): GraphResponse => ({
     _tag: 'paths',
-    paths: replaySteps(traversal, sequence, query.candidate === 'last')
+    paths: replaySteps(traversal, sequence, effective.candidate === 'last')
       .map((plan) => pathViewOf2(alteredPlan(plan), traversal.serialize)),
   }))
 }
@@ -912,6 +990,38 @@ const parallelResponse = (spec: ParallelSpec): GraphResponse => {
   }
 }
 
+const nextState = (name: StateName): StateName => STATE_POOL[(STATE_POOL.indexOf(name) + 1) % STATE_POOL.length] ?? name
+
+export const joinTailOf = (command: JoinCommand): PathSpec => {
+  const { tail } = command
+  const firstState = tail.starts === 'head' ? command.head.state : nextState(command.head.state)
+  return {
+    state: tail.state,
+    weight: tail.weight,
+    steps: tail.starts === 'nothing' ? [] : [{ state: firstState, event: tail.event }, ...tail.rest],
+  }
+}
+
+const joinedState = (name: StateName): string => JSON.stringify({ value: name })
+
+const joinedStep = (row: PathRow): { readonly state: string; readonly event: string } => ({
+  state: joinedState(row.state),
+  event: row.event,
+})
+
+const joinResponse = (command: JoinCommand): GraphResponse => {
+  const tail = joinTailOf(command)
+  const firstStep = tail.steps[0]
+  return firstStep === undefined || firstStep.state !== command.head.state
+    ? { _tag: 'failed', message: JOIN_MESSAGE }
+    : {
+      _tag: 'joined',
+      state: joinedState(tail.state),
+      weight: command.head.weight + tail.weight,
+      steps: [...command.head.steps, ...tail.steps.slice(1)].map(joinedStep),
+    }
+}
+
 const responseOf = (command: GraphCommand): GraphResponse =>
   Match.value(command).pipe(
     Match.tag('Traverse', (traverse): GraphResponse =>
@@ -921,6 +1031,7 @@ const responseOf = (command: GraphCommand): GraphResponse =>
     Match.tag('Replay', (replay): GraphResponse => replayResponse(replay.machine, replay.sequence, replay.query)),
     Match.tag('Structure', (structure): GraphResponse => structureResponse(structure.tree)),
     Match.tag('Parallel', (parallel): GraphResponse => parallelResponse(parallel.spec)),
+    Match.tag('Join', (join): GraphResponse => joinResponse(join)),
     Match.exhaustive,
   )
 

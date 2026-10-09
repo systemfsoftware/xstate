@@ -1,11 +1,21 @@
 import { Conformance } from '@systemfsoftware/conformance-spec'
 import { And, Gherkin, Given, it, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
-import { createActor, createLogic, createMachine, setup, types } from '@systemfsoftware/xstate'
+import {
+  createActor,
+  createLogic,
+  createMachine,
+  type EventFromLogic,
+  type InputFrom,
+  setup,
+  type SnapshotFrom,
+  types,
+} from '@systemfsoftware/xstate'
 import * as graphEntrypoint from '@systemfsoftware/xstate/graph'
 import {
   getAdjacencyMap,
   getPathsFromEvents,
   getShortestPaths,
+  getSimplePaths,
   joinPaths,
   serializeSnapshot,
 } from '@systemfsoftware/xstate/graph'
@@ -21,13 +31,48 @@ import {
   makeSimpleRevisitSubject,
   runGraphCommand,
 } from './__fixtures__/graph.js'
-import { GraphCommand, graphModel } from './__fixtures__/graph.model.js'
+import { type Call, GraphCommand, graphModel } from './__fixtures__/graph.model.js'
 
 const typedSetup = setup({
   schemas: { events: { FOO: types<{}>(), BAR: types<{}>() } },
 })
 
 const typedMachine = typedSetup.createMachine({})
+
+type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
+
+const typedJoinState = createMachine({ initial: 'a', states: { a: {} } }).resolveState({ value: 'a' })
+const typedJoinPath = {
+  state: typedJoinState,
+  weight: 1,
+  steps: [{ state: typedJoinState, event: { type: 'GO' } }],
+}
+
+const shortestDataFirst = getShortestPaths(typedMachine, { events: [{ type: 'FOO' }] })
+const shortestDataLast = getShortestPaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine)
+const shortestDataLastByDefault = getShortestPaths<typeof typedMachine>()(typedMachine)
+const simpleDataFirst = getSimplePaths(typedMachine, { events: [{ type: 'FOO' }] })
+const simpleDataLast = getSimplePaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine)
+const simpleDataLastByDefault = getSimplePaths<typeof typedMachine>()(typedMachine)
+const adjacencyDataFirst = getAdjacencyMap(typedMachine, {})
+const adjacencyDataLast = getAdjacencyMap<
+  SnapshotFrom<typeof typedMachine>,
+  EventFromLogic<typeof typedMachine>,
+  InputFrom<typeof typedMachine>
+>({})(typedMachine)
+const replayDataFirst = getPathsFromEvents(typedMachine, [{ type: 'FOO' }])
+const replayDataLast = getPathsFromEvents<
+  SnapshotFrom<typeof typedMachine>,
+  EventFromLogic<typeof typedMachine>,
+  InputFrom<typeof typedMachine>
+>([{ type: 'FOO' }], { events: [{ type: 'FOO' }] })(typedMachine)
+const replayDataLastByDefault = getPathsFromEvents<
+  SnapshotFrom<typeof typedMachine>,
+  EventFromLogic<typeof typedMachine>,
+  InputFrom<typeof typedMachine>
+>([{ type: 'FOO' }])(typedMachine)
+const joinDataFirst = joinPaths(typedJoinPath, typedJoinPath)
+const joinDataLast = joinPaths(typedJoinPath)(typedJoinPath)
 
 export const typeLevelContract = [
   getShortestPaths(typedMachine, { events: [{ type: 'FOO' }] }),
@@ -40,6 +85,36 @@ export const typeLevelContract = [
   getShortestPaths(typedMachine, { serializeEvent: () => '' }),
   getShortestPaths(typedMachine, { serializeState: () => '' }),
   getAdjacencyMap(typedMachine, {}),
+  getShortestPaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine),
+  getShortestPaths<typeof typedMachine>()(typedMachine),
+  getSimplePaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine),
+  getSimplePaths<typeof typedMachine>()(typedMachine),
+  getAdjacencyMap<
+    SnapshotFrom<typeof typedMachine>,
+    EventFromLogic<typeof typedMachine>,
+    InputFrom<typeof typedMachine>
+  >({})(typedMachine),
+  getPathsFromEvents<
+    SnapshotFrom<typeof typedMachine>,
+    EventFromLogic<typeof typedMachine>,
+    InputFrom<typeof typedMachine>
+  >([{ type: 'FOO' }], { events: [{ type: 'FOO' }] })(typedMachine),
+  getPathsFromEvents<
+    SnapshotFrom<typeof typedMachine>,
+    EventFromLogic<typeof typedMachine>,
+    InputFrom<typeof typedMachine>
+  >([{ type: 'FOO' }])(typedMachine),
+  joinPaths(typedJoinPath)(typedJoinPath),
+  // @ts-expect-error the data-last form refuses an undeclared event type too
+  getShortestPaths<typeof typedMachine>({ events: [{ type: 'UNKNOWN' }] })(typedMachine),
+  true satisfies Same<typeof shortestDataLast, typeof shortestDataFirst>,
+  true satisfies Same<typeof shortestDataLastByDefault, typeof shortestDataFirst>,
+  true satisfies Same<typeof simpleDataLast, typeof simpleDataFirst>,
+  true satisfies Same<typeof simpleDataLastByDefault, typeof simpleDataFirst>,
+  true satisfies Same<typeof adjacencyDataLast, typeof adjacencyDataFirst>,
+  true satisfies Same<typeof replayDataLast, typeof replayDataFirst>,
+  true satisfies Same<typeof replayDataLastByDefault, typeof replayDataFirst>,
+  true satisfies Same<typeof joinDataLast, typeof joinDataFirst>,
 ] as const
 
 const Feature = makeFeature({ it })
@@ -47,8 +122,27 @@ const Feature = makeFeature({ it })
 const sequences = 64
 const operations = 6
 
+const requiredForms: ReadonlyArray<readonly [keyof GraphLedger['forms'], Call]> = [
+  ['adjacency', 'data-first'],
+  ['adjacency', 'data-last'],
+  ['shortest', 'data-first'],
+  ['shortest', 'data-first-default'],
+  ['shortest', 'data-last'],
+  ['shortest', 'data-last-default'],
+  ['simple', 'data-first'],
+  ['simple', 'data-first-default'],
+  ['simple', 'data-last'],
+  ['simple', 'data-last-default'],
+  ['replay', 'data-first'],
+  ['replay', 'data-first-default'],
+  ['replay', 'data-last'],
+  ['replay', 'data-last-default'],
+]
+
 const positives = (observed: GraphLedger): ReadonlyArray<number> => [
   ...Object.values(observed.operations),
+  ...requiredForms.map(([operation, call]) => observed.forms[operation][call]),
+  ...Object.values(observed.joins).flatMap((outcomes) => Object.values(outcomes)),
   observed.counters,
   observed.plain,
   observed.inputSeeded,
@@ -90,38 +184,6 @@ const counterLogic = createLogic({
 
 const plainMachine = createMachine({ initial: 'a', states: { a: {} } })
 const countedMachine = createMachine({ context: { count: 0 }, initial: 'a', states: { a: {} } })
-
-const joinMachine = createMachine({
-  initial: 'a',
-  states: {
-    a: { on: { NEXT: { target: 'b' } } },
-    b: { on: { TO_C: { target: 'c' } } },
-    c: {},
-  },
-})
-
-const joinEventTypes = (): ReadonlyArray<string> => {
-  const toB = getPathsFromEvents(joinMachine, [{ type: 'NEXT' }])[0]
-  const toC = toB === undefined
-    ? undefined
-    : getPathsFromEvents(joinMachine, [{ type: 'TO_C' }], { fromState: toB.state })[0]
-  return toB === undefined || toC === undefined ? [] : joinPaths(toB, toC).steps.map((step) => step.event.type)
-}
-
-const joinRefusal = (): string => {
-  const toB = getPathsFromEvents(joinMachine, [{ type: 'NEXT' }])[0]
-  const toCFromA = getPathsFromEvents(joinMachine, [{ type: 'TO_C' }])[0]
-  return toB === undefined || toCFromA === undefined ? 'missing path' : thrownMessageOf(() => joinPaths(toB, toCFromA))
-}
-
-const thrownMessageOf = (compute: () => object): string => {
-  try {
-    compute()
-    return 'no error'
-  } catch (error) {
-    return error instanceof Error ? error.message : 'unrecognized failure'
-  }
-}
 
 const plainReplay = () => {
   const path = getPathsFromEvents(counterLogic, [{ type: 'INC' }], { input: 10, limit: 1 })[0]
@@ -172,11 +234,12 @@ Feature('Judging the published graph walk against a model of its traversal', { t
             'observed',
             (s) => Effect.succeed(s.subject.observed),
           ),
-          And('every operation, machine shape, structural target and query option occurred')((s, expect) =>
-            expect(s.observed, JSON.stringify(s.observed)).toSatisfy(
-              liveness,
-              'the run exercised adjacency, shortest, simple, replay and structure queries, counted and plain machines, input seeding, filtering, stopping, targeting, limits, from-state overrides, value serialization, branches and every structural target kind',
-            )
+          And('every operation, call form, join outcome, machine shape, structural target and query option occurred')(
+            (s, expect) =>
+              expect(s.observed, JSON.stringify(s.observed)).toSatisfy(
+                liveness,
+                'the run exercised adjacency, shortest, simple, replay and join queries in every published call form, joined and refused both joins, counted and plain machines, input seeding, filtering, stopping, targeting, limits, from-state overrides, value serialization, branches and every structural target kind',
+              ),
           ),
         ),
     )
@@ -260,26 +323,6 @@ Feature('Judging the published graph walk against a model of its traversal', { t
             plain: '{"value":"a"}',
             counted: '{"value":"a","context":{"count":0}}',
           })
-        ),
-      ),
-    )
-
-    scenario(
-      'Joining two paths that meet head to tail yields the concatenated path',
-      Gherkin.Do.pipe(
-        Given('a path to b joined with a path from b to c')('events', () => Effect.succeed(joinEventTypes())),
-        Then('the joined events run init, NEXT, TO_C')((s, expect) =>
-          expect(s.events, JSON.stringify(s.events)).toEqual(['@xstate.init', 'NEXT', 'TO_C'])
-        ),
-      ),
-    )
-
-    scenario(
-      'Joining two paths whose source and target states differ is refused',
-      Gherkin.Do.pipe(
-        Given('a path to b joined with a path that starts at a')('message', () => Effect.succeed(joinRefusal())),
-        Then('the join is refused by name')((s, expect) =>
-          expect(s.message, JSON.stringify(s.message)).toContain('Paths cannot be joined')
         ),
       ),
     )

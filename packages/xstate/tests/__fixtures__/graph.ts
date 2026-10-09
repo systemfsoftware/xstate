@@ -1,4 +1,11 @@
-import { type AnyStateMachine, createMachine, type StateValue } from '@systemfsoftware/xstate'
+import {
+  type AnyStateMachine,
+  createMachine,
+  type EventFromLogic,
+  type InputFrom,
+  type SnapshotFrom,
+  type StateValue,
+} from '@systemfsoftware/xstate'
 import {
   adjacencyMapToArray,
   type DirectedGraphNode,
@@ -7,23 +14,35 @@ import {
   getPathsFromEvents,
   getShortestPaths,
   getSimplePaths,
+  joinPaths,
+  serializeSnapshot,
+  type StatePath,
   toDirectedGraph,
 } from '@systemfsoftware/xstate/graph'
 import { Context, Effect, Layer, Match } from 'effect'
 import {
+  type Call,
+  type EventName,
   type FlatMachine,
   flatMachine,
   type GraphCommand,
   graphEvents,
   type GraphResponse,
+  isDefaultCall,
+  type JoinCall,
+  type JoinCommand,
+  joinTailOf,
   type ParallelEdge,
   type ParallelRegion,
   type ParallelSpec,
   type ParallelState,
   pathProjection,
+  type PathSpec,
   type PathView,
+  type ReplayQuery,
   sortSeqs,
   type StateName,
+  type TraverseQuery,
   type TreeNodeModel,
   treeShape,
   type TreeTransitionSpec,
@@ -61,8 +80,8 @@ const machineOf = (machine: FlatMachine) => {
   const states = flatMachine.states(machine.states)
   return createMachine({
     initial: states[0] ?? 'a',
-    context: ({ input }: { readonly input: { readonly start: number } }) =>
-      machine.inputSeeded ? { count: input.start } : (machine.counter ? { count: 0 } : {}),
+    context: ({ input }: { readonly input: { readonly start?: number } | undefined }) =>
+      machine.inputSeeded ? { count: input?.start ?? 0 } : (machine.counter ? { count: 0 } : {}),
     states: Object.fromEntries(
       states.map((state) => [
         state,
@@ -86,6 +105,9 @@ const projectState = (mode: 'default' | 'value') => (snapshot: Snapshotish): str
     })
 
 const valueStateString = (snapshot: Snapshotish): string => JSON.stringify(snapshot.value)
+
+const effectiveSerialize = (query: TraverseQuery | ReplayQuery): 'default' | 'value' =>
+  isDefaultCall(query.call) ? 'default' : query.serialize
 
 const stopPredicate = (states: ReadonlyArray<StateName>) => (snapshot: Snapshotish): boolean =>
   snapshot.value === flatMachine.lastState(states)
@@ -143,25 +165,48 @@ const runTraverse = (
   const machine = machineOf(command.machine)
   const states = flatMachine.states(command.machine.states)
   const query = command.query
-  const serialize = projectState(query.serialize)
+  const serialize = projectState(effectiveSerialize(query))
   const ignoreFilter = behaviour.ignoreFilter && query.operation === 'adjacency'
   const options = traverseOptions(machine, command.machine, states, query, ignoreFilter)
-  return Match.value(query.operation).pipe(
-    Match.when('adjacency', (): GraphResponse =>
+  return Match.value(query).pipe(
+    Match.when({ operation: 'adjacency' }, (adjacency): GraphResponse =>
       attempt((): GraphResponse => ({
         _tag: 'adjacency',
-        entries: adjacencyMapToArray(getAdjacencyMap(machine, options)).map((entry) => ({
+        entries: Match.value(adjacency.call).pipe(
+          Match.when('data-first', () => adjacencyMapToArray(getAdjacencyMap(machine, options))),
+          Match.when('data-last', () =>
+            adjacencyMapToArray(
+              getAdjacencyMap<
+                SnapshotFrom<typeof machine>,
+                EventFromLogic<typeof machine>,
+                InputFrom<typeof machine>
+              >(options)(machine),
+            )),
+          Match.exhaustive,
+        ).map((entry) => ({
           state: serialize(entry.state),
           event: graphEvents.json(entry.event),
           nextState: serialize(entry.nextState),
         })),
       }))),
-    Match.when('shortest', (): GraphResponse => {
-      const paths = getShortestPaths(machine, options).map((path) => pathProjection.view(path, serialize))
+    Match.when({ operation: 'shortest' }, (shortest): GraphResponse => {
+      const paths = Match.value(shortest.call).pipe(
+        Match.when('data-first', () => getShortestPaths(machine, options)),
+        Match.when('data-first-default', () => getShortestPaths(machine)),
+        Match.when('data-last', () => getShortestPaths<typeof machine>(options)(machine)),
+        Match.when('data-last-default', () => getShortestPaths<typeof machine>()(machine)),
+        Match.exhaustive,
+      ).map((path) => pathProjection.view(path, serialize))
       return { _tag: 'paths', paths: behaviour.reverseShortest ? paths.toReversed() : paths }
     }),
-    Match.when('simple', (): GraphResponse => {
-      const paths = getSimplePaths(machine, options).map((path) => pathProjection.view(path, serialize))
+    Match.when({ operation: 'simple' }, (simple): GraphResponse => {
+      const paths = Match.value(simple.call).pipe(
+        Match.when('data-first', () => getSimplePaths(machine, options)),
+        Match.when('data-first-default', () => getSimplePaths(machine)),
+        Match.when('data-last', () => getSimplePaths<typeof machine>(options)(machine)),
+        Match.when('data-last-default', () => getSimplePaths<typeof machine>()(machine)),
+        Match.exhaustive,
+      ).map((path) => pathProjection.view(path, serialize))
       return { _tag: 'paths', paths: behaviour.duplicateSimple ? duplicateFirst(paths) : paths }
     }),
     Match.exhaustive,
@@ -198,11 +243,71 @@ const runReplay = (
     ...(command.machine.counter || command.machine.inputSeeded ? { input: startSignals(query) } : {}),
   }
   const events = command.sequence.map((type) => ({ type }))
-  const serialize = projectState(query.serialize)
+  const serialize = projectState(effectiveSerialize(query))
+  const plantedCandidate = behaviour.firstCandidate && query.candidate === 'last'
+    ? { events: candidates, serializeEvent: () => 'E' }
+    : undefined
   return attempt((): GraphResponse => ({
     _tag: 'paths',
-    paths: getPathsFromEvents(machine, events, options).map((path) => pathProjection.view(path, serialize)),
+    paths: Match.value(query.call).pipe(
+      Match.when('data-first', () => getPathsFromEvents(machine, events, options)),
+      Match.when('data-first-default', () => getPathsFromEvents(machine, events, plantedCandidate)),
+      Match.when('data-last', () =>
+        getPathsFromEvents<
+          SnapshotFrom<typeof machine>,
+          EventFromLogic<typeof machine>,
+          InputFrom<typeof machine>
+        >(events, options)(machine)),
+      Match.when('data-last-default', () =>
+        getPathsFromEvents<
+          SnapshotFrom<typeof machine>,
+          EventFromLogic<typeof machine>,
+          InputFrom<typeof machine>
+        >(events, plantedCandidate)(machine)),
+      Match.exhaustive,
+    ).map((path) => pathProjection.view(path, serialize)),
   }))
+}
+
+const JOIN_MACHINE = createMachine({ initial: 'a', states: { a: {}, b: {}, c: {}, d: {} } })
+
+type JoinSnapshot = SnapshotFrom<typeof JOIN_MACHINE>
+type JoinEvent = { readonly type: EventName }
+
+const joinSnapshot = (name: StateName): JoinSnapshot => JOIN_MACHINE.resolveState({ value: name })
+
+const joinSnapshots = (): Record<StateName, JoinSnapshot> => ({
+  a: joinSnapshot('a'),
+  b: joinSnapshot('b'),
+  c: joinSnapshot('c'),
+  d: joinSnapshot('d'),
+})
+
+const joinPathOf = (
+  snapshots: Record<StateName, JoinSnapshot>,
+  spec: PathSpec,
+): StatePath<JoinSnapshot, JoinEvent> => ({
+  state: snapshots[spec.state],
+  weight: spec.weight,
+  steps: spec.steps.map((row) => ({ state: snapshots[row.state], event: { type: row.event } })),
+})
+
+const runJoin = (command: JoinCommand): GraphResponse => {
+  const snapshots = joinSnapshots()
+  const head = joinPathOf(snapshots, command.head)
+  const tail = joinPathOf(snapshots, joinTailOf(command))
+  return attempt((): GraphResponse => {
+    const joined = command.call === 'data-last' ? joinPaths(tail)(head) : joinPaths(head, tail)
+    return {
+      _tag: 'joined',
+      state: serializeSnapshot(joined.state),
+      weight: joined.weight,
+      steps: joined.steps.map((step) => ({
+        state: serializeSnapshot(step.state),
+        event: step.event.type,
+      })),
+    }
+  })
 }
 
 const targetSpec = (
@@ -336,8 +441,15 @@ const runParallel = (command: Extract<GraphCommand, { readonly _tag: 'Parallel' 
   }))
 }
 
+type JoinOutcome = 'joined' | 'refused-mismatch' | 'refused-empty'
+
 export interface GraphLedger {
-  readonly operations: Record<'adjacency' | 'shortest' | 'simple' | 'replay' | 'structure' | 'parallel', number>
+  readonly operations: Record<
+    'adjacency' | 'shortest' | 'simple' | 'replay' | 'structure' | 'parallel' | 'join',
+    number
+  >
+  readonly forms: Record<'adjacency' | 'shortest' | 'simple' | 'replay', Record<Call, number>>
+  readonly joins: Record<JoinCall, Record<JoinOutcome, number>>
   counters: number
   plain: number
   inputSeeded: number
@@ -364,6 +476,7 @@ const noteTree = (ledger: GraphLedger, node: TreeNodeModel): void => {
 
 const noteTraverse = (ledger: GraphLedger, command: Extract<GraphCommand, { readonly _tag: 'Traverse' }>): void => {
   ledger.operations[command.query.operation] += 1
+  ledger.forms[command.query.operation][command.query.call] += 1
   ledger.counters += command.machine.counter ? 1 : 0
   ledger.plain += command.machine.counter ? 0 : 1
   ledger.inputSeeded += command.machine.inputSeeded ? 1 : 0
@@ -379,6 +492,7 @@ const noteTraverse = (ledger: GraphLedger, command: Extract<GraphCommand, { read
 
 const noteReplay = (ledger: GraphLedger, command: Extract<GraphCommand, { readonly _tag: 'Replay' }>): void => {
   ledger.operations.replay += 1
+  ledger.forms.replay[command.query.call] += 1
   ledger.counters += command.machine.counter ? 1 : 0
   ledger.plain += command.machine.counter ? 0 : 1
   ledger.inputSeeded += command.machine.inputSeeded ? 1 : 0
@@ -403,8 +517,34 @@ const noteParallel = (ledger: GraphLedger, _command: Extract<GraphCommand, { rea
   ledger.parallel += 1
 }
 
+const joinOutcomeOf = (command: JoinCommand, response: GraphResponse): JoinOutcome =>
+  Match.value(response).pipe(
+    Match.tag('joined', (): JoinOutcome => 'joined'),
+    Match.orElse(() => command.tail.starts === 'nothing' ? 'refused-empty' : 'refused-mismatch'),
+  )
+
+const noteJoin = (ledger: GraphLedger, command: JoinCommand, response: GraphResponse): void => {
+  ledger.operations.join += 1
+  ledger.joins[command.call][joinOutcomeOf(command, response)] += 1
+}
+
+const zeroForms = (): Record<Call, number> => ({
+  'data-first': 0,
+  'data-first-default': 0,
+  'data-last': 0,
+  'data-last-default': 0,
+})
+
+const zeroOutcomes = (): Record<JoinOutcome, number> => ({
+  joined: 0,
+  'refused-mismatch': 0,
+  'refused-empty': 0,
+})
+
 const emptyLedger = (): GraphLedger => ({
-  operations: { adjacency: 0, shortest: 0, simple: 0, replay: 0, structure: 0, parallel: 0 },
+  operations: { adjacency: 0, shortest: 0, simple: 0, replay: 0, structure: 0, parallel: 0, join: 0 },
+  forms: { adjacency: zeroForms(), shortest: zeroForms(), simple: zeroForms(), replay: zeroForms() },
+  joins: { 'data-first': zeroOutcomes(), 'data-last': zeroOutcomes() },
   counters: 0,
   plain: 0,
   inputSeeded: 0,
@@ -446,20 +586,23 @@ const respond = (command: GraphCommand, behaviour: Behaviour): GraphResponse =>
     Match.tag('Replay', (replay): GraphResponse => runReplay(replay, behaviour.replay)),
     Match.tag('Structure', (structure): GraphResponse => runStructure(structure)),
     Match.tag('Parallel', (parallel): GraphResponse => runParallel(parallel)),
+    Match.tag('Join', (join): GraphResponse => runJoin(join)),
     Match.exhaustive,
   )
 
 const subjectOf = (behaviour: Behaviour): GraphHandle => {
   const observed = emptyLedger()
   const run = (command: GraphCommand): GraphResponse => {
+    const response = attempt(() => respond(command, behaviour))
     Match.value(command).pipe(
       Match.tag('Traverse', (traverse) => noteTraverse(observed, traverse)),
       Match.tag('Replay', (replay) => noteReplay(observed, replay)),
       Match.tag('Structure', (structure) => noteStructure(observed, structure)),
       Match.tag('Parallel', (parallel) => noteParallel(observed, parallel)),
+      Match.tag('Join', (join) => noteJoin(observed, join, response)),
       Match.exhaustive,
     )
-    return attempt(() => respond(command, behaviour))
+    return response
   }
   return { observed, layer: Layer.succeed(GraphSubject, run) }
 }
