@@ -188,8 +188,22 @@ function createDefaultMachineOptions<TLogic extends AnyActorLogic>(
   }
 }
 
+const memberOf = (value: object, key: string): object => new Object(Reflect.get(value, key))
+
+const memberIs = (value: object, key: string, kind: string): boolean => typeof Reflect.get(value, key) === kind
+
+const machineMethods = ['getStateNodeById', 'resolveState', 'getTransitionData']
+
 function isMachineLogic(logic: object): logic is AnyStateMachine {
-  return 'root' in logic
+  const root = memberOf(logic, 'root')
+  return [
+    typeof logic === 'object',
+    memberIs(logic, 'root', 'object'),
+    memberIs(root, 'id', 'string'),
+    memberIs(root, 'states', 'object'),
+    memberIs(memberOf(root, 'transitions'), 'values', 'function'),
+    ...machineMethods.map((method) => memberIs(logic, method, 'function')),
+  ].every(Boolean)
 }
 
 function transitionEventType(transition: { eventType: string }): string {
