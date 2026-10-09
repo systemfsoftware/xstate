@@ -3,7 +3,6 @@ name: Release gate
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -11,7 +10,7 @@ permissions:
 
 concurrency:
   group: release-gate-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   plan:
@@ -21,16 +20,11 @@ jobs:
     outputs:
       matrix: ${{ steps.publish.outputs.matrix }}
       has-shards: ${{ steps.publish.outputs.has-shards }}
-      scope: ${{ steps.projects.outputs.scope }}
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 2
           persist-credentials: false
       - uses: ./.github/actions/dev-shell
-      - name: List the files the pull request changes
-        if: github.event_name == 'pull_request'
-        run: mkdir -p .cache && git diff --name-only HEAD^1 HEAD > .cache/changed-files.txt
       - name: Discover mutation projects
         uses: ./.github/actions/sandbox
         with:
@@ -38,27 +32,21 @@ jobs:
             jsr.io
             registry.npmjs.org
           command: >-
-            deno run --config=scripts/deno.json --allow-read --allow-write --allow-env=MUTATION_SCOPE
-            scripts/stryker-plan-gate.ts projects --changed .cache/changed-files.txt
-            --out .cache/mutation-projects.txt --scope-out .cache/mutation-scope.txt
+            deno run --config=scripts/deno.json --allow-read --allow-write
+            scripts/stryker-plan-gate.ts projects --out .cache/mutation-projects.txt
       - id: projects
-        name: Publish the project list and the mutation scope
-        run: |
-          echo "projects=$(cat .cache/mutation-projects.txt)" >> "$GITHUB_OUTPUT"
-          echo "scope=$(cat .cache/mutation-scope.txt)" >> "$GITHUB_OUTPUT"
+        name: Publish the project list
+        run: echo "projects=$(cat .cache/mutation-projects.txt)" >> "$GITHUB_OUTPUT"
       - name: Plan mutation shards
         if: steps.projects.outputs.projects != ''
         uses: ./.github/actions/sandbox
         env:
           MUTATION_PROJECTS: ${{ steps.projects.outputs.projects }}
-          MUTATION_SCOPE: ${{ steps.projects.outputs.scope }}
         with:
           hosts: |
             jsr.io
             registry.npmjs.org
-          pass-env: |
-            MUTATION_PROJECTS
-            MUTATION_SCOPE
+          pass-env: MUTATION_PROJECTS
           command: ./node_modules/.bin/stryker plan --target-seconds 900 --projects "$MUTATION_PROJECTS" --out stryker-plan.json
       - name: Gate the plan
         uses: ./.github/actions/sandbox
@@ -67,9 +55,8 @@ jobs:
             jsr.io
             registry.npmjs.org
           command: >-
-            deno run --config=scripts/deno.json --allow-read --allow-write --allow-env=MUTATION_SCOPE
-            scripts/stryker-plan-gate.ts gate --plan stryker-plan.json --changed .cache/changed-files.txt
-            --out .cache/mutation-plan.out
+            deno run --config=scripts/deno.json --allow-read --allow-write
+            scripts/stryker-plan-gate.ts gate --plan stryker-plan.json --out .cache/mutation-plan.out
       - id: publish
         name: Publish the plan
         run: cat .cache/mutation-plan.out >> "$GITHUB_OUTPUT"
@@ -91,7 +78,6 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       CI: "true"
-      MUTATION_SCOPE: ${{ needs.plan.outputs.scope }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -103,7 +89,6 @@ jobs:
           name: stryker-plan
           path: .
       - name: Stryker incremental cache
-        if: github.event_name != 'pull_request'
         uses: actions/cache@v6
         with:
           path: |
@@ -134,7 +119,6 @@ jobs:
           pass-env: |
             GITHUB_ACTIONS
             MUTATION_SHARD
-            MUTATION_SCOPE
           command: .github/scripts/run-shard.sh stryker-plan.json "$MUTATION_SHARD" .cache/shard-projects.tsv
       - if: always()
         uses: actions/upload-artifact@v6
@@ -163,7 +147,7 @@ jobs:
           HAS_SHARDS: ${{ needs.plan.outputs.has-shards }}
         run: |
           if [ "$PLAN" != success ]; then echo "::error::the plan job ended $PLAN"; exit 1; fi
-          if [ "$HAS_SHARDS" != true ]; then echo "no mutated file is in this change's scope"; exit 0; fi
+          if [ "$HAS_SHARDS" != true ]; then echo "the plan scheduled no shards"; exit 0; fi
           if [ "$MUTATION" != success ]; then echo "::error::a mutation shard ended $MUTATION"; exit 1; fi
       - if: needs.plan.outputs.has-shards == 'true'
         uses: actions/checkout@v7

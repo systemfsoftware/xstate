@@ -1,7 +1,7 @@
-#!/usr/bin/env -S deno run --config=scripts/deno.json --allow-read --allow-write --allow-env=MUTATION_SCOPE
+#!/usr/bin/env -S deno run --config=scripts/deno.json --allow-read --allow-write
 
 import { parseArgs } from '@std/cli/parse-args'
-import { dirname, join, relative, resolve, toFileUrl } from '@std/path'
+import { dirname, join, relative, resolve } from '@std/path'
 import { parse as parseYaml } from '@std/yaml'
 import { Schema as S } from 'effect'
 import * as Result from 'effect/Result'
@@ -55,13 +55,10 @@ const LedgerEntry = S.Struct({
 
 const Ledger = S.Struct({ entries: S.Array(LedgerEntry) })
 
-const StrykerConfigModule = S.Struct({ default: S.Struct({ mutate: S.Array(S.String) }) })
-
 const MUTATION_EXEMPTION_RULE = 'XS1'
 
 export type Refusal =
   | { readonly _tag: 'MalformedWorkspace'; readonly file: string }
-  | { readonly _tag: 'MalformedStrykerConfig'; readonly file: string; readonly reason: string }
   | { readonly _tag: 'MalformedManifest'; readonly file: string }
   | { readonly _tag: 'MalformedLedger'; readonly file: string }
   | { readonly _tag: 'PlanMissing'; readonly file: string }
@@ -75,8 +72,6 @@ export const renderRefusal = (refusal: Refusal): string => {
   switch (refusal._tag) {
     case 'MalformedWorkspace':
       return `malformed pnpm-workspace.yaml (${refusal.file})`
-    case 'MalformedStrykerConfig':
-      return `stryker config ${refusal.file} has no default export with a \`mutate\` file list: ${refusal.reason}`
     case 'MalformedManifest':
       return `malformed package manifest (${refusal.file})`
     case 'MalformedLedger':
@@ -192,92 +187,6 @@ export const discoverMembers = async (root: string): Promise<Discovery> => {
   return { ok: true, members }
 }
 
-export const GATE_FILES: readonly string[] = [
-  '.github/workflows/release-gate.yml',
-  'scripts/stryker-plan-gate.ts',
-  'scripts/deno.json',
-  'scripts/deno.lock',
-  'stryker.shared.ts',
-  'package.json',
-  'pnpm-lock.yaml',
-  'pnpm-workspace.yaml',
-  'flake.nix',
-  'flake.lock',
-]
-
-const GATE_DIRECTORIES: readonly string[] = ['.github/actions/']
-
-const changesGate = (file: string): boolean =>
-  GATE_FILES.includes(file) || GATE_DIRECTORIES.some((directory) => file.startsWith(directory))
-
-export interface ScopedMember {
-  readonly dir: string
-  readonly mutate: readonly string[]
-}
-
-export type ProjectScope =
-  | { readonly _tag: 'WholeSet'; readonly project: string }
-  | { readonly _tag: 'ChangedFiles'; readonly project: string; readonly files: readonly string[] }
-
-export const scopeOf = (members: readonly ScopedMember[], changed: readonly string[]): readonly ProjectScope[] =>
-  members.flatMap((member): ProjectScope[] => {
-    const whole: ProjectScope = { _tag: 'WholeSet', project: member.dir }
-    if (changed.some(changesGate)) return [whole]
-    const prefix = `${member.dir}/`
-    const touched = changed.filter((file) => file.startsWith(prefix)).map((file) => file.slice(prefix.length))
-    if (touched.length === 0) return []
-    return touched.every((file) => member.mutate.includes(file))
-      ? [{ _tag: 'ChangedFiles', project: member.dir, files: touched }]
-      : [whole]
-  })
-
-export const renderScope = (scope: readonly ProjectScope[]): string =>
-  scope.flatMap((entry) =>
-    entry._tag === 'WholeSet' ? [entry.project] : entry.files.map((file) => `${entry.project}/${file}`)
-  ).join(',')
-
-const declaredMutate = async (
-  root: string,
-  member: Member,
-): Promise<Result.Result<ScopedMember, Refusal>> => {
-  const file = join(root, member.dir, 'stryker.config.ts')
-  try {
-    const decoded = S.decodeUnknownResult(StrykerConfigModule)(await import(toFileUrl(resolve(file)).href))
-    return Result.isFailure(decoded)
-      ? Result.fail({ _tag: 'MalformedStrykerConfig', file, reason: decoded.failure.message })
-      : Result.succeed({ dir: member.dir, mutate: decoded.success.default.mutate })
-  } catch (error) {
-    return Result.fail({ _tag: 'MalformedStrykerConfig', file, reason: String(error) })
-  }
-}
-
-export type ScopeOutcome =
-  | { readonly ok: true; readonly scope: readonly ProjectScope[] }
-  | { readonly ok: false; readonly refusal: Refusal }
-
-export const resolveScope = async (
-  root: string,
-  members: readonly Member[],
-  changed: readonly string[] | undefined,
-): Promise<ScopeOutcome> => {
-  const mutating = members.filter((member) => member.mutates)
-  if (changed === undefined) {
-    return { ok: true, scope: mutating.map((member) => ({ _tag: 'WholeSet', project: member.dir })) }
-  }
-  const scoped: ScopedMember[] = []
-  for (const member of mutating) {
-    const declared = await declaredMutate(root, member)
-    if (Result.isFailure(declared)) return { ok: false, refusal: declared.failure }
-    scoped.push(declared.success)
-  }
-  return { ok: true, scope: scopeOf(scoped, changed) }
-}
-
-export const readChanged = async (file: string | undefined): Promise<readonly string[] | undefined> => {
-  const text = file === undefined ? undefined : await readText(file)
-  return text?.split('\n').map((line) => line.trim()).filter((line) => line !== '')
-}
-
 type LedgerRead =
   | { readonly ok: true; readonly entries: ReadonlyArray<typeof LedgerEntry.Type> }
   | { readonly ok: false; readonly refusal: Refusal }
@@ -320,7 +229,6 @@ const decodePlan = (file: string, text: string): PlanRead => {
 export interface GateInput {
   readonly root: string
   readonly planFile: string
-  readonly changed?: readonly string[] | undefined
 }
 
 export interface Unmutated {
@@ -329,16 +237,10 @@ export interface Unmutated {
   readonly exemption: typeof LedgerEntry.Type | undefined
 }
 
-export interface OutOfScope {
-  readonly package: string
-  readonly dir: string
-}
-
 export interface GateResult {
   readonly matrix: ShardPlan['matrix']
   readonly hasShards: boolean
   readonly unmutated: readonly Unmutated[]
-  readonly outOfScope: readonly OutOfScope[]
 }
 
 export const renderUnmutated = (member: Unmutated): string =>
@@ -346,28 +248,19 @@ export const renderUnmutated = (member: Unmutated): string =>
     ? `0 mutants for ${member.package} (${member.dir}): no mutation script and no ${MUTATION_EXEMPTION_RULE} debt-ledger entry`
     : `0 mutants for ${member.package} (${member.dir}): accepted by ${MUTATION_EXEMPTION_RULE} debt-ledger entry "${member.exemption.reason}", removed by ${member.exemption.removedBy}`
 
-export const renderOutOfScope = (member: OutOfScope): string =>
-  `0 mutants for ${member.package} (${member.dir}): the change touches none of its files`
-
 export type GateOutcome =
   | { readonly ok: true; readonly result: GateResult }
   | { readonly ok: false; readonly refusals: readonly Refusal[] }
 
-export const gatePlan = async ({ root, planFile, changed }: GateInput): Promise<GateOutcome> => {
+export const gatePlan = async ({ root, planFile }: GateInput): Promise<GateOutcome> => {
   const discovery = await discoverMembers(root)
   if (!discovery.ok) return { ok: false, refusals: [discovery.refusal] }
   const ledger = await readLedger(root)
   if (!ledger.ok) return { ok: false, refusals: [ledger.refusal] }
-  const resolved = await resolveScope(root, discovery.members, changed)
-  if (!resolved.ok) return { ok: false, refusals: [resolved.refusal] }
-  const inScope = new Set(resolved.scope.map((entry) => entry.project))
 
   const resolvedPlanFile = resolve(root, planFile)
   const planText = await readText(resolvedPlanFile)
-  const mutationMembers = discovery.members.filter((member) => member.mutates && inScope.has(member.dir))
-  const outOfScope = discovery.members
-    .filter((member) => member.mutates && !inScope.has(member.dir))
-    .map((member) => ({ package: member.name, dir: member.dir }))
+  const mutationMembers = discovery.members.filter((member) => member.mutates)
   if (planText === undefined && mutationMembers.length > 0) {
     return { ok: false, refusals: [{ _tag: 'PlanMissing', file: resolvedPlanFile }] }
   }
@@ -399,18 +292,13 @@ export const gatePlan = async ({ root, planFile, changed }: GateInput): Promise<
   }
 
   const scheduledTotal = [...scheduled.values()].reduce((total, count) => total + count, 0)
-  const scopeIsEmpty = changed !== undefined && inScope.size === 0
-  if (scheduledTotal === 0 && ledger.entries.length === 0 && !scopeIsEmpty) refusals.push({ _tag: 'VacuousPlan' })
+  if (scheduledTotal === 0 && ledger.entries.length === 0) refusals.push({ _tag: 'VacuousPlan' })
 
   if (refusals.length > 0) return { ok: false, refusals }
   const unmutated = discovery.members
     .filter((member) => (scheduled.get(member.dir) ?? 0) === 0)
-    .filter((member) => !outOfScope.some((out) => out.dir === member.dir))
     .map((member) => ({ package: member.name, dir: member.dir, exemption: exemption(member.name) }))
-  return {
-    ok: true,
-    result: { matrix: plan.matrix, hasShards: plan.matrix.include.length > 0, unmutated, outOfScope },
-  }
+  return { ok: true, result: { matrix: plan.matrix, hasShards: plan.matrix.include.length > 0, unmutated } }
 }
 
 export interface ShardProjects {
@@ -438,7 +326,7 @@ export const selectShardProjects = async (
 
 if (import.meta.main) {
   const args = parseArgs(Deno.args, {
-    string: ['root', 'plan', 'out', 'changed', 'scope-out', 'shard'],
+    string: ['root', 'plan', 'out', 'shard'],
     default: { root: '.' },
   })
   const mode = args._[0]
@@ -446,7 +334,6 @@ if (import.meta.main) {
     if (args.out === undefined) console.log(text.trimEnd())
     else await Deno.writeTextFile(args.out, text)
   }
-  const changed = await readChanged(args.changed)
 
   if (mode === 'projects') {
     const discovery = await discoverMembers(args.root)
@@ -454,14 +341,8 @@ if (import.meta.main) {
       console.error(`stryker-plan-gate: ${renderRefusal(discovery.refusal)}`)
       Deno.exit(1)
     }
-    const resolved = await resolveScope(args.root, discovery.members, changed)
-    if (!resolved.ok) {
-      console.error(`stryker-plan-gate: ${renderRefusal(resolved.refusal)}`)
-      Deno.exit(1)
-    }
-    const projects = resolved.scope.map((entry) => entry.project).sort()
+    const projects = discovery.members.filter((member) => member.mutates).map((member) => member.dir).sort()
     await emit(`${projects.join(',')}\n`)
-    if (args['scope-out'] !== undefined) await Deno.writeTextFile(args['scope-out'], `${renderScope(resolved.scope)}\n`)
     Deno.exit(0)
   }
 
@@ -484,13 +365,12 @@ if (import.meta.main) {
     console.error('stryker-plan-gate: gate needs --plan <file>')
     Deno.exit(2)
   }
-  const outcome = await gatePlan({ root: args.root, planFile: args.plan, changed })
+  const outcome = await gatePlan({ root: args.root, planFile: args.plan })
   if (!outcome.ok) {
     for (const refusal of outcome.refusals) console.error(`stryker-plan-gate: ${renderRefusal(refusal)}`)
     Deno.exit(1)
   }
   for (const member of outcome.result.unmutated) console.error(`stryker-plan-gate: ${renderUnmutated(member)}`)
-  for (const member of outcome.result.outOfScope) console.error(`stryker-plan-gate: ${renderOutOfScope(member)}`)
   console.error(`stryker-plan-gate: ${outcome.result.matrix.include.length} shard(s)`)
   await emit(`matrix=${JSON.stringify(outcome.result.matrix)}\nhas-shards=${outcome.result.hasShards}\n`)
   Deno.exit(0)
