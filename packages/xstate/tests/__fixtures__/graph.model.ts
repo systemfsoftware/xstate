@@ -27,6 +27,7 @@ export type FlatMachine = Schema.Schema.Type<typeof FlatMachine>
 
 const TraverseQuery = Schema.Struct({
   operation: Schema.Literals(['adjacency', 'shortest', 'simple']),
+  events: Schema.Literals(['default', 'array', 'function']),
   filter: Schema.Boolean,
   stop: Schema.Boolean,
   target: Schema.Boolean,
@@ -70,10 +71,20 @@ export const TreeSpec = Schema.Struct({
 })
 export type TreeSpec = Schema.Schema.Type<typeof TreeSpec>
 
+export const ParallelState = Schema.Literals(['a', 'b'])
+export type ParallelState = Schema.Schema.Type<typeof ParallelState>
+const ParallelEdge = Schema.Struct({ from: ParallelState, event: EventName, to: ParallelState })
+export type ParallelEdge = Schema.Schema.Type<typeof ParallelEdge>
+const ParallelRegion = Schema.Struct({ initial: ParallelState, edges: Schema.Array(ParallelEdge) })
+export type ParallelRegion = Schema.Schema.Type<typeof ParallelRegion>
+export const ParallelSpec = Schema.Struct({ left: ParallelRegion, right: ParallelRegion })
+export type ParallelSpec = Schema.Schema.Type<typeof ParallelSpec>
+
 export const GraphCommand = Schema.Union([
   Schema.TaggedStruct('Traverse', { machine: FlatMachine, query: TraverseQuery }),
   Schema.TaggedStruct('Replay', { machine: FlatMachine, sequence: Schema.Array(EventName), query: ReplayQuery }),
   Schema.TaggedStruct('Structure', { tree: TreeSpec }),
+  Schema.TaggedStruct('Parallel', { spec: ParallelSpec }),
 ])
 export type GraphCommand = Schema.Schema.Type<typeof GraphCommand>
 
@@ -110,6 +121,13 @@ export type GraphResponse =
     readonly _tag: 'graph'
     readonly graph: object
     readonly edgeIds: ReadonlyArray<string>
+    readonly descendantIds: ReadonlyArray<string>
+  }
+  | {
+    readonly _tag: 'parallel'
+    readonly adjacency: ReadonlyArray<AdjacencyEntryView>
+    readonly shortest: ReadonlyArray<ReadonlyArray<string>>
+    readonly simple: ReadonlyArray<ReadonlyArray<string>>
     readonly descendantIds: ReadonlyArray<string>
   }
   | { readonly _tag: 'failed'; readonly message: string }
@@ -205,6 +223,11 @@ export const serializerOf = (mode: 'default' | 'value'): (sim: Sim) => string =>
 
 export const eventJsonOf = (event: object): string => JSON.stringify(event)
 
+export const CUSTOM_EVENTS: ReadonlyArray<EventObjectView> = [
+  { type: 'NEXT', amount: 7 },
+  { type: 'BACK', amount: 9 },
+]
+
 const defaultEvents = (
   machine: FlatMachine,
   states: ReadonlyArray<StateName>,
@@ -215,12 +238,14 @@ const effectiveEvents = (
   machine: FlatMachine,
   states: ReadonlyArray<StateName>,
   sim: Sim,
-): ReadonlyArray<EventObjectView> => defaultEvents(machine, states, sim)
+  custom: boolean,
+): ReadonlyArray<EventObjectView> => custom ? CUSTOM_EVENTS : defaultEvents(machine, states, sim)
 
 export interface Traversal {
   readonly machine: FlatMachine
   readonly states: ReadonlyArray<StateName>
   readonly start: Sim
+  readonly customEvents: boolean
   readonly filter: boolean
   readonly stop: boolean
   readonly target: boolean
@@ -251,6 +276,7 @@ const traversalFrom = (
   query: {
     readonly input: 'zero' | 'one'
     readonly fromSecond: boolean
+    readonly events: 'default' | 'array' | 'function'
     readonly filter: boolean
     readonly stop: boolean
     readonly target: boolean
@@ -261,6 +287,7 @@ const traversalFrom = (
   machine,
   states,
   start: startSim(machine, states, query),
+  customEvents: query.events !== 'default',
   filter: query.filter,
   stop: stopPresent(query),
   target: query.target,
@@ -319,7 +346,7 @@ const pushTransition = (
 }
 
 const expandTransitions = (work: AdjWork, node: MutableAdjNode, sim: Sim, traversal: Traversal): void => {
-  effectiveEvents(traversal.machine, traversal.states, sim)
+  effectiveEvents(traversal.machine, traversal.states, sim, traversal.customEvents)
     .filter((event) => keepsEvent(traversal, event))
     .forEach((event) => pushTransition(work, node, sim, event, traversal))
 }
@@ -548,6 +575,7 @@ const replayTraversal = (machine: FlatMachine, query: ReplayQuery): Traversal =>
   machine,
   states: machineStates(machine.states),
   start: startSim(machine, machineStates(machine.states), query),
+  customEvents: false,
   filter: query.filter,
   stop: stopPresent(query),
   target: query.target,
@@ -787,6 +815,103 @@ const structureResponse = (spec: TreeSpec): GraphResponse => {
   }
 }
 
+const uniqueRegionEdges = (region: ParallelRegion): ReadonlyArray<ParallelEdge> =>
+  region.edges.filter((edge, index) =>
+    region.edges.findIndex((other) => other.from === edge.from && other.event === edge.event) === index
+  )
+
+const regionMove = (region: ParallelRegion, state: ParallelState, event: string): ParallelState => {
+  const edge = uniqueRegionEdges(region).find((candidate) => candidate.from === state && candidate.event === event)
+  return edge === undefined ? state : edge.to
+}
+
+const regionEventTypes = (region: ParallelRegion, state: ParallelState): ReadonlyArray<EventName> =>
+  uniqueBy(
+    uniqueRegionEdges(region).filter((edge) => edge.from === state).map((edge) => edge.event),
+    (event) => event,
+  )
+
+const indexOfPair = (left: ParallelState, right: ParallelState): number =>
+  (left === 'b' ? 2 : 0) + (right === 'b' ? 1 : 0)
+const pairOfIndex = (index: number): { readonly left: ParallelState; readonly right: ParallelState } => ({
+  left: index >= 2 ? 'b' : 'a',
+  right: index % 2 === 1 ? 'b' : 'a',
+})
+
+const TARGETS: ReadonlyArray<TargetChoice> = ['0', '1', '2', '3']
+const targetOfIndex = (index: number): TargetChoice => TARGETS[index] ?? '0'
+
+const parallelEdges = (spec: ParallelSpec): ReadonlyArray<FlatEdge> =>
+  STATE_POOL.flatMap((state, index) => {
+    const pair = pairOfIndex(index)
+    const types = uniqueBy(
+      [...regionEventTypes(spec.left, pair.left), ...regionEventTypes(spec.right, pair.right)],
+      (event) => event,
+    )
+    return types.map((event) => ({
+      state,
+      event,
+      target: targetOfIndex(indexOfPair(
+        regionMove(spec.left, pair.left, event),
+        regionMove(spec.right, pair.right, event),
+      )),
+    }))
+  })
+
+const parallelValueOf = (value: StateName): object => {
+  const pair = pairOfIndex(STATE_POOL.indexOf(value))
+  return { left: pair.left, right: pair.right }
+}
+
+const parallelSerializer = (mode: 'default' | 'value') => (sim: Sim): string =>
+  mode === 'value' ? JSON.stringify(parallelValueOf(sim.value)) : JSON.stringify({ value: parallelValueOf(sim.value) })
+
+const parallelTraversal = (spec: ParallelSpec): Traversal => ({
+  machine: { states: STATE_POOL, edges: parallelEdges(spec), counter: false, inputSeeded: false, cap: 1 },
+  states: machineStates(STATE_POOL),
+  start: { value: STATE_POOL[indexOfPair(spec.left.initial, spec.right.initial)] ?? 'a', count: undefined },
+  customEvents: false,
+  filter: false,
+  stop: false,
+  target: false,
+  limit: Infinity,
+  serialize: parallelSerializer('default'),
+})
+
+const PARALLEL_DESCENDANTS: ReadonlyArray<string> = [
+  'm.left',
+  'm.left.a',
+  'm.left.b',
+  'm.right',
+  'm.right.a',
+  'm.right.b',
+]
+
+const rowKey = (row: AdjacencyEntryView): string => `${row.state}|${row.event}|${row.nextState}`
+const sortRows = (rows: ReadonlyArray<AdjacencyEntryView>): ReadonlyArray<AdjacencyEntryView> =>
+  [...rows].sort((a, b) => rowKey(a) < rowKey(b) ? -1 : rowKey(a) > rowKey(b) ? 1 : 0)
+
+export const sortSeqs = (seqs: ReadonlyArray<ReadonlyArray<string>>): ReadonlyArray<ReadonlyArray<string>> =>
+  [...seqs].sort((a, b) => {
+    const ka = JSON.stringify(a)
+    const kb = JSON.stringify(b)
+    return ka < kb ? -1 : ka > kb ? 1 : 0
+  })
+
+const pathStates = (plan: Plan, traversal: Traversal): ReadonlyArray<string> =>
+  alteredPlan(plan).steps.map((step) => traversal.serialize(step.state))
+
+const parallelResponse = (spec: ParallelSpec): GraphResponse => {
+  const traversal = parallelTraversal(spec)
+  return {
+    _tag: 'parallel',
+    adjacency: sortRows(adjacencyEntries(traversal)),
+    shortest: sortSeqs(shortestPlans(traversal).map((plan) => pathStates(plan, traversal))),
+    simple: sortSeqs(simplePlans(traversal).map((plan) => pathStates(plan, traversal))),
+    descendantIds: PARALLEL_DESCENDANTS,
+  }
+}
+
 const responseOf = (command: GraphCommand): GraphResponse =>
   Match.value(command).pipe(
     Match.tag('Traverse', (traverse): GraphResponse =>
@@ -795,6 +920,7 @@ const responseOf = (command: GraphCommand): GraphResponse =>
       )),
     Match.tag('Replay', (replay): GraphResponse => replayResponse(replay.machine, replay.sequence, replay.query)),
     Match.tag('Structure', (structure): GraphResponse => structureResponse(structure.tree)),
+    Match.tag('Parallel', (parallel): GraphResponse => parallelResponse(parallel.spec)),
     Match.exhaustive,
   )
 
@@ -807,6 +933,7 @@ export const flatMachine = {
 
 export const graphEvents = {
   candidates: CANDIDATES,
+  custom: CUSTOM_EVENTS,
   serialize: serializerOf,
   json: eventJsonOf,
 }

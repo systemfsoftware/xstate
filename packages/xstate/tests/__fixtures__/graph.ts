@@ -16,8 +16,13 @@ import {
   type GraphCommand,
   graphEvents,
   type GraphResponse,
+  type ParallelEdge,
+  type ParallelRegion,
+  type ParallelSpec,
+  type ParallelState,
   pathProjection,
   type PathView,
+  sortSeqs,
   type StateName,
   type TreeNodeModel,
   treeShape,
@@ -108,6 +113,8 @@ const traverseOptions = <M extends AnyStateMachine>(
   query: Extract<GraphCommand, { readonly _tag: 'Traverse' }>['query'],
   ignoreFilter: boolean,
 ) => ({
+  ...(query.events === 'array' ? { events: graphEvents.custom } : {}),
+  ...(query.events === 'function' ? { events: () => graphEvents.custom } : {}),
   ...(query.filter && !ignoreFilter ? { filterEvents: backFilter } : {}),
   ...(query.stop || query.target ? { stopWhen: stopPredicate(states) } : {}),
   ...(query.target ? { toState: stopPredicate(states) } : {}),
@@ -272,11 +279,71 @@ const runStructure = (command: Extract<GraphCommand, { readonly _tag: 'Structure
   }
 }
 
+const uniqueRegionEdges = (region: ParallelRegion): ReadonlyArray<ParallelEdge> =>
+  region.edges.filter((edge, index) =>
+    region.edges.findIndex((other) => other.from === edge.from && other.event === edge.event) === index
+  )
+
+const regionOnOf = (
+  region: ParallelRegion,
+  regionName: string,
+  state: ParallelState,
+): Record<string, { readonly target: string }> =>
+  Object.fromEntries(
+    uniqueRegionEdges(region)
+      .filter((edge) => edge.from === state)
+      .map((edge) => [edge.event, { target: `#m.${regionName}.${edge.to}` }]),
+  )
+
+const parallelRegionConfig = (region: ParallelRegion, regionName: string) => ({
+  initial: region.initial,
+  states: Object.fromEntries(
+    (['a', 'b'] as const).map((state) => [state, { on: regionOnOf(region, regionName, state) }]),
+  ),
+})
+
+const parallelMachineOf = (spec: ParallelSpec) =>
+  createMachine({
+    id: 'm',
+    type: 'parallel',
+    states: {
+      left: parallelRegionConfig(spec.left, 'left'),
+      right: parallelRegionConfig(spec.right, 'right'),
+    },
+  })
+
+const runParallel = (command: Extract<GraphCommand, { readonly _tag: 'Parallel' }>): GraphResponse => {
+  const machine = parallelMachineOf(command.spec)
+  const serialize = projectState('default')
+  return attempt((): GraphResponse => ({
+    _tag: 'parallel',
+    adjacency: adjacencyMapToArray(getAdjacencyMap(machine, {})).map((entry) => ({
+      state: serialize(entry.state),
+      event: graphEvents.json(entry.event),
+      nextState: serialize(entry.nextState),
+    })).sort((a, b) => {
+      const ka = `${a.state}|${a.event}|${a.nextState}`
+      const kb = `${b.state}|${b.event}|${b.nextState}`
+      return ka < kb ? -1 : ka > kb ? 1 : 0
+    }),
+    shortest: sortSeqs(
+      getShortestPaths(machine).map((path) => pathProjection.view(path, serialize).steps.map((step) => step.state)),
+    ),
+    simple: sortSeqs(
+      getSimplePaths(machine).map((path) => pathProjection.view(path, serialize).steps.map((step) => step.state)),
+    ),
+    descendantIds: getDescendantStateNodes(machine).map((node) => node.id),
+  }))
+}
+
 export interface GraphLedger {
-  readonly operations: Record<'adjacency' | 'shortest' | 'simple' | 'replay' | 'structure', number>
+  readonly operations: Record<'adjacency' | 'shortest' | 'simple' | 'replay' | 'structure' | 'parallel', number>
   counters: number
   plain: number
   inputSeeded: number
+  customEvents: number
+  adjacencyArray: number
+  parallel: number
   filtered: number
   stopped: number
   targeted: number
@@ -300,6 +367,8 @@ const noteTraverse = (ledger: GraphLedger, command: Extract<GraphCommand, { read
   ledger.counters += command.machine.counter ? 1 : 0
   ledger.plain += command.machine.counter ? 0 : 1
   ledger.inputSeeded += command.machine.inputSeeded ? 1 : 0
+  ledger.customEvents += command.query.events === 'default' ? 0 : 1
+  ledger.adjacencyArray += command.query.operation === 'adjacency' ? 1 : 0
   ledger.filtered += command.query.filter ? 1 : 0
   ledger.stopped += command.query.stop || command.query.target ? 1 : 0
   ledger.targeted += command.query.target ? 1 : 0
@@ -329,11 +398,19 @@ const noteStructure = (ledger: GraphLedger, command: Extract<GraphCommand, { rea
   model.children.forEach((child) => noteTree(ledger, child))
 }
 
+const noteParallel = (ledger: GraphLedger, _command: Extract<GraphCommand, { readonly _tag: 'Parallel' }>): void => {
+  ledger.operations.parallel += 1
+  ledger.parallel += 1
+}
+
 const emptyLedger = (): GraphLedger => ({
-  operations: { adjacency: 0, shortest: 0, simple: 0, replay: 0, structure: 0 },
+  operations: { adjacency: 0, shortest: 0, simple: 0, replay: 0, structure: 0, parallel: 0 },
   counters: 0,
   plain: 0,
   inputSeeded: 0,
+  customEvents: 0,
+  adjacencyArray: 0,
+  parallel: 0,
   filtered: 0,
   stopped: 0,
   targeted: 0,
@@ -368,6 +445,7 @@ const respond = (command: GraphCommand, behaviour: Behaviour): GraphResponse =>
     Match.tag('Traverse', (traverse): GraphResponse => runTraverse(traverse, behaviour.traverse)),
     Match.tag('Replay', (replay): GraphResponse => runReplay(replay, behaviour.replay)),
     Match.tag('Structure', (structure): GraphResponse => runStructure(structure)),
+    Match.tag('Parallel', (parallel): GraphResponse => runParallel(parallel)),
     Match.exhaustive,
   )
 
@@ -378,6 +456,7 @@ const subjectOf = (behaviour: Behaviour): GraphHandle => {
       Match.tag('Traverse', (traverse) => noteTraverse(observed, traverse)),
       Match.tag('Replay', (replay) => noteReplay(observed, replay)),
       Match.tag('Structure', (structure) => noteStructure(observed, structure)),
+      Match.tag('Parallel', (parallel) => noteParallel(observed, parallel)),
       Match.exhaustive,
     )
     return attempt(() => respond(command, behaviour))

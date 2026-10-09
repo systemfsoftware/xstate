@@ -52,6 +52,9 @@ const positives = (observed: GraphLedger): ReadonlyArray<number> => [
   observed.counters,
   observed.plain,
   observed.inputSeeded,
+  observed.customEvents,
+  observed.adjacencyArray,
+  observed.parallel,
   observed.filtered,
   observed.stopped,
   observed.targeted,
@@ -178,15 +181,15 @@ Feature('Judging the published graph walk against a model of its traversal', { t
         ),
     )
 
-    const divergesFromTheModel = (makeSubject: () => GraphHandle) =>
+    const divergesFromTheModel = (makeSubject: () => GraphHandle, seed: number) =>
       Gherkin.Do.pipe(
         Given('a planted subject that behaves differently from the published graph API')(
           'subject',
           () => Effect.succeed(makeSubject()),
         ),
-        When('the same check runs the machines drawn from seed 1 through it')(
+        When(`the same check runs the machines drawn from seed ${seed} through it`)(
           'report',
-          (s) => checkOver(s.subject, 1),
+          (s) => checkOver(s.subject, seed),
         ),
         Then('the run is rejected with the model-diverged judgement at a numbered step')((s, expect) => {
           const failure = failReportOf(s.report).failure
@@ -204,19 +207,19 @@ Feature('Judging the published graph walk against a model of its traversal', { t
 
     scenario(
       'Shortest paths that keep the last-discovered predecessor are caught as a model divergence',
-      divergesFromTheModel(makeShortestLastSubject),
+      divergesFromTheModel(makeShortestLastSubject, 1),
     )
     scenario(
       'Simple paths that allow revisiting a vertex once are caught as a model divergence',
-      divergesFromTheModel(makeSimpleRevisitSubject),
+      divergesFromTheModel(makeSimpleRevisitSubject, 1),
     )
     scenario(
       'An adjacency map that ignores the event filter is caught as a model divergence',
-      divergesFromTheModel(makeAdjacencyIgnoreFilterSubject),
+      divergesFromTheModel(makeAdjacencyIgnoreFilterSubject, 1),
     )
     scenario(
       'A replay that takes the first matching override candidate is caught as a model divergence',
-      divergesFromTheModel(makeReplayFirstCandidateSubject),
+      divergesFromTheModel(makeReplayFirstCandidateSubject, 2),
     )
 
     scenario(
