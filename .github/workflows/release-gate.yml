@@ -113,3 +113,46 @@ jobs:
             .cache/reports/shards/**
             packages/*/reports/mutation-report.*
           if-no-files-found: ignore
+
+  verdict:
+    name: verdict · merged report
+    needs: [mutation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/dev-shell
+      - name: Download the shard plan
+        uses: actions/download-artifact@v6
+        with:
+          name: stryker-plan
+          path: .cache
+      - name: Download every shard's reports
+        uses: actions/download-artifact@v6
+        with:
+          pattern: mutation-shard-*
+          path: .cache/shard-reports
+      - name: Merge the shard reports and gate them at zero survivors
+        uses: ./.github/actions/sandbox
+        with:
+          command: |
+            set -euo pipefail
+            printf '{"schemaVersion":1,"survivors":[]}\n' > .cache/no-survivors.json
+            jq -r '
+              .matrix.include as $jobs
+              | .shards[]
+              | "\(.index)/\(.count)" as $label
+              | ($jobs | map(.shard) | index($label)) as $job
+              | ".cache/shard-reports/mutation-shard-\($job)/.cache/reports/shards/\(.index)"
+            ' .cache/stryker-plan.json > .cache/shard-dirs.txt
+            mapfile -t shard_dirs < .cache/shard-dirs.txt
+            ./node_modules/.bin/stryker merge --plan .cache/stryker-plan.json --out reports/mutation "${shard_dirs[@]}"
+            ./node_modules/.bin/stryker gate --baseline .cache/no-survivors.json
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mutation-report
+          path: reports/mutation/
+          if-no-files-found: ignore
