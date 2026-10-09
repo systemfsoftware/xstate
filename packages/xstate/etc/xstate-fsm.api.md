@@ -9,7 +9,7 @@
 // Warning: (ae-forgotten-export) The symbol "FSMConfigForStates" needs to be exported by the entry point fsm.d.ts
 //
 // @public (undocumented)
-export function createFSM<TContext extends MachineContext = {}, TEvent extends EventObject = EventObject, const TStates extends Record<string, unknown> = Record<string, unknown>>(config: FSMConfigForStates<TContext, TEvent, TStates>): FSM<TContext, TEvent, keyof TStates & string, FSMSnapshot<TContext, keyof TStates & string>, FSMConfigForStates<TContext, TEvent, TStates>>;
+export function createFSM<TContext extends MachineContext = {}, TEvent extends EventObject = EventObject, TState extends string = string>(config: FSMConfigForStates<TContext, TEvent, TState>): FSM<TContext, TEvent, TState, FSMSnapshot<TContext, TState>, FSMConfigForStates<TContext, TEvent, TState>>;
 
 // @public
 export type FSM<TContext extends MachineContext, TEvent extends EventObject, TState extends string, TSnapshot extends FSMSnapshot<MachineContext, TState> = FSMSnapshot<TContext, TState>, TConfig = FSMConfig<TContext, TEvent, TState>> = {
@@ -17,8 +17,8 @@ export type FSM<TContext extends MachineContext, TEvent extends EventObject, TSt
     readonly config: TConfig;
     readonly initialState: TSnapshot;
     transition(snapshot: TSnapshot, event: TEvent): FSMTransitionResult<TSnapshot>;
-    initialTransition(input?: unknown): FSMTransitionResult<TSnapshot>;
-    getInitialSnapshot(actorScope?: unknown, input?: unknown): TSnapshot;
+    initialTransition(): FSMTransitionResult<TSnapshot>;
+    getInitialSnapshot(): TSnapshot;
     getPersistedSnapshot(snapshot: TSnapshot): TSnapshot;
 };
 
@@ -51,7 +51,7 @@ export type FSMSetupConfig<TSchemas extends FSMSetupSchemas = {}, TStates extend
 
 // @public (undocumented)
 export type FSMSetupReturn<TSchemas extends FSMSetupSchemas, TStates extends FSMSetupStates> = {
-    createFSM<const TMachineStates extends Record<string, unknown>>(config: FSMSetupMachineConfig<TSchemas, TStates, TMachineStates>): FSM<FSMContextFromStates<TStates, FSMSetupContext<TSchemas>>, FSMSetupEvents<TSchemas>, keyof TMachineStates & string, FSMSetupSnapshot<TStates, FSMSetupContext<TSchemas>, TMachineStates>, FSMSetupMachineConfig<TSchemas, TStates, TMachineStates>>;
+    createFSM<TMachineState extends string>(config: FSMSetupMachineConfig<TSchemas, TStates, TMachineState>): FSM<FSMContextFromStates<TStates, FSMSetupContext<TSchemas>>, FSMSetupEvents<TSchemas>, TMachineState, FSMSetupSnapshot<TStates, FSMSetupContext<TSchemas>, TMachineState>, FSMSetupMachineConfig<TSchemas, TStates, TMachineState>>;
 };
 
 // @public

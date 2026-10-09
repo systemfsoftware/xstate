@@ -90,19 +90,19 @@ export type FSMConfig<
 type FSMConfigForStates<
   TContext extends MachineContext,
   TEvent extends EventObject,
-  TStates extends Record<string, unknown>,
+  TState extends string,
 > =
   & Omit<
-    FSMConfig<TContext, TEvent, keyof TStates & string>,
+    FSMConfig<TContext, TEvent, TState>,
     'initial' | 'states'
   >
   & {
-    initial: keyof TStates & string
+    initial: NoInfer<TState>
     states: {
-      [K in keyof TStates]: FSMStateConfig<
+      [K in TState]: FSMStateConfig<
         TContext,
         TEvent,
-        keyof TStates & string
+        TState
       >
     }
   }
@@ -162,8 +162,8 @@ export type FSM<
     snapshot: TSnapshot,
     event: TEvent,
   ): FSMTransitionResult<TSnapshot>
-  initialTransition(input?: unknown): FSMTransitionResult<TSnapshot>
-  getInitialSnapshot(actorScope?: unknown, input?: unknown): TSnapshot
+  initialTransition(): FSMTransitionResult<TSnapshot>
+  getInitialSnapshot(): TSnapshot
   getPersistedSnapshot(snapshot: TSnapshot): TSnapshot
 }
 
@@ -191,7 +191,7 @@ type FSMStateContext<
     context?: infer TSchema extends StandardSchemaV1
   } ?
       & FSMSchemaContext<TSchema>
-      & ([MachineContext] extends [TGlobalContext] ? unknown : TGlobalContext)
+      & ([MachineContext] extends [TGlobalContext] ? {} : TGlobalContext)
   : TGlobalContext
   : TGlobalContext
 
@@ -219,14 +219,14 @@ type FSMSetupStateContext<
 type FSMSetupSnapshot<
   TStates extends FSMSetupStates,
   TGlobalContext extends MachineContext,
-  TMachineStates extends Record<string, unknown>,
-> = [keyof TStates] extends [never] ? FSMSnapshot<TGlobalContext, keyof TMachineStates & string>
+  TMachineState extends string,
+> = [keyof TStates] extends [never] ? FSMSnapshot<TGlobalContext, TMachineState>
   : {
-    [K in keyof TMachineStates & string]: FSMSnapshot<
+    [K in TMachineState]: FSMSnapshot<
       FSMSetupStateContext<K, TStates, TGlobalContext>,
       K
     >
-  }[keyof TMachineStates & string]
+  }[TMachineState]
 
 type FSMSetupTargetTransitionConfig<
   TSourceContext extends MachineContext,
@@ -301,8 +301,8 @@ type FSMSetupTransition<
   TEvent extends EventObject,
   TStates extends FSMSetupStates,
   TGlobalContext extends MachineContext,
-  TMachineStates extends Record<string, unknown>,
-> = [keyof TStates] extends [never] ? FSMTransition<TSourceContext, TEvent, keyof TMachineStates & string>
+  TMachineState extends string,
+> = [keyof TStates] extends [never] ? FSMTransition<TSourceContext, TEvent, TMachineState>
   :
     | FSMSetupStringTransition<TSourceContext, TStates, TGlobalContext>
     | FSMSetupTransitionConfig<TSourceContext, TStates, TGlobalContext>
@@ -318,7 +318,7 @@ type FSMSetupStateConfig<
   TEvent extends EventObject,
   TStates extends FSMSetupStates,
   TGlobalContext extends MachineContext,
-  TMachineStates extends Record<string, unknown>,
+  TMachineState extends string,
 > = {
   on?: {
     [TType in TEvent['type'] & string]?: FSMSetupTransition<
@@ -326,7 +326,7 @@ type FSMSetupStateConfig<
       EventForType<TEvent, TType>,
       TStates,
       TGlobalContext,
-      TMachineStates
+      TMachineState
     >
   }
 }
@@ -334,12 +334,12 @@ type FSMSetupStateConfig<
 type FSMSetupMachineConfig<
   TSchemas extends FSMSetupSchemas,
   TStates extends FSMSetupStates,
-  TMachineStates extends Record<string, unknown>,
+  TMachineState extends string,
 > = {
   id?: string
-  initial: keyof TMachineStates & string
+  initial: NoInfer<TMachineState>
   states: {
-    [K in keyof TMachineStates]: FSMSetupStateConfig<
+    [K in TMachineState]: FSMSetupStateConfig<
       FSMStateContext<
         K extends keyof TStates ? TStates[K] : {},
         FSMSetupContext<TSchemas>
@@ -347,7 +347,7 @@ type FSMSetupMachineConfig<
       FSMSetupEvents<TSchemas>,
       TStates,
       FSMSetupContext<TSchemas>,
-      TMachineStates
+      TMachineState
     >
   }
 } & FSMContextConfig<FSMContextFromStates<TStates, FSMSetupContext<TSchemas>>>
@@ -366,57 +366,104 @@ export type FSMSetupReturn<
   TSchemas extends FSMSetupSchemas,
   TStates extends FSMSetupStates,
 > = {
-  createFSM<const TMachineStates extends Record<string, unknown>>(
-    config: FSMSetupMachineConfig<TSchemas, TStates, TMachineStates>,
+  createFSM<TMachineState extends string>(
+    config: FSMSetupMachineConfig<TSchemas, TStates, TMachineState>,
   ): FSM<
     FSMContextFromStates<TStates, FSMSetupContext<TSchemas>>,
     FSMSetupEvents<TSchemas>,
-    keyof TMachineStates & string,
-    FSMSetupSnapshot<TStates, FSMSetupContext<TSchemas>, TMachineStates>,
-    FSMSetupMachineConfig<TSchemas, TStates, TMachineStates>
+    TMachineState,
+    FSMSetupSnapshot<TStates, FSMSetupContext<TSchemas>, TMachineState>,
+    FSMSetupMachineConfig<TSchemas, TStates, TMachineState>
   >
 }
 
-/** @public */
-export function setup<
-  const TSchemas extends FSMSetupSchemas = {},
-  const TStates extends FSMSetupStates = {},
->(
-  _config: FSMSetupConfig<TSchemas, TStates> = {},
-): FSMSetupReturn<TSchemas, TStates> {
-  return {
-    createFSM: (config: FSMConfig) => createFSM(config),
-  } as unknown as FSMSetupReturn<TSchemas, TStates>
+type AnyFSMConfig = FSMConfig<MachineContext, EventObject, string>
+type AnyFSMSnapshot = FSMSnapshot<MachineContext, string>
+type AnyFSMTransition = FSMTransition<MachineContext, EventObject, string>
+type AnyFSM = FSM<MachineContext, EventObject, string, AnyFSMSnapshot, AnyFSMConfig>
+
+type FSMResolution = {
+  readonly target: string | undefined
+  readonly patch: FSMContextPatch<MachineContext> | undefined
 }
 
-/** @public */
-export function createFSM<
-  TContext extends MachineContext = {},
-  TEvent extends EventObject = EventObject,
-  const TStates extends Record<string, unknown> = Record<string, unknown>,
->(
-  config: FSMConfigForStates<TContext, TEvent, TStates>,
-): FSM<
-  TContext,
-  TEvent,
-  keyof TStates & string,
-  FSMSnapshot<TContext, keyof TStates & string>,
-  FSMConfigForStates<TContext, TEvent, TStates>
-> {
-  type TState = keyof TStates & string
-  type TSnapshot = FSMSnapshot<TContext, TState>
-  const createSnapshot = (value: TState, context: TContext) =>
-    ({
-      status: 'active',
-      value,
-      context,
-      output: undefined,
-      error: undefined,
-    }) as TSnapshot
-  const initialState = createSnapshot(
-    config.initial,
-    config.context ?? ({} as TContext),
+const noTransition: FSMTransitionConfig<MachineContext, string> = {}
+
+const resolutionOfConfig = (
+  config: FSMTransitionConfig<MachineContext, string> | undefined,
+): FSMResolution => {
+  const resolved = config ?? noTransition
+  return { target: resolved.target, patch: resolved.context }
+}
+
+const configTransitionOf = (
+  transition: AnyFSMTransition | undefined,
+):
+  | FSMTransitionConfig<MachineContext, string>
+  | FSMTransitionFunction<MachineContext, EventObject, string>
+  | undefined => typeof transition === 'string' ? { target: transition } : transition
+
+const resolvedTransitionOf = (
+  transition: AnyFSMTransition | undefined,
+  context: MachineContext,
+  event: EventObject,
+): FSMResolution => {
+  const config = configTransitionOf(transition)
+  return resolutionOfConfig(
+    typeof config === 'function' ? config({ context, event }) : config,
   )
+}
+
+const ownTransitionOf = (
+  on: FSMOn<MachineContext, EventObject, string>,
+  type: string,
+): AnyFSMTransition | undefined => Object.hasOwn(on, type) ? on[type] : undefined
+
+const noOn: FSMOn<MachineContext, EventObject, string> = {}
+
+const onTableOr = (
+  on: FSMOn<MachineContext, EventObject, string> | undefined,
+): FSMOn<MachineContext, EventObject, string> => on ?? noOn
+
+const onTableFor = (
+  config: AnyFSMConfig,
+  value: string,
+): FSMOn<MachineContext, EventObject, string> => onTableOr(config.states[value]?.on)
+
+const patchChangesContext = (
+  patch: FSMContextPatch<MachineContext> | undefined,
+  context: MachineContext,
+): boolean => Object.entries(patch ?? {}).some(([key, value]) => value !== context[key])
+
+const contextWithPatch = (
+  patch: FSMContextPatch<MachineContext> | undefined,
+  context: MachineContext,
+): MachineContext => patchChangesContext(patch, context) ? { ...context, ...patch } : context
+
+const snapshotOf = (value: string, context: MachineContext): AnyFSMSnapshot => ({
+  status: 'active',
+  value,
+  context,
+  output: undefined,
+  error: undefined,
+})
+
+const unchangedSnapshot = (
+  snapshot: AnyFSMSnapshot,
+  value: string,
+  context: MachineContext,
+): boolean => value === snapshot.value && context === snapshot.context
+
+const targetedValue = (target: string | undefined, value: string): string => target ?? value
+
+const nextSnapshot = (
+  snapshot: AnyFSMSnapshot,
+  value: string,
+  context: MachineContext,
+): AnyFSMSnapshot => unchangedSnapshot(snapshot, value, context) ? snapshot : snapshotOf(value, context)
+
+const fsmOf = (config: AnyFSMConfig): AnyFSM => {
+  const initialState = snapshotOf(config.initial, config.context ?? {})
 
   return {
     id: config.id,
@@ -426,33 +473,42 @@ export function createFSM<
     getInitialSnapshot: () => initialState,
     getPersistedSnapshot: (snapshot) => snapshot,
     transition(snapshot, event) {
-      let { value, context } = snapshot
-      const transitions = config.states[value]?.on as
-        | Record<string, FSMTransition<TContext, TEvent, TState> | undefined>
-        | undefined
-      const transition = Object.hasOwn(transitions || {}, event.type) &&
-        transitions![event.type]
-      const { target = value, context: patch } = (typeof transition === 'string'
-        ? { target: transition }
-        : typeof transition === 'function'
-        ? transition({ context, event })
-        : transition) || {}
-      // Copy only when the patch changes a value, so a no-op patch keeps the
-      // current snapshot. After the first copy every key matches. Iterate a
-      // spread copy so inherited keys, which the spread below ignores, are
-      // skipped.
-      for (const key in { ...patch }) {
-        if (patch![key] !== context[key]) {
-          context = { ...context, ...patch }
-        }
-      }
-
-      return [
-        target === value && context === snapshot.context
-          ? snapshot
-          : createSnapshot(target, context),
-        [],
-      ]
+      const resolution = resolvedTransitionOf(
+        ownTransitionOf(onTableFor(config, snapshot.value), event.type),
+        snapshot.context,
+        event,
+      )
+      const context = contextWithPatch(resolution.patch, snapshot.context)
+      return [nextSnapshot(snapshot, targetedValue(resolution.target, snapshot.value), context), []]
     },
   }
+}
+
+/** @public */
+export function setup<
+  const TSchemas extends FSMSetupSchemas = {},
+  const TStates extends FSMSetupStates = {},
+>(
+  _config?: FSMSetupConfig<TSchemas, TStates>,
+): FSMSetupReturn<TSchemas, TStates>
+export function setup(): object {
+  return { createFSM: fsmOf }
+}
+
+/** @public */
+export function createFSM<
+  TContext extends MachineContext = {},
+  TEvent extends EventObject = EventObject,
+  TState extends string = string,
+>(
+  config: FSMConfigForStates<TContext, TEvent, TState>,
+): FSM<
+  TContext,
+  TEvent,
+  TState,
+  FSMSnapshot<TContext, TState>,
+  FSMConfigForStates<TContext, TEvent, TState>
+>
+export function createFSM(config: AnyFSMConfig): AnyFSM {
+  return fsmOf(config)
 }

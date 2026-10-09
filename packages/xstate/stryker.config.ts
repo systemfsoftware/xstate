@@ -4,6 +4,7 @@ export default packageStrykerConfig([
   'src/assert.ts',
   'src/stateMatching.ts',
   'src/mapState.ts',
+  'src/fsm.ts',
   'src/graph/actorScope.ts',
   'src/graph/adjacency.ts',
   'src/graph/alterPath.ts',
