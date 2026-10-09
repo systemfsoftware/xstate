@@ -239,6 +239,23 @@ const expand = <
   enqueueTransitions(value, queue, queued, traversal)
 }
 
+const expandLevel = <
+  TSnapshot extends AnySnapshot,
+  TEvent extends EventObject,
+  TInput,
+  TSystem extends AnyActorSystem,
+>(
+  adj: AdjacencyMap<TSnapshot, TEvent>,
+  level: ReadonlyArray<QueueEntry<TSnapshot, TEvent>>,
+  traversal: Traversal<TSnapshot, TEvent, TInput, TSystem>,
+): Array<QueueEntry<TSnapshot, TEvent>> => {
+  const nextLevel: Array<QueueEntry<TSnapshot, TEvent>> = []
+  for (const queued of level) {
+    expand(adj, nextLevel, queued, traversal)
+  }
+  return nextLevel
+}
+
 const drain = <
   TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
@@ -246,11 +263,12 @@ const drain = <
   TSystem extends AnyActorSystem,
 >(
   adj: AdjacencyMap<TSnapshot, TEvent>,
-  queue: Array<QueueEntry<TSnapshot, TEvent>>,
+  start: QueueEntry<TSnapshot, TEvent>,
   traversal: Traversal<TSnapshot, TEvent, TInput, TSystem>,
 ): void => {
-  for (const queued of queue) {
-    expand(adj, queue, queued, traversal)
+  let level = [start]
+  while (level.length > 0) {
+    level = expandLevel(adj, level, traversal)
   }
 }
 
@@ -274,10 +292,7 @@ function computeAdjacencyMap<
   }
   const fromState = config.fromState ?? initialSnapshotOf(logic, options.input, actorScope)
   const adj: AdjacencyMap<TSnapshot, TEvent> = createNullDict<AdjacencyValue<TSnapshot, TEvent>>()
-  const queue: Array<QueueEntry<TSnapshot, TEvent>> = [
-    { nextState: fromState, event: undefined, prevState: undefined },
-  ]
-  drain(adj, queue, traversal)
+  drain(adj, { nextState: fromState, event: undefined, prevState: undefined }, traversal)
   return adj
 }
 
