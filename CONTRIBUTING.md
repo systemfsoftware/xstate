@@ -51,7 +51,7 @@ pnpm check:ci
 nix build .#workspace-tarballs
 ```
 
-Mutation testing is not part of `pnpm check:ci`. The release gate (`.github/workflows/release-gate.yml`) runs `stryker plan` once over every workspace package that declares a `mutation` script, then `stryker run` for each planned shard at a break threshold of 100 on every push to `main`.
+Mutation testing is not part of `pnpm check:ci`. The release gate (`.github/workflows/release-gate.yml`) runs `stryker plan` once over every workspace package that declares a `mutation` script, then `stryker run` for each planned shard at a break threshold of 100 on every push to `main`. The same workflow runs on every pull request, scoped to what the pull request changes. It mutates the declared files the pull request touches. It mutates a package's whole declared set when the pull request touches any other file in that package: a test, a fixture, a config, or a source file outside the set. It mutates every package's whole set when the pull request changes the gate itself: the workflow, `scripts/stryker-plan-gate.ts`, `stryker.shared.ts`, the lockfile or the Nix toolchain. A pull request that touches no mutated package plans nothing, and its verdict job passes. Pull-request runs skip the incremental cache, so every scoped mutant runs fresh.
 
 ## Pull Requests & Commits
 
