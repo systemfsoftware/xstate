@@ -133,6 +133,9 @@ jobs:
           name: mutation-report-shard-${{ strategy.job-index }}
           path: packages/*/reports/mutation-report.*
           if-no-files-found: ignore
+      - name: Print the failed shard's Stryker logs
+        if: failure()
+        run: .github/scripts/print-log-tails.sh packages/*/stryker.log
       - name: Re-run a failed shard's project runs with their output kept
         if: failure()
         timeout-minutes: 20
@@ -153,12 +156,15 @@ jobs:
             while read -r project; do
               out="$root/reports/diagnostics/$project"
               mkdir -p "$out"
-              (cd "$project" && "$root/node_modules/.bin/stryker" run --plan "$root/stryker-plan.json" \
-                --shard "$MUTATION_SHARD" --project "$project" \
+              (cd "$project" && timeout --kill-after=30 600 "$root/node_modules/.bin/stryker" run \
+                --plan "$root/stryker-plan.json" --shard "$MUTATION_SHARD" --project "$project" \
+                --concurrency 1 \
                 --progressStreamFile "$out/mutation-stream.jsonl" \
                 --incremental --incrementalFile "$out/stryker-incremental.json" \
                 > "$out/stdout.log" 2> "$out/stderr.log")
               echo "$project exited $?" | tee "$out/exit.txt"
+              "$root/.github/scripts/print-log-tails.sh" \
+                "$out/stderr.log" "$out/stdout.log" "$root/$project/stryker.log"
             done < .cache/shard-projects.txt
       - if: failure()
         uses: actions/upload-artifact@v6
