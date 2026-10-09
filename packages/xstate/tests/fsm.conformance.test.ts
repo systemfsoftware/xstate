@@ -372,6 +372,40 @@ Feature('Judging the published FSM against a model of its flat event table', { t
     )
 
     scenario(
+      'A snapshot restored in a state the machine does not declare ignores events',
+      Gherkin.Do.pipe(
+        Given('a document persisted by a machine version that declares state z')(
+          'persisted',
+          () => {
+            const persisting = createFSM({ initial: 'z', context: { n: 1 }, states: { z: {}, a: {} } })
+            return Effect.sync(() => persisting.getPersistedSnapshot(persisting.initialState))
+          },
+        ),
+        When('a machine that declares only state a restores it and receives go')('restored', (s) =>
+          Effect.sync(() => {
+            const actor = createActor(
+              createFSM<{ n: number }, { type: 'go' }, 'a'>({
+                initial: 'a',
+                context: { n: 1 },
+                states: { a: { on: { go: 'a' } } },
+              }),
+              { snapshot: s.persisted },
+            ).start()
+            actor.send({ type: 'go' })
+            const { status, value, context } = actor.getSnapshot()
+            actor.stop()
+            return `${status} ${value} n=${String(context.n)}`
+          })),
+        Then('the actor stays active in z with the restored context')((s, expect) =>
+          expect(s.restored, s.restored).toSatisfy(
+            (restored) => restored === 'active z n=1',
+            'an event in an undeclared state leaves the restored snapshot as it was',
+          )
+        ),
+      ),
+    )
+
+    scenario(
       'The published FSM entrypoint exposes only the pure FSM API',
       Gherkin.Do.pipe(
         Given('the published entrypoint namespace is read once')(
