@@ -267,7 +267,7 @@ const drain = <
   traversal: Traversal<TSnapshot, TEvent, TInput, TSystem>,
 ): void => {
   let level = [start]
-  while (level.length > 0) {
+  while (level.length !== 0) {
     level = expandLevel(adj, level, traversal)
   }
 }
