@@ -1,8 +1,15 @@
 import { Conformance } from '@systemfsoftware/conformance-spec'
 import { And, Gherkin, Given, it, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
-import { createActor, initialTransition, transition } from '@systemfsoftware/xstate'
+import {
+  type ActorLogic,
+  createActor,
+  type EventFromLogic,
+  initialTransition,
+  type SnapshotFrom,
+  transition,
+} from '@systemfsoftware/xstate'
 import * as fsmEntrypoint from '@systemfsoftware/xstate/fsm'
-import { createFSM, setup, types } from '@systemfsoftware/xstate/fsm'
+import { createFSM, type FSMSnapshot, setup, types } from '@systemfsoftware/xstate/fsm'
 import { Effect, Layer } from 'effect'
 import { failReportOf, passReportOf } from './__fixtures__/checkReports.js'
 import {
@@ -11,87 +18,238 @@ import {
   makeCopyOnNoopSubject,
   makeFsmSubject,
   makeInheritedEventSubject,
+  makeInheritedPatchSubject,
   runFsmCommand,
 } from './__fixtures__/fsm.js'
 import { FsmCommand, fsmModel } from './__fixtures__/fsm.model.js'
 
-const singleStateMachine = createFSM<
-  { count: number },
-  { type: 'inc' },
-  'active'
->({
-  initial: 'active',
-  context: { count: 0 },
-  states: { active: { on: { inc: { context: { count: 1 } } } } },
-})
+type User = { id: string }
+type LoadingContext = { status: 'loading' }
+type LoadedContext = { status: 'loaded'; user: User }
+type FinishContext = { status: 'idle'; count: number } | { status: 'done'; count: number; result: string }
+type FinishEvent = { type: 'finish'; result: string } | { type: 'reset' }
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
 
-const incMachine = createFSM<
-  { count: number },
-  { type: 'inc' } | { type: 'stop' },
-  'active' | 'stopped'
->({
-  initial: 'active',
-  context: { count: 0 },
-  states: {
-    active: {
-      on: {
-        inc: ({ context }) => ({ context: { count: context.count + 1 } }),
-        stop: 'stopped',
-      },
-    },
-    stopped: {},
-  },
-})
-
-const typedSetup = setup({
-  schemas: { events: { load: types<{ id: string }>() } },
-  states: { idle: {}, loaded: { schemas: { context: types<{ id: string }>() } } },
-})
-
-const loadedMachine = typedSetup.createFSM({
-  initial: 'idle',
-  context: {},
-  states: {
-    idle: {
-      on: {
-        load: ({ event }) => ({ target: 'loaded', context: { id: event.id } }),
-      },
-    },
-    loaded: {},
-  },
-})
-
-export const typeLevelContract = [
-  singleStateMachine.initialState.value satisfies 'active',
-  singleStateMachine.initialState.context.count satisfies number,
-  singleStateMachine.transition(singleStateMachine.initialState, { type: 'inc' })[0].context.count satisfies number,
-  singleStateMachine.transition(singleStateMachine.initialState, { type: 'inc' })[1] satisfies never[],
-  initialTransition(singleStateMachine)[0].value satisfies 'active',
-  transition(incMachine, incMachine.initialState, { type: 'inc' })[0].value satisfies 'active' | 'stopped',
-  createActor(singleStateMachine).getSnapshot().value satisfies 'active',
-  // @ts-expect-error unknown event
-  singleStateMachine.transition(singleStateMachine.initialState, { type: 'unknown' }),
-  createFSM<{ count: number }, { type: 'inc' }, 'active'>({
+export const typeLevelContract = () => {
+  const singleStateMachine = createFSM<{ count: number }, { type: 'inc' }, 'active'>({
     initial: 'active',
+    context: { count: 0 },
+    states: { active: { on: { inc: { context: { count: 1 } } } } },
+  })
+
+  const incMachine = createFSM<{ count: number }, { type: 'inc' } | { type: 'stop' }, 'active' | 'stopped'>({
+    initial: 'active',
+    context: { count: 0 },
     states: {
       active: {
         on: {
-          inc: {
-            // @ts-expect-error target must name a declared state
-            target: 'missing',
-          },
+          inc: ({ context }) => ({ context: { count: context.count + 1 } }),
+          stop: 'stopped',
+        },
+      },
+      stopped: {},
+    },
+  })
+
+  const finishMachine = createFSM<FinishContext, FinishEvent, 'idle' | 'done'>({
+    initial: 'idle',
+    context: { status: 'idle', count: 0 },
+    states: {
+      idle: {
+        on: {
+          finish: ({ context, event }) => ({
+            target: 'done',
+            context: { status: 'done' as const, count: context.count + 1, result: event.result },
+          }),
+          reset: { context: { status: 'idle', count: 0 } },
+        },
+      },
+      done: {},
+    },
+  })
+
+  const typedSetup = setup({
+    schemas: { events: { load: types<{ id: string }>() } },
+    states: { idle: {}, loaded: { schemas: { context: types<{ id: string }>() } } },
+  })
+
+  const loadedMachine = typedSetup.createFSM({
+    initial: 'idle',
+    context: {},
+    states: {
+      idle: {
+        on: {
+          load: ({ event }) => ({ target: 'loaded', context: { id: event.id } }),
+        },
+      },
+      loaded: {},
+    },
+  })
+
+  const userSetup = setup({
+    schemas: {
+      context: types<LoadingContext | LoadedContext>(),
+      events: { resolve: types<{ user: User }>(), reset: types<{}>(), retry: types<{}>() },
+    },
+    states: {
+      loading: { schemas: { context: types<LoadingContext>() } },
+      loaded: { schemas: { context: types<LoadedContext>() } },
+    },
+  })
+
+  const userMachine = userSetup.createFSM({
+    initial: 'loading',
+    context: { status: 'loading' },
+    states: {
+      loading: {
+        on: {
+          resolve: ({ event }) => ({ target: 'loaded', context: { status: 'loaded' as const, user: event.user } }),
+          reset: { context: { status: 'loading' as const } },
+          retry: 'loading',
+        },
+      },
+      loaded: {
+        on: { reset: () => ({ target: 'loading', context: { status: 'loading' as const } }) },
+      },
+    },
+  })
+
+  const stateSchemaSetup = setup({
+    states: {
+      loading: { schemas: { context: types<LoadingContext>() } },
+      loaded: { schemas: { context: types<LoadedContext>() } },
+    },
+  })
+
+  const draftSetup = setup({
+    schemas: {
+      context: types<{ requestId: string; draft?: string }>(),
+      events: { review: types<{ draft: string }>(), skip: types<{}>() },
+    },
+    states: { reviewing: { schemas: { context: types<{ draft: string }>() } } },
+  })
+
+  const draftMachine = draftSetup.createFSM({
+    initial: 'editing',
+    context: { requestId: 'req-1' },
+    states: {
+      editing: {
+        on: {
+          review: ({ event }) => ({ target: 'reviewing', context: { draft: event.draft } }),
+          // @ts-expect-error entering reviewing requires a draft
+          skip: { target: 'reviewing' },
+        },
+      },
+      reviewing: {
+        on: {
+          review: ({ context }) => ({
+            context: { draft: [context.requestId satisfies string, context.draft satisfies string].join() },
+          }),
         },
       },
     },
-  }),
-  loadedMachine.initialState.value satisfies 'idle' | 'loaded',
-  // @ts-expect-error undeclared event
-  loadedMachine.transition(loadedMachine.initialState, { type: 'unknown' }),
-  // @ts-expect-error event payload must match its schema
-  loadedMachine.transition(loadedMachine.initialState, { type: 'load', id: 1 }),
-  // @ts-expect-error a declared context schema makes initial context required
-  typedSetup.createFSM({ initial: 'idle', states: { idle: {}, loaded: {} } }),
-] as const
+  })
+
+  const singleSnapshot = singleStateMachine.initialState
+  const singleActor = createActor(singleStateMachine)
+
+  return [
+    singleStateMachine satisfies ActorLogic<FSMSnapshot<{ count: number }, 'active'>, { type: 'inc' }>,
+    true satisfies Equal<SnapshotFrom<typeof singleStateMachine>, FSMSnapshot<{ count: number }, 'active'>>,
+    true satisfies Equal<EventFromLogic<typeof singleStateMachine>, { type: 'inc' }>,
+    singleSnapshot.value satisfies 'active',
+    singleSnapshot.context.count satisfies number,
+    singleStateMachine.transition(singleSnapshot, { type: 'inc' })[0].context.count satisfies number,
+    singleStateMachine.transition(singleSnapshot, { type: 'inc' })[1] satisfies never[],
+    initialTransition(singleStateMachine)[0].value satisfies 'active',
+    transition(incMachine, incMachine.initialState, { type: 'inc' })[0].value satisfies 'active' | 'stopped',
+    singleActor.getSnapshot().value satisfies 'active',
+    singleActor.getSnapshot().context.count satisfies number,
+    // @ts-expect-error an actor of the FSM refuses an undeclared event
+    singleActor.send({ type: 'unknown' }),
+    // @ts-expect-error unknown event
+    singleStateMachine.transition(singleSnapshot, { type: 'unknown' }),
+    createFSM<{ count: number }, { type: 'inc' }, 'active'>({
+      initial: 'active',
+      context: { count: 0 },
+      states: {
+        active: {
+          on: {
+            inc: {
+              // @ts-expect-error target must name a declared state
+              target: 'missing',
+            },
+          },
+        },
+      },
+    }),
+    // @ts-expect-error a declared context cannot be omitted
+    createFSM<FinishContext, FinishEvent, 'idle' | 'done'>({ initial: 'idle', states: { idle: {}, done: {} } }),
+    // @ts-expect-error event payload must match its type
+    finishMachine.transition(finishMachine.initialState, { type: 'finish', result: 1 }),
+    loadedMachine.initialState.value satisfies 'idle' | 'loaded',
+    (snapshot: SnapshotFrom<typeof loadedMachine>) =>
+      snapshot.value === 'loaded' && snapshot.context.id satisfies string,
+    // @ts-expect-error undeclared event
+    loadedMachine.transition(loadedMachine.initialState, { type: 'unknown' }),
+    // @ts-expect-error event payload must match its schema
+    loadedMachine.transition(loadedMachine.initialState, { type: 'load', id: 1 }),
+    // @ts-expect-error a declared context schema makes initial context required
+    typedSetup.createFSM({ initial: 'idle', states: { idle: {}, loaded: {} } }),
+    (snapshot: SnapshotFrom<typeof userMachine>) =>
+      snapshot.value === 'loaded' && snapshot.context.user.id satisfies string,
+    (snapshot: SnapshotFrom<typeof userMachine>) =>
+      snapshot.value === 'loaded' &&
+      // @ts-expect-error a loaded snapshot's context has no loading-only shape
+      snapshot.context.status satisfies 'loading',
+    // @ts-expect-error event payload must match its schema
+    userMachine.transition(userMachine.initialState, { type: 'resolve', user: 1 }),
+    // @ts-expect-error a declared state context schema makes initial context required
+    stateSchemaSetup.createFSM({ initial: 'loading', states: { loading: {}, loaded: {} } }),
+    stateSchemaSetup.createFSM({
+      initial: 'loading',
+      context: { status: 'loading' },
+      states: {
+        loading: {
+          on: {
+            // @ts-expect-error a string target cannot keep a context the target state refuses
+            finish: 'loaded',
+          },
+        },
+        loaded: {},
+      },
+    }),
+    stateSchemaSetup.createFSM({
+      initial: 'loading',
+      context: { status: 'loading' },
+      states: {
+        loading: {
+          on: {
+            // @ts-expect-error the target context is missing the required user
+            finish: { target: 'loaded', context: { status: 'loaded' } },
+          },
+        },
+        loaded: {},
+      },
+    }),
+    stateSchemaSetup.createFSM({
+      initial: 'loading',
+      context: { status: 'loading' },
+      states: {
+        loading: {
+          on: {
+            // @ts-expect-error a function transition must provide the target context
+            finish: () => ({ target: 'loaded' }),
+          },
+        },
+        loaded: {},
+      },
+    }),
+    (snapshot: SnapshotFrom<typeof draftMachine>) =>
+      snapshot.value === 'reviewing' &&
+      [snapshot.context.requestId satisfies string, snapshot.context.draft satisfies string],
+  ] as const
+}
 
 const Feature = makeFeature({ it })
 
@@ -107,10 +265,15 @@ const liveness = (observed: FsmLedger): boolean =>
     observed.contextPatches,
     observed.functionTransitions,
     observed.inheritedEventsIgnored,
+    observed.inheritedPatchKeys,
+    observed.bareContexts,
+    observed.emissions,
     observed.drivers.pure,
     observed.drivers.entry,
     observed.drivers.actor,
     observed.drivers.persisted,
+    observed.factories.createFSM,
+    observed.factories.setup,
   ].every((occurrences) => occurrences > 0)
 
 const checkOver = (handle: FsmHandle, seed: number) =>
@@ -151,12 +314,12 @@ Feature('Judging the published FSM against a model of its flat event table', { t
             (s) => Effect.succeed(s.subject.observed),
           ),
           And(
-            'no-op transitions, target changes, context patches, function transitions and ignored inherited events all occurred, for every driver',
+            'no-op transitions, target changes, context patches, function transitions, ignored inherited events and patch keys, bare contexts and actor emissions all occurred, for every driver and factory',
           )(
             (s, expect) =>
               expect(s.observed, JSON.stringify(s.observed)).toSatisfy(
                 liveness,
-                'the run exercised no-op transitions, target changes, context patches, function transitions and ignored inherited events, across all four drivers',
+                'the run exercised every transition kind, inherited event names and patch keys, a machine without context and actor emissions, across all four drivers and both factories',
               ),
           ),
         ),
@@ -193,6 +356,10 @@ Feature('Judging the published FSM against a model of its flat event table', { t
     scenario(
       'A subject that reads inherited event names is caught as a model divergence',
       divergesFromTheModel(makeInheritedEventSubject),
+    )
+    scenario(
+      'A subject that reads inherited context patch keys is caught as a model divergence',
+      divergesFromTheModel(makeInheritedPatchSubject),
     )
 
     scenario(

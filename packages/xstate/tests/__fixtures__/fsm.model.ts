@@ -9,7 +9,12 @@ const TagChoice = Schema.Union([Schema.Literals(['keep']), Schema.Literals(['bas
 const EmptySlot = Schema.TaggedStruct('Empty', {})
 const TargetSlot = Schema.TaggedStruct('Target', { target: TargetChoice })
 const OwnPatch = Schema.Struct({ count: CountChoice, tag: TagChoice })
-const ConfigSlot = Schema.TaggedStruct('Config', { target: TargetChoice, patch: OwnPatch })
+const InheritedPatchChoice = Schema.Literals(['none', 'count', 'tag'])
+const ConfigSlot = Schema.TaggedStruct('Config', {
+  target: TargetChoice,
+  patch: OwnPatch,
+  inherited: InheritedPatchChoice,
+})
 const AddSlot = Schema.TaggedStruct('Add', { target: TargetChoice })
 
 const PlainSlot = Schema.Union([EmptySlot, TargetSlot, ConfigSlot])
@@ -19,6 +24,7 @@ const PrototypeChoice = Schema.Union([Schema.Literals(['keep']), StateName])
 
 export const FsmMachine = Schema.Struct({
   initial: StateName,
+  withContext: Schema.Boolean,
   toggle: PlainSlot,
   noop: PlainSlot,
   bump: BumpSlot,
@@ -41,24 +47,35 @@ export type FsmEvent = Schema.Schema.Type<typeof SentEvent>
 const Driver = Schema.Literals(['pure', 'entry', 'actor', 'persisted'])
 export type FsmDriver = Schema.Schema.Type<typeof Driver>
 
+const Factory = Schema.Literals(['createFSM', 'setup'])
+export type FsmFactory = Schema.Schema.Type<typeof Factory>
+
 export const FsmCommand = Schema.TaggedStruct('Run', {
   machine: FsmMachine,
   events: Schema.Array(SentEvent),
   driver: Driver,
+  factory: Factory,
 })
 export type FsmCommand = Schema.Schema.Type<typeof FsmCommand>
 
 export interface FsmContext {
-  readonly count: number
-  readonly tag: string
+  readonly count?: number
+  readonly tag?: string
 }
 
 export interface FsmObservation {
   readonly value: string
   readonly context: FsmContext
+  readonly status: string
+  readonly snapshotKeys: ReadonlyArray<string>
+  readonly effects: number
+  readonly emissions: ReadonlyArray<string>
   readonly sentinelKeptIdentity: boolean
   readonly initialIdentity: boolean
 }
+
+export const emissionOf = (snapshot: { readonly value: string; readonly context: FsmContext }): string =>
+  `${snapshot.value}:${String(snapshot.context.count)}:${String(snapshot.context.tag)}`
 
 const emptySlot: FsmSlot = { _tag: 'Empty' }
 
@@ -105,7 +122,7 @@ const resolveSlot = (slot: FsmSlot, event: FsmEvent, context: FsmContext): SlotR
     Config: (config): SlotResolution => ({ target: targetValue(config.target), patch: patchValuesOf(config.patch) }),
     Add: (add): SlotResolution => ({
       target: targetValue(add.target),
-      patch: { count: context.count + bumpBy(event) },
+      patch: { count: (context.count ?? 0) + bumpBy(event) },
     }),
   })
 
@@ -129,19 +146,42 @@ const stepOf = (machine: FsmMachine, sim: FsmSim, event: FsmEvent): FsmSim => {
   return { value, context }
 }
 
-export const initialContext: FsmContext = { count: 0, tag: 'base' }
+export const initialContextOf = (machine: FsmMachine): FsmContext =>
+  machine.withContext ? { count: 0, tag: 'base' } : {}
 
-const simulate = (machine: FsmMachine, events: ReadonlyArray<FsmEvent>): FsmSim =>
-  events.reduce<FsmSim>(
-    (sim, event) => stepOf(machine, sim, event),
-    { value: machine.initial, context: initialContext },
+const trace = (machine: FsmMachine, start: FsmSim, events: ReadonlyArray<FsmEvent>): ReadonlyArray<FsmSim> =>
+  events.reduce<ReadonlyArray<FsmSim>>(
+    (sims, event) => [...sims, stepOf(machine, sims.at(-1) ?? start, event)],
+    [],
   )
 
+const emissionsOf = (sims: ReadonlyArray<FsmSim>): ReadonlyArray<string> => sims.map(emissionOf)
+
+const emittedAfterRestore = (machine: FsmMachine, start: FsmSim, events: ReadonlyArray<FsmEvent>) => {
+  const [first, ...rest] = events
+  const restored = first === undefined ? start : stepOf(machine, start, first)
+  return emissionsOf(trace(machine, restored, rest))
+}
+
+const expectedEmissions = (command: FsmCommand, start: FsmSim): ReadonlyArray<string> =>
+  Match.value(command.driver).pipe(
+    Match.when('actor', () => emissionsOf(trace(command.machine, start, command.events))),
+    Match.when('persisted', () => emittedAfterRestore(command.machine, start, command.events)),
+    Match.orElse(() => []),
+  )
+
+export const ownSnapshotKeys = ['status,value,context,output,error']
+
 const observationOf = (command: FsmCommand): FsmObservation => {
-  const sim = simulate(command.machine, command.events)
+  const start: FsmSim = { value: command.machine.initial, context: initialContextOf(command.machine) }
+  const sim = trace(command.machine, start, command.events).at(-1) ?? start
   return {
     value: sim.value,
     context: sim.context,
+    status: 'active',
+    snapshotKeys: ownSnapshotKeys,
+    effects: 0,
+    emissions: expectedEmissions(command, start),
     sentinelKeptIdentity: true,
     initialIdentity: command.driver === 'entry',
   }
