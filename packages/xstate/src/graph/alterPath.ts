@@ -11,8 +11,7 @@ const initStepOf = (state: AnySnapshot): ErasedStep => ({
   event: { type: XSTATE_INIT },
 })
 
-const previousStepOf = (steps: ErasedSteps, index: number): ErasedStep | undefined =>
-  index === 0 ? undefined : steps[index - 1]
+const previousStepOf = (steps: ErasedSteps, index: number): ErasedStep | undefined => steps[index - 1]
 
 const eventForStep = (steps: ErasedSteps, index: number): EventObject => {
   const previous = previousStepOf(steps, index)
@@ -30,18 +29,15 @@ const finalStepOf = (path: ErasedStatePath): ErasedStep | undefined => {
 const appendedSteps = (path: ErasedStatePath): ErasedSteps => {
   const steps = replaySteps(path)
   const finalStep = finalStepOf(path)
-  if (finalStep !== undefined) {
-    steps.push(finalStep)
-  }
+  steps.push(finalStep === undefined ? initStepOf(path.state) : finalStep)
   return steps
 }
 
 // TODO: rewrite parts of the algorithm leading to this to make this function obsolete
 export function alterPath<T extends ErasedStatePath>(path: T): T
 export function alterPath<T extends ErasedStatePath>(path: T): ErasedStatePath {
-  const steps = path.steps.length > 0 ? appendedSteps(path) : [initStepOf(path.state)]
   return {
     ...path,
-    steps,
+    steps: appendedSteps(path),
   }
 }

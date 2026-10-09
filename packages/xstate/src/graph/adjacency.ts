@@ -239,41 +239,21 @@ const expand = <
   enqueueTransitions(value, queue, queued, traversal)
 }
 
-const pastCompactThreshold = (head: number): boolean => head > 4096
-
-const beyondHalf = (head: number, length: number): boolean => head * 2 > length
-
-const shouldCompact = (head: number, length: number): boolean => pastCompactThreshold(head) && beyondHalf(head, length)
-
-const compactFrontier = <TSnapshot, TEvent>(
-  queue: Array<QueueEntry<TSnapshot, TEvent>>,
-  head: number,
-): number => {
-  if (!shouldCompact(head, queue.length)) {
-    return head
-  }
-  queue.splice(0, head + 1)
-  return -1
-}
-
-const advance = <
+const expandLevel = <
   TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
   TInput,
   TSystem extends AnyActorSystem,
 >(
   adj: AdjacencyMap<TSnapshot, TEvent>,
-  queue: Array<QueueEntry<TSnapshot, TEvent>>,
-  head: number,
+  level: ReadonlyArray<QueueEntry<TSnapshot, TEvent>>,
   traversal: Traversal<TSnapshot, TEvent, TInput, TSystem>,
-): number => {
-  const queued = queue[head]
-  if (queued === undefined) {
-    return head + 1
+): Array<QueueEntry<TSnapshot, TEvent>> => {
+  const nextLevel: Array<QueueEntry<TSnapshot, TEvent>> = []
+  for (const queued of level) {
+    expand(adj, nextLevel, queued, traversal)
   }
-  const nextHead = compactFrontier(queue, head)
-  expand(adj, queue, queued, traversal)
-  return nextHead + 1
+  return nextLevel
 }
 
 const drain = <
@@ -283,12 +263,12 @@ const drain = <
   TSystem extends AnyActorSystem,
 >(
   adj: AdjacencyMap<TSnapshot, TEvent>,
-  queue: Array<QueueEntry<TSnapshot, TEvent>>,
+  start: QueueEntry<TSnapshot, TEvent>,
   traversal: Traversal<TSnapshot, TEvent, TInput, TSystem>,
 ): void => {
-  let head = 0
-  while (head < queue.length) {
-    head = advance(adj, queue, head, traversal)
+  let level = [start]
+  while (level.length !== 0) {
+    level = expandLevel(adj, level, traversal)
   }
 }
 
@@ -312,10 +292,7 @@ function computeAdjacencyMap<
   }
   const fromState = config.fromState ?? initialSnapshotOf(logic, options.input, actorScope)
   const adj: AdjacencyMap<TSnapshot, TEvent> = createNullDict<AdjacencyValue<TSnapshot, TEvent>>()
-  const queue: Array<QueueEntry<TSnapshot, TEvent>> = [
-    { nextState: fromState, event: undefined, prevState: undefined },
-  ]
-  drain(adj, queue, traversal)
+  drain(adj, { nextState: fromState, event: undefined, prevState: undefined }, traversal)
   return adj
 }
 
@@ -367,35 +344,18 @@ export function adjacencyMapToArray<TSnapshot, TEvent>(
   event: TEvent
   nextState: TSnapshot
 }> {
-  return Object.keys(adjMap).flatMap((key) => adjacencyRow(adjMap, toSerializedSnapshot(key)))
-}
-
-const requiredValue = <TKey extends string, TValue>(
-  dict: Record<TKey, TValue>,
-  key: TKey,
-): TValue => {
-  const value = dict[key]
-  if (value === undefined) {
-    throw new Error('Missing adjacency entry')
-  }
-  return value
+  return Object.values({ ...adjMap }).flatMap((adjValue) => adjacencyRow(adjValue))
 }
 
 const adjacencyRow = <TSnapshot, TEvent>(
-  adjMap: AdjacencyMap<TSnapshot, TEvent>,
-  key: SerializedSnapshot,
+  adjValue: AdjacencyValue<TSnapshot, TEvent>,
 ): Array<{
   state: TSnapshot
   event: TEvent
   nextState: TSnapshot
-}> => {
-  const adjValue = requiredValue(adjMap, key)
-  return Object.keys(adjValue.transitions).map((eventKey) => {
-    const transition = requiredValue(adjValue.transitions, toSerializedEvent(eventKey))
-    return {
-      state: adjValue.state,
-      event: transition.event,
-      nextState: transition.state,
-    }
-  })
-}
+}> =>
+  Object.values({ ...adjValue.transitions }).map((transition) => ({
+    state: adjValue.state,
+    event: transition.event,
+    nextState: transition.state,
+  }))

@@ -1,6 +1,7 @@
 import { Conformance } from '@systemfsoftware/conformance-spec'
 import { And, Gherkin, Given, it, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import {
+  type AnyActorScope,
   createActor,
   createLogic,
   createMachine,
@@ -330,6 +331,25 @@ const rootedLogicAdjacencyKeys = (): ReadonlyArray<string> => {
   return Object.keys(getAdjacencyMap(logic, { serializeState: (state) => `s${state.context}` }))
 }
 
+const machineShapedMembers = {
+  root: lightMachine.root,
+  getStateNodeById: () => undefined,
+  resolveState: () => undefined,
+  getTransitionData: () => undefined,
+}
+
+const callableLogicAdjacencyKeys = (): ReadonlyArray<string> => {
+  const logic = Object.assign(
+    () => undefined,
+    createLogic({ context: 0, run: () => undefined }),
+    machineShapedMembers,
+  )
+  return Object.keys(getAdjacencyMap(logic, {
+    fromState: { status: 'active', output: undefined, error: undefined, context: 0, input: undefined },
+    events: [],
+  }))
+}
+
 const countedCustomLogic = () => {
   let calls = 0
   const logic = createLogic({
@@ -456,6 +476,56 @@ const expectedEntrypointNames = [
   'serializeSnapshot',
   'toDirectedGraph',
 ]
+
+const mockScopeIdentity = (): object => {
+  const logic = Object.assign(
+    createLogic({ context: {}, run: () => undefined }),
+    {
+      getInitialSnapshot: (actorScope: AnyActorScope) => ({
+        context: { id: actorScope.id, sessionId: actorScope.sessionId },
+      }),
+    },
+  )
+  const path = getPathsFromEvents(logic, [], {})[0]
+  return path === undefined ? {} : path.state.context
+}
+
+const candidateReplayMachine = createMachine({
+  initial: 'a',
+  states: {
+    a: { on: { NEXT: { target: 'b' }, BACK: { target: 'c' } } },
+    b: {},
+    c: {},
+  },
+})
+
+const candidateReplay = (): object => {
+  const run = (event: EventFromLogic<typeof candidateReplayMachine>): string => {
+    try {
+      const path = getPathsFromEvents(candidateReplayMachine, [event], {
+        events: [{ type: 'NEXT' }, { type: 'BACK' }],
+        filterEvents: (
+          _state: SnapshotFrom<typeof candidateReplayMachine>,
+          candidate: EventFromLogic<typeof candidateReplayMachine>,
+        ) => candidate.type !== 'BACK',
+      })[0]
+      return path === undefined ? 'none' : String(path.state.value)
+    } catch (error) {
+      return error instanceof Error ? error.message : 'unrecognized'
+    }
+  }
+  return { next: run({ type: 'NEXT' }), back: run({ type: 'BACK' }) }
+}
+
+const subIntegerLimitReplay = (): string => {
+  const machine = createMachine({ initial: 'a', states: { a: { on: { GO: { target: 'a' } } } } })
+  try {
+    const paths = getPathsFromEvents(machine, [{ type: 'GO' }, { type: 'GO' }], { limit: 0.5 })
+    return `paths:${paths.length}`
+  } catch (error) {
+    return error instanceof Error ? error.message : 'unrecognized'
+  }
+}
 
 Feature('Judging the published graph walk against a model of its traversal', { timeout: 0 })
   .withLayer(Layer.empty)
@@ -650,16 +720,25 @@ Feature('Judging the published graph walk against a model of its traversal', { t
     )
 
     scenario(
-      'A logic carrying a non-machine root member is traversed as plain logic, not as a machine',
+      'A logic the structural machine check rejects is traversed as plain logic, not as a machine',
       Gherkin.Do.pipe(
-        Given('the adjacency keys of a custom logic whose root member is not a machine root')(
+        Given(
+          'the adjacency keys of a logic whose root member is not a machine root and of a callable logic carrying machine-shaped members',
+        )(
           'keys',
-          () => Effect.succeed(rootedLogicAdjacencyKeys()),
+          () => Effect.succeed({ rooted: rootedLogicAdjacencyKeys(), callable: callableLogicAdjacencyKeys() }),
         ),
-        Then('the traversal starts from the plain initial state and derives no event from snapshot nodes')((
+        Then(
+          'both walk as plain logic: the rooted one from its serialized start, the callable under the plain default serializer',
+        )((
           s,
           expect,
-        ) => expect(s.keys, JSON.stringify(s.keys)).toEqual(['s0'])),
+        ) =>
+          expect(s.keys, JSON.stringify(s.keys)).toEqual({
+            rooted: ['s0'],
+            callable: ['{"status":"active","context":0}'],
+          })
+        ),
       ),
     )
 
@@ -726,6 +805,51 @@ Feature('Judging the published graph walk against a model of its traversal', { t
             '@xstate.init → GO_TO_B',
             '@xstate.init → GO_TO_C',
           ])
+        ),
+      ),
+    )
+
+    scenario(
+      'A traversal hands the logic it walks an actor scope identified as the graph mock',
+      Gherkin.Do.pipe(
+        Given('the identity a custom logic reads off the actor scope of its initial snapshot')(
+          'identity',
+          () => Effect.succeed(mockScopeIdentity()),
+        ),
+        Then('the scope is the graph mock: an empty id and the mock session id')((s, expect) =>
+          expect(s.identity, JSON.stringify(s.identity)).toEqual({ id: '', sessionId: 'mock-actor-scope' })
+        ),
+      ),
+    )
+
+    scenario(
+      'A replayed event is replaced by the last override candidate whose filter and serial both match it',
+      Gherkin.Do.pipe(
+        Given('a one-event replay over two candidate events, the second of which the filter rejects')(
+          'observed',
+          () => Effect.succeed(candidateReplay()),
+        ),
+        Then('an accepted event advances to its target, and an event no candidate serial names is refused')((
+          s,
+          expect,
+        ) =>
+          expect(s.observed, JSON.stringify(s.observed)).toEqual({
+            next: 'b',
+            back: 'Invalid transition from {"value":"a"} with {"type":"BACK"}',
+          })
+        ),
+      ),
+    )
+
+    scenario(
+      'A replay refuses the step after the step count reaches a limit below one',
+      Gherkin.Do.pipe(
+        Given('two events replayed against a machine with the limit set to one half')(
+          'outcome',
+          () => Effect.succeed(subIntegerLimitReplay()),
+        ),
+        Then('the traversal is refused rather than returning the completed path')((s, expect) =>
+          expect(s.outcome, JSON.stringify(s.outcome)).toEqual('Traversal limit exceeded')
         ),
       ),
     )
