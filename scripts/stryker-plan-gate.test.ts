@@ -1,6 +1,6 @@
 import { assertEquals } from '@std/assert'
 import { join } from '@std/path'
-import { gatePlan, type Refusal, scopeOf, type ShardPlan } from './stryker-plan-gate.ts'
+import { gatePlan, type Refusal, scopeOf, selectShardProjects, type ShardPlan } from './stryker-plan-gate.ts'
 
 interface FixturePackage {
   readonly dir: string
@@ -72,6 +72,45 @@ Deno.test('a valid plan yields the plan matrix and has-shards', async () => {
       unmutated: [],
       outOfScope: [],
     },
+  })
+})
+
+Deno.test('a shard label selects that shard index and its projects in plan order', async () => {
+  const plan: ShardPlan = {
+    ...TWO_PROJECT_PLAN,
+    shards: [
+      TWO_PROJECT_PLAN.shards[0]!,
+      {
+        index: 2,
+        count: 2,
+        predictedSeconds: 3,
+        projects: [
+          { project: 'packages/site', mutants: ['fedcba9876543210'] },
+          { project: 'packages/core', mutants: ['00112233445566ff'] },
+        ],
+      },
+    ],
+  }
+  const { root, planFile } = await writeFixture({ plan })
+  assertEquals(await selectShardProjects({ root, planFile, shard: '2/2' }), {
+    ok: true,
+    selected: { index: 2, projects: ['packages/site', 'packages/core'] },
+  })
+})
+
+Deno.test('a shard label the plan does not carry is refused with the labels it does carry', async () => {
+  const { root, planFile } = await writeFixture({ plan: TWO_PROJECT_PLAN })
+  assertEquals(await selectShardProjects({ root, planFile, shard: '2/3' }), {
+    ok: false,
+    refusal: { _tag: 'ShardUnknown', shard: '2/3', labels: ['1/2', '2/2'] },
+  })
+})
+
+Deno.test('shard selection without a plan file is refused', async () => {
+  const { root, planFile } = await writeFixture({})
+  assertEquals(await selectShardProjects({ root, planFile, shard: '1/1' }), {
+    ok: false,
+    refusal: { _tag: 'PlanMissing', file: join(root, planFile) },
   })
 })
 

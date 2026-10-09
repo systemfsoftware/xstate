@@ -111,6 +111,21 @@ jobs:
             reports/shards/**/stryker-incremental.json
           key: stryker-shard-${{ matrix.shard }}-${{ github.sha }}
           restore-keys: stryker-shard-${{ matrix.shard }}-
+      - name: Select the shard's projects
+        uses: ./.github/actions/sandbox
+        env:
+          MUTATION_SHARD: ${{ matrix.shard }}
+        with:
+          hosts: |
+            jsr.io
+            registry.npmjs.org
+          pass-env: |
+            MUTATION_SHARD
+          command: >-
+            mkdir -p .cache &&
+            deno run --config=scripts/deno.json --allow-read --allow-write
+            scripts/stryker-plan-gate.ts shard --plan stryker-plan.json --shard "$MUTATION_SHARD"
+            --out .cache/shard-projects.tsv
       - name: Mutation at break 100
         uses: ./.github/actions/sandbox
         env:
@@ -120,7 +135,7 @@ jobs:
             GITHUB_ACTIONS
             MUTATION_SHARD
             MUTATION_SCOPE
-          command: ./node_modules/.bin/stryker run --plan stryker-plan.json --shard "$MUTATION_SHARD"
+          command: .github/scripts/run-shard.sh stryker-plan.json "$MUTATION_SHARD" .cache/shard-projects.tsv
       - if: always()
         uses: actions/upload-artifact@v6
         with:
@@ -132,46 +147,6 @@ jobs:
         with:
           name: mutation-report-shard-${{ strategy.job-index }}
           path: packages/*/reports/mutation-report.*
-          if-no-files-found: ignore
-      - name: Print the failed shard's progress streams
-        if: failure()
-        run: .github/scripts/print-log-tails.sh reports/mutation-stream.jsonl reports/shards/*/*/*/mutation-stream.jsonl
-      - name: Re-run a failed shard's project runs with their output kept
-        if: failure()
-        timeout-minutes: 20
-        uses: ./.github/actions/sandbox
-        env:
-          MUTATION_SHARD: ${{ matrix.shard }}
-        with:
-          pass-env: |
-            GITHUB_ACTIONS
-            MUTATION_SHARD
-            MUTATION_SCOPE
-          command: |
-            set -uo pipefail
-            root="$PWD"
-            jq -r --arg shard "$MUTATION_SHARD" \
-              '.shards[] | select("\(.index)/\(.count)" == $shard) | .projects[].project' \
-              stryker-plan.json > .cache/shard-projects.txt
-            while read -r project; do
-              out="$root/reports/diagnostics/$project"
-              mkdir -p "$out"
-              (cd "$project" && timeout --kill-after=30 600 "$root/node_modules/.bin/stryker" run \
-                --plan "$root/stryker-plan.json" --shard "$MUTATION_SHARD" --project "$project" \
-                --concurrency 1 \
-                --progressStreamFile "$out/mutation-stream.jsonl" \
-                --incremental --incrementalFile "$out/stryker-incremental.json" \
-                > "$out/stdout.log" 2> "$out/stderr.log")
-              echo "$project exited $?" | tee "$out/exit.txt"
-              "$root/.github/scripts/print-log-tails.sh" "$out/stderr.log" "$out/stdout.log"
-            done < .cache/shard-projects.txt
-      - if: failure()
-        uses: actions/upload-artifact@v6
-        with:
-          name: mutation-diagnostics-shard-${{ strategy.job-index }}
-          path: |
-            reports/diagnostics/
-            reports/mutation-stream.jsonl
           if-no-files-found: ignore
 
   verdict:
