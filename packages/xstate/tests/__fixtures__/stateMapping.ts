@@ -1,6 +1,7 @@
 import { createActor, mapState, setup, types } from '@systemfsoftware/xstate'
 import { Context, Effect, Layer, Match, pipe } from 'effect'
 import {
+  activeChildrenOf,
   distinctChildrenOf,
   mappedResultOf,
   type MappedState,
@@ -22,9 +23,8 @@ const nodeConfigOf = (tree: StateTree): NodeConfig =>
     Match.tag('Atomic', (): NodeConfig => ({})),
     Match.tag('Final', (): NodeConfig => ({ type: 'final' })),
     Match.tag('Compound', (compound): NodeConfig => {
-      const children = distinctChildrenOf(compound.children)
-      const [initial = ''] = children[compound.initial % children.length] ?? []
-      return { initial, states: statesOf(children) }
+      const [initial = ''] = activeChildrenOf(compound).map(([name]) => name)
+      return { initial, states: statesOf(distinctChildrenOf(compound.children)) }
     }),
     Match.tag(
       'Parallel',
@@ -73,7 +73,6 @@ const mapperOf = (tree: StateTree, path: readonly string[]): Mapper | undefined 
 }
 
 export interface MappingLedger {
-  calls: number
   emptyResults: number
   severalResults: number
   unrelatedResults: number
@@ -119,10 +118,9 @@ const deepestFirstMapping: Mapping = (command) =>
   publishedMapping(command).toSorted((left, right) => right.path.length - left.path.length)
 
 const subjectOf = (mapping: Mapping): MappingSubject => {
-  const observed: MappingLedger = { calls: 0, emptyResults: 0, severalResults: 0, unrelatedResults: 0 }
+  const observed: MappingLedger = { emptyResults: 0, severalResults: 0, unrelatedResults: 0 }
   const run = (command: MapStateCommand): MappingResponse => {
     const results = mapping(command)
-    observed.calls += 1
     observed.emptyResults += results.length === 0 ? 1 : 0
     observed.severalResults += results.length > 1 ? 1 : 0
     observed.unrelatedResults += mapsUnrelatedStates(results) ? 1 : 0

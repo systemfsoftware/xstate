@@ -65,11 +65,12 @@ interface ActiveNode {
   readonly mapped: boolean
 }
 
-const activeChildrenOf = (tree: StateTree): ReadonlyArray<readonly [string, StateTree]> =>
+export const activeChildrenOf = (tree: StateTree): ReadonlyArray<readonly [string, StateTree]> =>
   Match.value(tree).pipe(
     Match.tag('Compound', (compound) => {
       const children = distinctChildrenOf(compound.children)
-      return children.slice(compound.initial % children.length).slice(0, 1)
+      const initial = compound.initial % children.length
+      return children.slice(initial, initial + 1)
     }),
     Match.tag('Parallel', (parallel) => distinctChildrenOf(parallel.children)),
     Match.orElse(() => []),
@@ -94,20 +95,17 @@ export const expectedMapping = (command: MapStateCommand): ReadonlyArray<MappedS
     .filter((node) => node.mapped)
     .map(({ path }) => ({ path, result: mappedResultOf(path)(command.tag) }))
 
-export const MappingState = Schema.Struct({ mappedCalls: Schema.Finite })
+export const MappingState = Schema.Struct({})
 export type MappingState = Schema.Schema.Type<typeof MappingState>
 
 const stepMapping = (
   state: MappingState,
   command: MapStateCommand,
-): readonly [MappingState, ReadonlyArray<MappedState>] => [
-  { mappedCalls: state.mappedCalls + 1 },
-  expectedMapping(command),
-]
+): readonly [MappingState, ReadonlyArray<MappedState>] => [state, expectedMapping(command)]
 
 export const stateMappingModel = {
   state: MappingState,
-  initial: { mappedCalls: 0 },
+  initial: {},
   precondition: (): boolean => true,
   step: stepMapping,
 }
