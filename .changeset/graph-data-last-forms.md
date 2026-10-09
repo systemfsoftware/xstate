@@ -2,11 +2,7 @@
 "@systemfsoftware/xstate": minor
 ---
 
-The graph functions `getShortestPaths`, `getSimplePaths`, `getAdjacencyMap`, `getPathsFromEvents` and `joinPaths` can now be called with their data last, so they compose in `pipe`:
+`getShortestPaths`, `getSimplePaths`, `getAdjacencyMap`, `getPathsFromEvents` and `joinPaths` can also be called data-last, so they compose in `pipe`: `getShortestPaths(options)(logic)`, `getPathsFromEvents(events, options?)(logic)`, and `pipe(headPath, joinPaths(tailPath))`, which equals `joinPaths(headPath, tailPath)`. A lone argument with a `transition` member is read as actor logic. Data-first calls are unchanged.
 
-- `getShortestPaths(options)` and `getSimplePaths(options)` return a function of the actor logic.
-- `getAdjacencyMap(options)` returns a function of the actor logic.
-- `getPathsFromEvents(events, options?)` returns a function of the actor logic.
-- `joinPaths(tailPath)` returns a function of the head path, so `pipe(headPath, joinPaths(tailPath))` equals `joinPaths(headPath, tailPath)`.
-
-Data-first calls are unchanged. A lone argument that has a `transition` member is read as actor logic (actor logic always has one, `TraversalOptions` has none) and any other lone argument as options; `getPathsFromEvents` reads an array first argument as data-last events.
+- The graph entrypoint exports a new `AnySnapshot<TOutput = unknown>` type, equal to `Snapshot<TOutput>`.
+- `serializeSnapshot` now only accepts a snapshot whose `value` is a `StateValue` and whose `context` is an object. A snapshot typed with another `value` or `context`, such as `context: number`, no longer compiles. Pass your own `serializeState` for such snapshots.
