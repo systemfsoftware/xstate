@@ -10,7 +10,14 @@ import type {
 import { createMockActorScope } from './actorScope.js'
 import { getAdjacencyMap } from './adjacency.js'
 import { alterPath } from './alterPath.js'
-import { resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
+import {
+  logicFirstOrLast,
+  type OptionsOf,
+  type PathsOf,
+  resolveTraversalOptions,
+  toSerializedEvent,
+  toSerializedSnapshot,
+} from './graph.js'
 import type {
   AdjacencyMap,
   AnySnapshot,
@@ -269,28 +276,6 @@ function computeShortestPaths<TLogic extends AnyActorLogic>(
   return applyTarget(collectPaths(context.stateMap, context.weightMap), resolvedOptions.toState)
 }
 
-type ShortestOptions<TLogic extends AnyActorLogic> = TraversalOptions<
-  SnapshotFrom<TLogic>,
-  EventFromLogic<TLogic>,
-  InputFrom<TLogic>
->
-
-type ShortestPaths<TLogic extends AnyActorLogic> = Array<
-  StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>
->
-
-const isActorLogicLike = <TLogic extends AnyActorLogic>(
-  value: TLogic | ShortestOptions<TLogic> | undefined,
-): value is TLogic => value !== undefined && 'transition' in value
-
-const resolveShortest = <TLogic extends AnyActorLogic>(
-  first: TLogic | ShortestOptions<TLogic> | undefined,
-  second: ShortestOptions<TLogic> | undefined,
-): ShortestPaths<TLogic> | ((logic: TLogic) => ShortestPaths<TLogic>) =>
-  isActorLogicLike(first)
-    ? computeShortestPaths(first, second)
-    : (logic: TLogic) => computeShortestPaths(logic, first)
-
 export function getShortestPaths<TLogic extends AnyActorLogic>(
   logic: TLogic,
   options?: TraversalOptions<
@@ -308,9 +293,9 @@ export function getShortestPaths<TLogic extends AnyActorLogic>(
 ): (logic: TLogic) => Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>
 export function getShortestPaths<TLogic extends AnyActorLogic>(
   ...args:
-    | readonly [logic: TLogic, options?: ShortestOptions<TLogic> | undefined]
-    | readonly [options?: ShortestOptions<TLogic> | undefined]
-): ShortestPaths<TLogic> | ((logic: TLogic) => ShortestPaths<TLogic>) {
+    | readonly [logic: TLogic, options?: OptionsOf<TLogic> | undefined]
+    | readonly [options?: OptionsOf<TLogic> | undefined]
+): PathsOf<TLogic> | ((logic: TLogic) => PathsOf<TLogic>) {
   const [first, second] = args
-  return resolveShortest(first, second)
+  return logicFirstOrLast(computeShortestPaths<TLogic>)(first, second)
 }

@@ -10,7 +10,14 @@ import type {
 import { createMockActorScope } from './actorScope.js'
 import { getAdjacencyMap } from './adjacency.js'
 import { alterPath } from './alterPath.js'
-import { resolveTraversalOptions, toSerializedEvent, toSerializedSnapshot } from './graph.js'
+import {
+  logicFirstOrLast,
+  type OptionsOf,
+  type PathsOf,
+  resolveTraversalOptions,
+  toSerializedEvent,
+  toSerializedSnapshot,
+} from './graph.js'
 import type {
   AdjacencyMap,
   AnySnapshot,
@@ -239,28 +246,6 @@ function computeSimplePaths<TLogic extends AnyActorLogic>(
   return applyTarget(simplePaths, resolvedOptions.toState)
 }
 
-type SimpleOptions<TLogic extends AnyActorLogic> = TraversalOptions<
-  SnapshotFrom<TLogic>,
-  EventFromLogic<TLogic>,
-  InputFrom<TLogic>
->
-
-type SimplePaths<TLogic extends AnyActorLogic> = Array<
-  StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>
->
-
-const isActorLogicLike = <TLogic extends AnyActorLogic>(
-  value: TLogic | SimpleOptions<TLogic> | undefined,
-): value is TLogic => value !== undefined && 'transition' in value
-
-const resolveSimple = <TLogic extends AnyActorLogic>(
-  first: TLogic | SimpleOptions<TLogic> | undefined,
-  second: SimpleOptions<TLogic> | undefined,
-): SimplePaths<TLogic> | ((logic: TLogic) => SimplePaths<TLogic>) =>
-  isActorLogicLike(first)
-    ? computeSimplePaths(first, second)
-    : (logic: TLogic) => computeSimplePaths(logic, first)
-
 export function getSimplePaths<TLogic extends AnyActorLogic>(
   logic: TLogic,
   options?: TraversalOptions<
@@ -278,9 +263,9 @@ export function getSimplePaths<TLogic extends AnyActorLogic>(
 ): (logic: TLogic) => Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>
 export function getSimplePaths<TLogic extends AnyActorLogic>(
   ...args:
-    | readonly [logic: TLogic, options?: SimpleOptions<TLogic> | undefined]
-    | readonly [options?: SimpleOptions<TLogic> | undefined]
-): SimplePaths<TLogic> | ((logic: TLogic) => SimplePaths<TLogic>) {
+    | readonly [logic: TLogic, options?: OptionsOf<TLogic> | undefined]
+    | readonly [options?: OptionsOf<TLogic> | undefined]
+): PathsOf<TLogic> | ((logic: TLogic) => PathsOf<TLogic>) {
   const [first, second] = args
-  return resolveSimple(first, second)
+  return logicFirstOrLast(computeSimplePaths<TLogic>)(first, second)
 }

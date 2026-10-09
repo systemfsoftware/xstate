@@ -28,11 +28,27 @@ import type {
   TraversalOptions,
 } from './types.js'
 
-type OptionsOf<TLogic extends AnyActorLogic> = TraversalOptions<
+export type OptionsOf<TLogic extends AnyActorLogic> = TraversalOptions<
   SnapshotFrom<TLogic>,
   EventFromLogic<TLogic>,
   InputFrom<TLogic>
 >
+
+export type PathsOf<TLogic extends AnyActorLogic> = Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>
+
+type FirstOrLast<TLogic extends AnyActorLogic, TResult> = (
+  first: TLogic | OptionsOf<TLogic> | undefined,
+  second: OptionsOf<TLogic> | undefined,
+) => TResult | ((logic: TLogic) => TResult)
+
+const isActorLogic = <TLogic extends AnyActorLogic>(
+  value: TLogic | OptionsOf<TLogic> | undefined,
+): value is TLogic => value !== undefined && 'transition' in value
+
+export const logicFirstOrLast = <TLogic extends AnyActorLogic, TResult>(
+  compute: (logic: TLogic, options: OptionsOf<TLogic> | undefined) => TResult,
+): FirstOrLast<TLogic, TResult> =>
+(first, second) => isActorLogic(first) ? compute(first, second) : (logic: TLogic) => compute(logic, first)
 
 type SerializeState<TLogic extends AnyActorLogic> = SerializationConfig<
   SnapshotFrom<TLogic>,
