@@ -70,6 +70,7 @@ export interface FsmObservation {
   readonly effects: number
   readonly emissions: ReadonlyArray<string>
   readonly sentinelKeptIdentity: boolean
+  readonly contextKept: ReadonlyArray<boolean>
   readonly initialIdentity: boolean
 }
 
@@ -156,11 +157,30 @@ const trace = (machine: FsmMachine, start: FsmSim, events: ReadonlyArray<FsmEven
 
 const emissionsOf = (sims: ReadonlyArray<FsmSim>): ReadonlyArray<string> => sims.map(emissionOf)
 
+const keptAlong = (machine: FsmMachine, start: FsmSim, events: ReadonlyArray<FsmEvent>): ReadonlyArray<boolean> =>
+  trace(machine, start, events).reduce<{ readonly previous: FsmSim; readonly kept: ReadonlyArray<boolean> }>(
+    (along, sim) => ({ previous: sim, kept: [...along.kept, sim.context === along.previous.context] }),
+    { previous: start, kept: [] },
+  ).kept
+
+const restoredFrom = (machine: FsmMachine, start: FsmSim, first: FsmEvent | undefined): FsmSim =>
+  first === undefined ? start : stepOf(machine, start, first)
+
 const emittedAfterRestore = (machine: FsmMachine, start: FsmSim, events: ReadonlyArray<FsmEvent>) => {
   const [first, ...rest] = events
-  const restored = first === undefined ? start : stepOf(machine, start, first)
-  return emissionsOf(trace(machine, restored, rest))
+  return emissionsOf(trace(machine, restoredFrom(machine, start, first), rest))
 }
+
+const keptAfterRestore = (machine: FsmMachine, start: FsmSim, events: ReadonlyArray<FsmEvent>) => {
+  const [first, ...rest] = events
+  return keptAlong(machine, restoredFrom(machine, start, first), rest)
+}
+
+const expectedKept = (command: FsmCommand, start: FsmSim): ReadonlyArray<boolean> =>
+  Match.value(command.driver).pipe(
+    Match.when('persisted', () => keptAfterRestore(command.machine, start, command.events)),
+    Match.orElse(() => keptAlong(command.machine, start, command.events)),
+  )
 
 const expectedEmissions = (command: FsmCommand, start: FsmSim): ReadonlyArray<string> =>
   Match.value(command.driver).pipe(
@@ -182,6 +202,7 @@ const observationOf = (command: FsmCommand): FsmObservation => {
     effects: 0,
     emissions: expectedEmissions(command, start),
     sentinelKeptIdentity: true,
+    contextKept: expectedKept(command, start),
     initialIdentity: command.driver === 'entry',
   }
 }

@@ -75,10 +75,12 @@ const contextEntryOf = (
     ? {}
     : { context: patchWithPrototype(own, inherited, ownership) }
 
+type Fault = 'none' | 'copy-on-noop' | 'copy-unchanged-context'
+
 interface Behaviour {
   readonly eventOwnership: Ownership
   readonly patchOwnership: Ownership
-  readonly copyOnNoop: boolean
+  readonly fault: Fault
 }
 
 const configTransition = (
@@ -201,6 +203,35 @@ const slotOf = (spec: FsmMachine, event: FsmEvent): FsmSlot | undefined =>
 
 const slotIsAdd = (spec: FsmMachine, event: FsmEvent): boolean => slotOf(spec, event)?._tag === 'Add'
 
+const slotCarriesPatch = (spec: FsmMachine, event: FsmEvent): boolean =>
+  ['Config', 'Add'].includes(slotOf(spec, event)?._tag ?? 'Empty')
+
+const keepsPatchedContext = (spec: FsmMachine, event: FsmEvent, previous: Snapshot, next: Snapshot): boolean =>
+  slotCarriesPatch(spec, event) && next.context === previous.context
+
+type Transition = Fsm['transition']
+
+const copyOnNoop = (fsm: Fsm): Transition => (snapshot, event) => {
+  const [next, actions] = fsm.transition(snapshot, event)
+  return [next === snapshot ? { ...next } : next, actions]
+}
+
+const copyUnchangedContext = (fsm: Fsm, spec: FsmMachine): Transition => (snapshot, event) => {
+  const [next, actions] = fsm.transition(snapshot, event)
+  return [keepsPatchedContext(spec, event, snapshot, next) ? { ...next, context: { ...next.context } } : next, actions]
+}
+
+const transitionWith: Record<Fault, (fsm: Fsm, spec: FsmMachine) => Transition> = {
+  none: (fsm) => (snapshot, event) => fsm.transition(snapshot, event),
+  'copy-on-noop': copyOnNoop,
+  'copy-unchanged-context': copyUnchangedContext,
+}
+
+const subjectMachineOf = (command: FsmCommand, behaviour: Behaviour): Fsm => {
+  const fsm = machineOf(command, behaviour)
+  return { ...fsm, transition: transitionWith[behaviour.fault](fsm, command.machine) }
+}
+
 const slotCarriesInheritedPatch = (spec: FsmMachine, event: FsmEvent): boolean => {
   const slot = slotOf(spec, event)
   return slot?._tag === 'Config' && slot.inherited !== 'none'
@@ -213,6 +244,7 @@ export interface FsmLedger {
   functionTransitions: number
   inheritedEventsIgnored: number
   inheritedPatchKeys: number
+  unchangedPatches: number
   bareContexts: number
   emissions: number
   drivers: Record<FsmDriver, number>
@@ -226,6 +258,7 @@ const noteStep = (ledger: FsmLedger, spec: FsmMachine, event: FsmEvent, previous
   ledger.functionTransitions += count(slotIsAdd(spec, event))
   ledger.inheritedEventsIgnored += count(isInherited(event.type) && previous === next)
   ledger.inheritedPatchKeys += count(slotCarriesInheritedPatch(spec, event))
+  ledger.unchangedPatches += count(keepsPatchedContext(spec, event, previous, next))
 }
 
 type JsonValue = object | string | number | boolean | null | undefined
@@ -247,6 +280,7 @@ interface Run {
   readonly snapshotKeys: ReadonlyArray<string>
   readonly effects: number
   readonly emissions: ReadonlyArray<string>
+  readonly contextKept: ReadonlyArray<boolean>
   readonly initialIdentity: boolean
 }
 
@@ -260,6 +294,7 @@ const observationOf = (fsm: Fsm, run: Run): FsmObservation => {
     effects: run.effects,
     emissions: run.emissions,
     sentinelKeptIdentity: sentinel === run.snapshot,
+    contextKept: run.contextKept,
     initialIdentity: run.initialIdentity,
   }
 }
@@ -273,14 +308,16 @@ const stepThrough = (
   let snapshot = start
   let effects = 0
   const snapshotKeys: Array<string> = []
+  const contextKept: Array<boolean> = []
   for (const event of command.events) {
     const [next, emitted] = step(snapshot, event)
     noteStep(ledger, command.machine, event, snapshot, next)
     effects += emitted.length
     snapshotKeys.push(...keysOf(next))
+    contextKept.push(next.context === snapshot.context)
     snapshot = next
   }
-  return { snapshot, snapshotKeys, effects, emissions: [] }
+  return { snapshot, snapshotKeys, effects, emissions: [], contextKept }
 }
 
 const pureObservation = (fsm: Fsm, command: FsmCommand, ledger: FsmLedger): FsmObservation =>
@@ -303,6 +340,7 @@ const sendThrough = (
   ledger: FsmLedger,
 ): Run => {
   const emissions: Array<string> = []
+  const contextKept: Array<boolean> = []
   const subscription = actor.subscribe((snapshot) => {
     ledger.emissions += 1
     emissions.push(emissionOf(snapshot))
@@ -312,11 +350,12 @@ const sendThrough = (
     actor.send(event)
     const next = actor.getSnapshot()
     noteStep(ledger, command.machine, event, previous, next)
+    contextKept.push(next.context === previous.context)
     previous = next
   }
   subscription.unsubscribe()
   actor.stop()
-  return { snapshot: previous, snapshotKeys: [], effects: 0, emissions, initialIdentity: false }
+  return { snapshot: previous, snapshotKeys: [], effects: 0, emissions, contextKept, initialIdentity: false }
 }
 
 const actorObservation = (fsm: Fsm, command: FsmCommand, ledger: FsmLedger): FsmObservation =>
@@ -349,6 +388,7 @@ const emptyLedger = (): FsmLedger => ({
   functionTransitions: 0,
   inheritedEventsIgnored: 0,
   inheritedPatchKeys: 0,
+  unchangedPatches: 0,
   bareContexts: 0,
   emissions: 0,
   drivers: { pure: 0, entry: 0, actor: 0, persisted: 0 },
@@ -370,23 +410,25 @@ const subjectOf = (behaviour: Behaviour): FsmHandle => {
     observed.drivers[command.driver] += 1
     observed.factories[command.factory] += 1
     observed.bareContexts += count(!command.machine.withContext)
-    const observation = driverObservation(machineOf(command, behaviour), command, observed)
-    return behaviour.copyOnNoop ? { ...observation, sentinelKeptIdentity: false } : observation
+    return driverObservation(subjectMachineOf(command, behaviour), command, observed)
   }
   return { observed, layer: Layer.succeed(FsmSubject, run) }
 }
 
 export const makeFsmSubject = (): FsmHandle =>
-  subjectOf({ eventOwnership: 'own-only', patchOwnership: 'own-only', copyOnNoop: false })
+  subjectOf({ eventOwnership: 'own-only', patchOwnership: 'own-only', fault: 'none' })
 
 export const makeCopyOnNoopSubject = (): FsmHandle =>
-  subjectOf({ eventOwnership: 'own-only', patchOwnership: 'own-only', copyOnNoop: true })
+  subjectOf({ eventOwnership: 'own-only', patchOwnership: 'own-only', fault: 'copy-on-noop' })
+
+export const makeCopyUnchangedContextSubject = (): FsmHandle =>
+  subjectOf({ eventOwnership: 'own-only', patchOwnership: 'own-only', fault: 'copy-unchanged-context' })
 
 export const makeInheritedEventSubject = (): FsmHandle =>
-  subjectOf({ eventOwnership: 'materialised', patchOwnership: 'own-only', copyOnNoop: false })
+  subjectOf({ eventOwnership: 'materialised', patchOwnership: 'own-only', fault: 'none' })
 
 export const makeInheritedPatchSubject = (): FsmHandle =>
-  subjectOf({ eventOwnership: 'own-only', patchOwnership: 'materialised', copyOnNoop: false })
+  subjectOf({ eventOwnership: 'own-only', patchOwnership: 'materialised', fault: 'none' })
 
 export const runFsmCommand = (command: FsmCommand): Effect.Effect<FsmObservation, never, FsmSubject> =>
   Effect.gen(function*() {

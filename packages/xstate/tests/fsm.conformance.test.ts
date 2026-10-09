@@ -16,6 +16,7 @@ import {
   type FsmHandle,
   type FsmLedger,
   makeCopyOnNoopSubject,
+  makeCopyUnchangedContextSubject,
   makeFsmSubject,
   makeInheritedEventSubject,
   makeInheritedPatchSubject,
@@ -266,6 +267,7 @@ const liveness = (observed: FsmLedger): boolean =>
     observed.functionTransitions,
     observed.inheritedEventsIgnored,
     observed.inheritedPatchKeys,
+    observed.unchangedPatches,
     observed.bareContexts,
     observed.emissions,
     observed.drivers.pure,
@@ -314,7 +316,7 @@ Feature('Judging the published FSM against a model of its flat event table', { t
             (s) => Effect.succeed(s.subject.observed),
           ),
           And(
-            'no-op transitions, target changes, context patches, function transitions, ignored inherited events and patch keys, bare contexts and actor emissions all occurred, for every driver and factory',
+            'no-op transitions, target changes, context patches, patches that change nothing, function transitions, ignored inherited events and patch keys, bare contexts and actor emissions all occurred, for every driver and factory',
           )(
             (s, expect) =>
               expect(s.observed, JSON.stringify(s.observed)).toSatisfy(
@@ -352,6 +354,10 @@ Feature('Judging the published FSM against a model of its flat event table', { t
     scenario(
       'A subject that copies the snapshot on a no-op is caught as a model divergence',
       divergesFromTheModel(makeCopyOnNoopSubject),
+    )
+    scenario(
+      'A subject that copies the context on a patch that changes nothing is caught as a model divergence',
+      divergesFromTheModel(makeCopyUnchangedContextSubject),
     )
     scenario(
       'A subject that reads inherited event names is caught as a model divergence',
