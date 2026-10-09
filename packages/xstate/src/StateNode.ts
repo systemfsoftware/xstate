@@ -4,7 +4,7 @@ import { createInvokeTimeoutEventId } from './eventUtils.js'
 import { memo } from './memo.js'
 import type { SetupStateSchemas } from './schema.types.js'
 import {
-  evaluateCandidate,
+  admitTransitionCandidate,
   formatTransition,
   getCandidates,
   getDelayedTransitions,
@@ -12,6 +12,7 @@ import {
   matchesActorSession,
   type TransitionSelectionResults,
 } from './stateUtils.js'
+import { firstAdmittedCandidate } from './transitionGuards.js'
 import type {
   AnyAction,
   AnyActorLogic,
@@ -332,22 +333,20 @@ export class StateNode<
       ;(this._candidateCache ??= new Map()).set(descriptorKey, candidates)
     }
 
-    for (const candidate of candidates) {
-      const guardPassed = evaluateCandidate(
-        candidate,
-        event,
-        snapshot,
-        this,
-        actorScope,
-        selectionResults,
-      )
+    const admitted = firstAdmittedCandidate({
+      candidates,
+      admit: (candidate) =>
+        admitTransitionCandidate(
+          candidate,
+          event,
+          snapshot,
+          this,
+          actorScope,
+          selectionResults,
+        ),
+    })
 
-      if (guardPassed) {
-        return [candidate]
-      }
-    }
-
-    return undefined
+    return admitted === undefined ? undefined : [admitted.candidate]
   }
 }
 
