@@ -239,43 +239,6 @@ const expand = <
   enqueueTransitions(value, queue, queued, traversal)
 }
 
-const pastCompactThreshold = (head: number): boolean => head > 4096
-
-const beyondHalf = (head: number, length: number): boolean => head * 2 > length
-
-const shouldCompact = (head: number, length: number): boolean => pastCompactThreshold(head) && beyondHalf(head, length)
-
-const compactFrontier = <TSnapshot, TEvent>(
-  queue: Array<QueueEntry<TSnapshot, TEvent>>,
-  head: number,
-): number => {
-  if (!shouldCompact(head, queue.length)) {
-    return head
-  }
-  queue.splice(0, head + 1)
-  return -1
-}
-
-const advance = <
-  TSnapshot extends AnySnapshot,
-  TEvent extends EventObject,
-  TInput,
-  TSystem extends AnyActorSystem,
->(
-  adj: AdjacencyMap<TSnapshot, TEvent>,
-  queue: Array<QueueEntry<TSnapshot, TEvent>>,
-  head: number,
-  traversal: Traversal<TSnapshot, TEvent, TInput, TSystem>,
-): number => {
-  const queued = queue[head]
-  if (queued === undefined) {
-    return head + 1
-  }
-  const nextHead = compactFrontier(queue, head)
-  expand(adj, queue, queued, traversal)
-  return nextHead + 1
-}
-
 const drain = <
   TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
@@ -286,9 +249,8 @@ const drain = <
   queue: Array<QueueEntry<TSnapshot, TEvent>>,
   traversal: Traversal<TSnapshot, TEvent, TInput, TSystem>,
 ): void => {
-  let head = 0
-  while (head < queue.length) {
-    head = advance(adj, queue, head, traversal)
+  for (const queued of queue) {
+    expand(adj, queue, queued, traversal)
   }
 }
 
@@ -367,35 +329,18 @@ export function adjacencyMapToArray<TSnapshot, TEvent>(
   event: TEvent
   nextState: TSnapshot
 }> {
-  return Object.keys(adjMap).flatMap((key) => adjacencyRow(adjMap, toSerializedSnapshot(key)))
-}
-
-const requiredValue = <TKey extends string, TValue>(
-  dict: Record<TKey, TValue>,
-  key: TKey,
-): TValue => {
-  const value = dict[key]
-  if (value === undefined) {
-    throw new Error('Missing adjacency entry')
-  }
-  return value
+  return Object.values({ ...adjMap }).flatMap((adjValue) => adjacencyRow(adjValue))
 }
 
 const adjacencyRow = <TSnapshot, TEvent>(
-  adjMap: AdjacencyMap<TSnapshot, TEvent>,
-  key: SerializedSnapshot,
+  adjValue: AdjacencyValue<TSnapshot, TEvent>,
 ): Array<{
   state: TSnapshot
   event: TEvent
   nextState: TSnapshot
-}> => {
-  const adjValue = requiredValue(adjMap, key)
-  return Object.keys(adjValue.transitions).map((eventKey) => {
-    const transition = requiredValue(adjValue.transitions, toSerializedEvent(eventKey))
-    return {
-      state: adjValue.state,
-      event: transition.event,
-      nextState: transition.state,
-    }
-  })
-}
+}> =>
+  Object.values({ ...adjValue.transitions }).map((transition) => ({
+    state: adjValue.state,
+    event: transition.event,
+    nextState: transition.state,
+  }))
