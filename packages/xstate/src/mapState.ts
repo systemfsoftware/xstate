@@ -33,59 +33,71 @@ type StateSchemaMapper<
   }
 }
 
+interface NodeMapper<TSnapshot, TResult> {
+  readonly map?: ((snapshot: TSnapshot) => TResult) | undefined
+  readonly states?: Readonly<Record<string, NodeMapper<TSnapshot, TResult> | undefined>> | undefined
+}
+
+interface MappedStateNode<TResult> {
+  stateNode: AnyStateNode
+  result: TResult
+}
+
+const ownResultOf = <TSnapshot extends AnyMachineSnapshot, TResult>(
+  snapshot: TSnapshot,
+  stateNode: AnyStateNode,
+  mapper: NodeMapper<TSnapshot, TResult>,
+): MappedStateNode<TResult>[] => mapper.map === undefined ? [] : [{ stateNode, result: mapper.map(snapshot) }]
+
+const mappedStatesOf = <TSnapshot extends AnyMachineSnapshot, TResult>(
+  snapshot: TSnapshot,
+  active: ReadonlySet<AnyStateNode>,
+  stateNode: AnyStateNode,
+  mapper: NodeMapper<TSnapshot, TResult> | undefined,
+): MappedStateNode<TResult>[] =>
+  mapper === undefined
+    ? []
+    : [
+      ...Object.values<AnyStateNode>(stateNode.states)
+        .filter((child) => active.has(child))
+        .flatMap((child) => mappedStatesOf(snapshot, active, child, mapper.states?.[child.key])),
+      ...ownResultOf(snapshot, stateNode, mapper),
+    ]
+
+const mapActiveStates = <TSnapshot extends AnyMachineSnapshot, TResult>(
+  snapshot: TSnapshot,
+  mapper: NodeMapper<TSnapshot, TResult>,
+): MappedStateNode<TResult>[] =>
+  snapshot.nodes.some(isAtomicStateNode)
+    ? mappedStatesOf(snapshot, new Set(snapshot.nodes), snapshot.machine.root, mapper)
+    : []
+
 /**
  * Maps a machine snapshot to an array of result objects based on active states.
  *
- * Traverses all active state nodes (from atomic/leaf states up to root) and
- * collects results from matching `map` functions in the mapper object. Results
- * are ordered leaf-to-root (most specific state first).
+ * Collects results from the `map` functions in the mapper object for every
+ * active state node. Each state comes before its ancestors (most specific
+ * state first); otherwise results follow the order the states are declared in
+ * the machine. Called with the mapper alone, it returns a function that takes
+ * the snapshot.
  *
  * @public
  */
 export function mapState<T extends AnyMachineSnapshot, TResult>(
+  mapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>,
+): (snapshot: T) => { stateNode: AnyStateNode; result: TResult }[]
+export function mapState<T extends AnyMachineSnapshot, TResult>(
   snapshot: T,
   mapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>,
-): { stateNode: AnyStateNode; result: TResult }[] {
-  const results: { stateNode: AnyStateNode; result: TResult }[] = []
-
-  const findMapper = (
-    currentMapper: StateSchemaMapper<T, StateSchemaFromSnapshot<T>, TResult>,
-    nodePath: string[],
-  ): StateSchemaMapper<T, any, TResult> | undefined => {
-    let mapper: StateSchemaMapper<T, any, TResult> | undefined = currentMapper
-
-    for (const key of nodePath) {
-      if (!mapper?.states) {
-        return undefined
-      }
-      const states = mapper.states as Record<
-        string,
-        StateSchemaMapper<T, any, TResult>
-      >
-      if (!(key in states)) {
-        return undefined
-      }
-      mapper = states[key]
-    }
-
-    return mapper
+): { stateNode: AnyStateNode; result: TResult }[]
+export function mapState<TSnapshot extends AnyMachineSnapshot, TResult>(
+  ...args:
+    | readonly [mapper: NodeMapper<TSnapshot, TResult>]
+    | readonly [snapshot: TSnapshot, mapper: NodeMapper<TSnapshot, TResult>]
+): MappedStateNode<TResult>[] | ((snapshot: TSnapshot) => MappedStateNode<TResult>[]) {
+  if (args.length === 1) {
+    const [mapper] = args
+    return (snapshot: TSnapshot) => mapActiveStates(snapshot, mapper)
   }
-
-  const visited = new Set<AnyStateNode>()
-
-  for (const atomicNode of snapshot.nodes.filter(isAtomicStateNode)) {
-    let current: AnyStateNode | undefined = atomicNode
-    while (current && !visited.has(current)) {
-      visited.add(current)
-
-      const nodeMapper = findMapper(mapper, current.path)
-      if (nodeMapper?.map) {
-        results.push({ stateNode: current, result: nodeMapper.map(snapshot) })
-      }
-
-      current = current.parent
-    }
-  }
-
-  return results
+  return mapActiveStates(args[0], args[1])
 }
