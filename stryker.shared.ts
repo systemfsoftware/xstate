@@ -3,6 +3,7 @@ import { relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const slackForAContendedFullSuiteRunMs = 45_000
+const heapPerTestRunnerIsolateMb = 2048
 
 const repoRoot = fileURLToPath(new URL('.', import.meta.url))
 
@@ -32,6 +33,7 @@ export const packageStrykerConfig = (mutate: ReadonlyArray<string>): StrykerConf
       plugin: '@systemfsoftware/stryker-js-vitest-runner',
       options: { configFile: 'vitest.config.ts', dir: '.', related: true },
     },
+    testRunnerNodeArgs: [`--max-old-space-size=${heapPerTestRunnerIsolateMb}`],
     timeoutMS: slackForAContendedFullSuiteRunMs,
     thresholds: { break: 100, high: 100, low: 100 },
   }) satisfies StrykerConfig
