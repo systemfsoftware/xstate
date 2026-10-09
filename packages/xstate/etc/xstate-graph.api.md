@@ -30,10 +30,15 @@ export interface AdjacencyValue<TState, TEvent> {
     };
 }
 
+// Warning: (ae-forgotten-export) The symbol "Snapshot" needs to be exported by the entry point graph.d.ts
+//
+// @public (undocumented)
+export type AnySnapshot<TOutput = unknown> = Snapshot<TOutput>;
+
 // Warning: (ae-forgotten-export) The symbol "StateNode" needs to be exported by the entry point graph.d.ts
 //
 // @public (undocumented)
-export type AnyStateNode = StateNode<any, any>;
+export type AnyStateNode = StateNode;
 
 // Warning: (ae-forgotten-export) The symbol "JSONSerializable" needs to be exported by the entry point graph.d.ts
 //
@@ -43,7 +48,7 @@ export type DirectedGraphEdge = JSONSerializable<{
     source: AnyStateNode;
     target: AnyStateNode;
     label: DirectedGraphLabel;
-    transition: TransitionDefinition<any, any>;
+    transition: AnyTransitionDefinition;
 }, {
     source: string;
     target: string;
@@ -61,13 +66,12 @@ export type DirectedGraphNode = JSONSerializable<{
     children: DirectedGraphNode[];
 }>;
 
-// Warning: (ae-forgotten-export) The symbol "Snapshot" needs to be exported by the entry point graph.d.ts
 // Warning: (ae-forgotten-export) The symbol "EventObject" needs to be exported by the entry point graph.d.ts
-// Warning: (ae-forgotten-export) The symbol "ActorSystem" needs to be exported by the entry point graph.d.ts
+// Warning: (ae-forgotten-export) The symbol "AnyActorSystem" needs to be exported by the entry point graph.d.ts
 // Warning: (ae-forgotten-export) The symbol "ActorLogic" needs to be exported by the entry point graph.d.ts
 //
 // @public (undocumented)
-export function getAdjacencyMap<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject, TInput, TSystem extends ActorSystem<any> = ActorSystem<any>>(logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>, options: TraversalOptions<TSnapshot, TEvent, TInput>): AdjacencyMap<TSnapshot, TEvent>;
+export function getAdjacencyMap<TSnapshot extends AnySnapshot, TEvent extends EventObject, TInput, TSystem extends AnyActorSystem = AnyActorSystem>(logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>, options: TraversalOptions<TSnapshot, TEvent, TInput>): AdjacencyMap<TSnapshot, TEvent>;
 
 // @public
 export function getDescendantStateNodes(stateNode: {
@@ -75,7 +79,7 @@ export function getDescendantStateNodes(stateNode: {
 }): AnyStateNode[];
 
 // @public (undocumented)
-export function getPathsFromEvents<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject, TInput, TSystem extends ActorSystem<any> = ActorSystem<any>>(logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>, events: TEvent[], options?: TraversalOptions<TSnapshot, TEvent, TInput>): Array<StatePath<TSnapshot, TEvent>>;
+export function getPathsFromEvents<TSnapshot extends AnySnapshot, TEvent extends EventObject, TInput, TSystem extends AnyActorSystem = AnyActorSystem>(logic: ActorLogic<TSnapshot, TEvent, TInput, TSystem>, events: TEvent[], options?: TraversalOptions<TSnapshot, TEvent, TInput>): Array<StatePath<TSnapshot, TEvent>>;
 
 // Warning: (ae-forgotten-export) The symbol "AnyActorLogic" needs to be exported by the entry point graph.d.ts
 // Warning: (ae-forgotten-export) The symbol "SnapshotFrom" needs to be exported by the entry point graph.d.ts
@@ -89,13 +93,13 @@ export function getShortestPaths<TLogic extends AnyActorLogic>(logic: TLogic, op
 export function getSimplePaths<TLogic extends AnyActorLogic>(logic: TLogic, options?: TraversalOptions<SnapshotFrom<TLogic>, EventFromLogic<TLogic>, InputFrom<TLogic>>): Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>;
 
 // @public (undocumented)
-export function joinPaths<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject>(headPath: StatePath<TSnapshot, TEvent>, tailPath: StatePath<TSnapshot, TEvent>): StatePath<TSnapshot, TEvent>;
+export function joinPaths<TSnapshot extends AnySnapshot, TEvent extends EventObject>(headPath: StatePath<TSnapshot, TEvent>, tailPath: StatePath<TSnapshot, TEvent>): StatePath<TSnapshot, TEvent>;
 
 // @public (undocumented)
-export type PathGenerator<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject, TInput> = (behavior: ActorLogic<TSnapshot, TEvent, TInput>, options: TraversalOptions<TSnapshot, TEvent, TInput>) => Array<StatePath<TSnapshot, TEvent>>;
+export type PathGenerator<TSnapshot extends AnySnapshot, TEvent extends EventObject, TInput> = (behavior: ActorLogic<TSnapshot, TEvent, TInput>, options: TraversalOptions<TSnapshot, TEvent, TInput>) => Array<StatePath<TSnapshot, TEvent>>;
 
 // @public (undocumented)
-export interface SerializationConfig<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject> {
+export interface SerializationConfig<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
     // (undocumented)
     serializeEvent: (event: TEvent) => string;
     // (undocumented)
@@ -111,17 +115,20 @@ export type SerializedEvent = Brand<string, 'event'>;
 export type SerializedSnapshot = Brand<string, 'state'>;
 
 // @public (undocumented)
-export function serializeSnapshot(snapshot: Snapshot<any>): SerializedSnapshot;
+export function serializeSnapshot(snapshot: AnySnapshot & {
+    value?: StateValue;
+    context?: MachineContext;
+}): SerializedSnapshot;
 
 // @public (undocumented)
-export interface StatePath<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject> {
+export interface StatePath<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
     state: TSnapshot;
     steps: Steps<TSnapshot, TEvent>;
     weight: number;
 }
 
 // @public (undocumented)
-export interface StatePlanMap<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject> {
+export interface StatePlanMap<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
     // Warning: (ae-forgotten-export) The symbol "StatePlan" needs to be exported by the entry point graph.d.ts
     //
     // (undocumented)
@@ -129,13 +136,13 @@ export interface StatePlanMap<TSnapshot extends Snapshot<unknown>, TEvent extend
 }
 
 // @public (undocumented)
-export interface Step<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject> {
+export interface Step<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
     event: TEvent;
     state: TSnapshot;
 }
 
 // @public (undocumented)
-export type Steps<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject> = Array<Step<TSnapshot, TEvent>>;
+export type Steps<TSnapshot extends AnySnapshot, TEvent extends EventObject> = Array<Step<TSnapshot, TEvent>>;
 
 // Warning: (ae-forgotten-export) The symbol "AnyStateMachine" needs to be exported by the entry point graph.d.ts
 //
@@ -143,7 +150,7 @@ export type Steps<TSnapshot extends Snapshot<unknown>, TEvent extends EventObjec
 export function toDirectedGraph(stateMachine: AnyStateNode | AnyStateMachine): DirectedGraphNode;
 
 // @public (undocumented)
-export interface TraversalConfig<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject> extends SerializationConfig<TSnapshot, TEvent> {
+export interface TraversalConfig<TSnapshot extends AnySnapshot, TEvent extends EventObject> extends SerializationConfig<TSnapshot, TEvent> {
     // (undocumented)
     events: readonly TEvent[] | ((state: TSnapshot) => readonly TEvent[]);
     // (undocumented)
@@ -159,7 +166,7 @@ export interface TraversalConfig<TSnapshot extends Snapshot<unknown>, TEvent ext
 // Warning: (ae-forgotten-export) The symbol "SerializationOptions" needs to be exported by the entry point graph.d.ts
 //
 // @public (undocumented)
-export type TraversalOptions<TSnapshot extends Snapshot<unknown>, TEvent extends EventObject, TInput> = {
+export type TraversalOptions<TSnapshot extends AnySnapshot, TEvent extends EventObject, TInput> = {
     input?: TInput;
 } & SerializationOptions<TSnapshot, TEvent> & Partial<Pick<TraversalConfig<TSnapshot, TEvent>, 'events' | 'filterEvents' | 'limit' | 'fromState' | 'stopWhen' | 'toState'>>;
 
@@ -175,8 +182,10 @@ export interface VisitedContext<TState, TEvent> {
 
 // Warnings were encountered during analysis:
 //
-// dist/graph.d.ts:20:3 - (ae-forgotten-export) The symbol "DirectedGraphLabel" needs to be exported by the entry point graph.d.ts
-// dist/graph.d.ts:21:3 - (ae-forgotten-export) The symbol "TransitionDefinition" needs to be exported by the entry point graph.d.ts
+// dist/graph.d.ts:24:3 - (ae-forgotten-export) The symbol "DirectedGraphLabel" needs to be exported by the entry point graph.d.ts
+// dist/graph.d.ts:25:3 - (ae-forgotten-export) The symbol "AnyTransitionDefinition" needs to be exported by the entry point graph.d.ts
+// dist/graph.d.ts:152:3 - (ae-forgotten-export) The symbol "StateValue" needs to be exported by the entry point graph.d.ts
+// dist/graph.d.ts:153:3 - (ae-forgotten-export) The symbol "MachineContext" needs to be exported by the entry point graph.d.ts
 
 // (No @packageDocumentation comment for this package)
 

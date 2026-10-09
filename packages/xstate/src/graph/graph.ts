@@ -1,25 +1,43 @@
 import type {
   AnyActorLogic,
+  AnyActorScope,
+  AnyEventObject,
+  AnyMachineSnapshot,
   AnyStateMachine,
   EventFromLogic,
   EventObject,
   InputFrom,
-  Snapshot,
+  MachineContext,
   SnapshotFrom,
   StateNode,
+  StateValue,
 } from '../index.js'
 import { getAllOwnEvents } from '../utils.js'
 import { createMockActorScope } from './actorScope.js'
 import type {
+  AnySnapshot,
   AnyStateNode,
   DirectedGraphEdge,
   DirectedGraphNode,
+  SerializationConfig,
   SerializedEvent,
   SerializedSnapshot,
   StatePath,
+  Step,
   TraversalConfig,
   TraversalOptions,
 } from './types.js'
+
+type OptionsOf<TLogic extends AnyActorLogic> = TraversalOptions<
+  SnapshotFrom<TLogic>,
+  EventFromLogic<TLogic>,
+  InputFrom<TLogic>
+>
+
+type SerializeState<TLogic extends AnyActorLogic> = SerializationConfig<
+  SnapshotFrom<TLogic>,
+  EventFromLogic<TLogic>
+>['serializeState']
 
 /**
  * Returns all state nodes of the given `node`.
@@ -32,92 +50,159 @@ export function getDescendantStateNodes(stateNode: {
   states: Record<string, AnyStateNode | StateNode<never, EventObject>>
 }): AnyStateNode[] {
   const { states } = stateNode
-  const nodes = Object.keys(states).reduce((accNodes, stateKey) => {
-    const childStateNode = states[stateKey] as AnyStateNode
-    const childStateNodes = getDescendantStateNodes(childStateNode)
+  return Object.keys(states).reduce<AnyStateNode[]>((accNodes, stateKey) => {
+    const childStateNode = states[stateKey]
+    if (childStateNode === undefined) {
+      return accNodes
+    }
 
-    accNodes.push(childStateNode, ...childStateNodes)
+    accNodes.push(childStateNode, ...getDescendantStateNodes(childStateNode))
     return accNodes
-  }, [] as AnyStateNode[])
-
-  return nodes
+  }, [])
 }
 
 function getChildren(stateNode: AnyStateNode): AnyStateNode[] {
-  if (!stateNode.states) {
-    return []
-  }
-
   return Object.values(stateNode.states)
 }
 
+function isFilled(context: MachineContext | undefined): boolean {
+  return context !== undefined && Object.keys(context).length > 0
+}
+
+function nonEmptyContext(
+  context: MachineContext | undefined,
+): MachineContext | undefined {
+  return isFilled(context) ? context : undefined
+}
+
+function snapshotFields(snapshot: {
+  value?: StateValue
+  context?: MachineContext
+}): {
+  value: StateValue | undefined
+  context: MachineContext | undefined
+} {
+  const { value, context } = snapshot
+  return { value, context: nonEmptyContext(context) }
+}
+
+export function toSerializedSnapshot(value: string): SerializedSnapshot
+export function toSerializedSnapshot(value: string): string {
+  return value
+}
+
+export function toSerializedEvent(value: string): SerializedEvent
+export function toSerializedEvent(value: string): string {
+  return value
+}
+
 /** @public */
-export function serializeSnapshot(snapshot: Snapshot<any>): SerializedSnapshot {
-  const { value, context } = snapshot as any
-  return JSON.stringify({
-    value,
-    context: Object.keys(context ?? {}).length ? context : undefined,
-  }) as SerializedSnapshot
+export function serializeSnapshot(
+  snapshot: AnySnapshot & { value?: StateValue; context?: MachineContext },
+): SerializedSnapshot {
+  return toSerializedSnapshot(JSON.stringify(snapshotFields(snapshot)))
 }
 
 function serializeEvent<TEvent extends EventObject>(
   event: TEvent,
 ): SerializedEvent {
-  return JSON.stringify(event) as SerializedEvent
+  return toSerializedEvent(JSON.stringify(event))
 }
 
-function createDefaultMachineOptions<TMachine extends AnyStateMachine>(
-  machine: TMachine,
-  options?: TraversalOptions<
-    SnapshotFrom<TMachine>,
-    EventFromLogic<TMachine>,
-    InputFrom<TMachine>
-  >,
-): TraversalOptions<
-  SnapshotFrom<TMachine>,
-  EventFromLogic<TMachine>,
-  InputFrom<TMachine>
-> {
-  const traversalOptions: TraversalOptions<
-    SnapshotFrom<TMachine>,
-    EventFromLogic<TMachine>,
-    InputFrom<TMachine>
-  > = {
+function ownLogicEvents<TLogic extends AnyActorLogic>(
+  state: SnapshotFrom<TLogic>,
+): readonly EventFromLogic<TLogic>[]
+function ownLogicEvents(state: AnyMachineSnapshot): readonly AnyEventObject[] {
+  return getAllOwnEvents(state)
+}
+
+function defaultSerializeState<TLogic extends AnyActorLogic>(
+  state: SnapshotFrom<TLogic>,
+): string {
+  return JSON.stringify(state)
+}
+
+function firstDefined<T>(
+  candidates: readonly (T | undefined)[],
+  fallback: T,
+): T {
+  return candidates.find((candidate) => candidate !== undefined) ?? fallback
+}
+
+function optionSerializeState<TLogic extends AnyActorLogic>(
+  options: OptionsOf<TLogic> | undefined,
+): SerializeState<TLogic> | undefined {
+  return options?.serializeState
+}
+
+function optionFromState<TLogic extends AnyActorLogic>(
+  options: OptionsOf<TLogic> | undefined,
+): SnapshotFrom<TLogic> | undefined {
+  return options?.fromState
+}
+
+function optionStopWhen<TLogic extends AnyActorLogic>(
+  options: OptionsOf<TLogic> | undefined,
+): ((state: SnapshotFrom<TLogic>) => boolean) | undefined {
+  return options?.toState
+}
+
+function startState<TLogic extends AnyActorLogic>(
+  logic: {
+    getInitialSnapshot(
+      actorScope: AnyActorScope,
+      input: InputFrom<TLogic> | undefined,
+    ): SnapshotFrom<TLogic>
+  },
+  options: OptionsOf<TLogic>,
+): SnapshotFrom<TLogic> {
+  return options.fromState ??
+    logic.getInitialSnapshot(createMockActorScope(), options.input)
+}
+
+function createDefaultMachineOptions<TLogic extends AnyActorLogic>(
+  machine: TLogic & AnyStateMachine,
+  options: OptionsOf<TLogic> = {},
+): OptionsOf<TLogic> {
+  return {
     serializeState: serializeSnapshot,
     serializeEvent,
-    events: (state) => getAllOwnEvents(state) as Array<EventFromLogic<TMachine>>,
-    fromState: options?.fromState ??
-      (machine.getInitialSnapshot(
-        createMockActorScope(),
-        options?.input,
-      ) as SnapshotFrom<TMachine>),
+    events: ownLogicEvents<TLogic>,
+    fromState: startState(machine, options),
   }
+}
 
-  return traversalOptions
+function isMachineLogic(logic: object): logic is AnyStateMachine {
+  return 'root' in logic
+}
+
+function transitionEventType(transition: { eventType: string }): string {
+  return transition.eventType
 }
 
 /** @public */
 export function toDirectedGraph(
   stateMachine: AnyStateNode | AnyStateMachine,
 ): DirectedGraphNode {
-  const stateNode = (
-    isMachineLogic(stateMachine) ? stateMachine.root : stateMachine
-  ) as AnyStateNode // TODO: accept only machines
+  const stateNode = isMachineLogic(stateMachine)
+    ? stateMachine.root
+    : stateMachine
 
   const edges: DirectedGraphEdge[] = [...stateNode.transitions.values()]
     .flat()
     .flatMap((t, transitionIndex) => {
-      const targets = t.target ? t.target : [stateNode]
+      const targets = t.target !== undefined ? t.target : [stateNode]
+      const eventType = transitionEventType(t)
 
-      return targets.map((target: AnyStateNode, targetIndex: number) => {
+      return targets.map((target, targetIndex) => {
         const edge: DirectedGraphEdge = {
           id: `${stateNode.id}:${transitionIndex}:${targetIndex}`,
           source: stateNode,
-          target: target as AnyStateNode,
+          target,
           transition: t,
           label: {
-            text: t.eventType,
-            toJSON: () => ({ text: t.eventType }),
+            text: eventType,
+            toJSON: () => ({ text: eventType }),
           },
           toJSON: () => {
             const { label } = edge
@@ -144,53 +229,29 @@ export function toDirectedGraph(
   return graph
 }
 
-function isMachineLogic(logic: unknown): logic is AnyStateMachine {
-  if (!logic || typeof logic !== 'object') {
-    return false
-  }
-
-  const machine = logic as Partial<AnyStateMachine>
-  const root = machine.root as Partial<AnyStateNode> | undefined
-
-  return (
-    !!root &&
-    typeof root === 'object' &&
-    typeof root.id === 'string' &&
-    typeof root.states === 'object' &&
-    typeof root.transitions?.values === 'function' &&
-    typeof machine.getStateNodeById === 'function' &&
-    typeof machine.resolveState === 'function' &&
-    typeof machine.getTransitionData === 'function'
-  )
+function resolveDefaultOptions<TLogic extends AnyActorLogic>(
+  logic: TLogic,
+  traversalOptions: OptionsOf<TLogic> | undefined,
+): OptionsOf<TLogic> | undefined {
+  return isMachineLogic(logic)
+    ? createDefaultMachineOptions(logic, traversalOptions)
+    : undefined
 }
 
 export function resolveTraversalOptions<TLogic extends AnyActorLogic>(
   logic: TLogic,
-  traversalOptions?: TraversalOptions<
-    SnapshotFrom<TLogic>,
-    EventFromLogic<TLogic>,
-    InputFrom<TLogic>
-  >,
-  defaultOptions?: TraversalOptions<
-    SnapshotFrom<TLogic>,
-    EventFromLogic<TLogic>,
-    InputFrom<TLogic>
-  >,
+  traversalOptions?: OptionsOf<TLogic>,
 ): TraversalConfig<SnapshotFrom<TLogic>, EventFromLogic<TLogic>> {
-  const resolvedDefaultOptions = defaultOptions ??
-    (isMachineLogic(logic)
-      ? (createDefaultMachineOptions(
-        logic,
-        traversalOptions as any,
-      ) as TraversalOptions<
-        SnapshotFrom<TLogic>,
-        EventFromLogic<TLogic>,
-        InputFrom<TLogic>
-      >)
-      : undefined)
-  const serializeState = traversalOptions?.serializeState ??
-    resolvedDefaultOptions?.serializeState ??
-    ((state) => JSON.stringify(state))
+  const resolvedDefaultOptions = resolveDefaultOptions(logic, traversalOptions)
+  const serializeState: SerializeState<TLogic> = firstDefined(
+    [
+      optionSerializeState<TLogic>(traversalOptions),
+      optionSerializeState<TLogic>(resolvedDefaultOptions),
+    ],
+    defaultSerializeState<TLogic>,
+  )
+  const fromState = optionFromState<TLogic>(traversalOptions) ??
+    optionFromState<TLogic>(resolvedDefaultOptions)
   const traversalConfig: TraversalConfig<
     SnapshotFrom<TLogic>,
     EventFromLogic<TLogic>
@@ -203,30 +264,36 @@ export function resolveTraversalOptions<TLogic extends AnyActorLogic>(
     toState: undefined,
     // Traversal should not continue past the `toState` predicate
     // since the target state has already been reached at that point
-    stopWhen: traversalOptions?.toState,
+    stopWhen: optionStopWhen<TLogic>(traversalOptions),
     ...resolvedDefaultOptions,
     ...traversalOptions,
-    fromState: traversalOptions?.fromState ?? resolvedDefaultOptions?.fromState,
+    fromState,
   }
 
   return traversalConfig
 }
 
+function requireFirstStep<TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  path: StatePath<TSnapshot, TEvent>,
+): Step<TSnapshot, TEvent> {
+  const firstStep = path.steps[0]
+  if (firstStep === undefined) {
+    throw new Error(`Paths cannot be joined`)
+  }
+  return firstStep
+}
+
 /** @public */
 export function joinPaths<
-  TSnapshot extends Snapshot<unknown>,
+  TSnapshot extends AnySnapshot,
   TEvent extends EventObject,
 >(
   headPath: StatePath<TSnapshot, TEvent>,
   tailPath: StatePath<TSnapshot, TEvent>,
 ): StatePath<TSnapshot, TEvent> {
-  const firstTailStep = tailPath.steps[0]
-  if (!firstTailStep) {
-    throw new Error(`Paths cannot be joined`)
-  }
-  const secondPathSource = firstTailStep.state
+  const firstTailStep = requireFirstStep(tailPath)
 
-  if (secondPathSource !== headPath.state) {
+  if (firstTailStep.state !== headPath.state) {
     throw new Error(`Paths cannot be joined`)
   }
 
