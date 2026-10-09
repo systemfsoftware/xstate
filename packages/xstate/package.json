@@ -115,8 +115,5 @@
       "default": "./dist/validation.mjs"
     },
     "./package.json": "./package.json"
-  },
-  "inlinedDependencies": {
-    "effect": "4.0.1"
   }
 }
