@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 reports/
+/stryker-plan.json
 .stryker-tmp/
 packages/*/temp/
 *.tsbuildinfo
