@@ -1,5 +1,6 @@
 import {
   type AnyStateMachine,
+  createLogic,
   createMachine,
   type EventFromLogic,
   type InputFrom,
@@ -105,6 +106,42 @@ const projectState = (mode: 'default' | 'value') => (snapshot: Snapshotish): str
     })
 
 const valueStateString = (snapshot: Snapshotish): string => JSON.stringify(snapshot.value)
+
+type PlainContext = { readonly value: StateName; readonly count: number | undefined }
+
+const plainStateString = (snapshot: { readonly context: PlainContext }): string =>
+  JSON.stringify({
+    value: snapshot.context.value,
+    context: snapshot.context.count === undefined ? undefined : { count: snapshot.context.count },
+  })
+
+const plainValueString = (snapshot: { readonly context: { readonly value: StateName } }): string =>
+  JSON.stringify(snapshot.context.value)
+
+const plainFilter = (
+  _snapshot: { readonly context: PlainContext },
+  event: { readonly type: string },
+): boolean => event.type !== 'BACK'
+
+const plainLogicOf = (machine: FlatMachine) => {
+  const states = flatMachine.states(machine.states)
+  return createLogic({
+    context: ({ input }: { readonly input: StartSignals | undefined }): PlainContext => ({
+      value: states[0] ?? 'a',
+      count: machine.inputSeeded ? (input?.start ?? 0) : (machine.counter ? 0 : undefined),
+    }),
+    run: ({ context, event }: {
+      readonly context: PlainContext
+      readonly event: { readonly type: string }
+    }) => {
+      const edge = flatMachine.edges(machine, states).find((candidate) =>
+        candidate.state === context.value && candidate.event === event.type
+      )
+      const target = edge === undefined ? context.value : flatMachine.targetOf(edge, states) ?? context.value
+      return { context: { value: target, count: context.count } }
+    },
+  })
+}
 
 const effectiveSerialize = (query: TraverseQuery | ReplayQuery): 'default' | 'value' =>
   isDefaultCall(query.call) ? 'default' : query.serialize
@@ -441,17 +478,61 @@ const runParallel = (command: Extract<GraphCommand, { readonly _tag: 'Parallel' 
   }))
 }
 
-type JoinOutcome = 'joined' | 'refused-mismatch' | 'refused-empty'
+const plainStop =
+  (states: ReadonlyArray<StateName>) => (snapshot: { readonly context: { readonly value: StateName } }): boolean =>
+    snapshot.context.value === flatMachine.lastState(states)
 
+const plainOptions = (
+  states: ReadonlyArray<StateName>,
+  query: Extract<GraphCommand, { readonly _tag: 'Plain' }>['query'],
+) => ({
+  events: graphEvents.custom,
+  ...(query.filter ? { filterEvents: plainFilter } : {}),
+  ...(query.stop || query.target ? { stopWhen: plainStop(states) } : {}),
+  ...(query.target ? { toState: plainStop(states) } : {}),
+  ...(query.limit === 'one' ? { limit: 1 } : {}),
+  input: startSignals(query),
+  serializeState: query.serialize === 'value' ? plainValueString : plainStateString,
+})
+
+const runPlain = (command: Extract<GraphCommand, { readonly _tag: 'Plain' }>): GraphResponse => {
+  const logic = plainLogicOf(command.machine)
+  const states = flatMachine.states(command.machine.states)
+  const query = command.query
+  const serialize = query.serialize === 'value' ? plainValueString : plainStateString
+  const options = plainOptions(states, query)
+  return attempt((): GraphResponse => ({
+    _tag: 'paths',
+    paths: Match.value(query.operation).pipe(
+      Match.when('shortest', () =>
+        Match.value(query.call).pipe(
+          Match.when('data-first', () => getShortestPaths(logic, options)),
+          Match.when('data-last', () => getShortestPaths<typeof logic>(options)(logic)),
+          Match.exhaustive,
+        )),
+      Match.when('simple', () =>
+        Match.value(query.call).pipe(
+          Match.when('data-first', () => getSimplePaths(logic, options)),
+          Match.when('data-last', () => getSimplePaths<typeof logic>(options)(logic)),
+          Match.exhaustive,
+        )),
+      Match.exhaustive,
+    ).map((path) => pathProjection.view(path, serialize)),
+  }))
+}
+
+type JoinOutcome = 'joined' | 'refused-mismatch' | 'refused-empty'
 export interface GraphLedger {
   readonly operations: Record<
     'adjacency' | 'shortest' | 'simple' | 'replay' | 'structure' | 'parallel' | 'join',
     number
   >
   readonly forms: Record<'adjacency' | 'shortest' | 'simple' | 'replay', Record<Call, number>>
+  readonly plainForms: Record<'data-first' | 'data-last', number>
   readonly joins: Record<JoinCall, Record<JoinOutcome, number>>
   counters: number
   plain: number
+  plainLogic: number
   inputSeeded: number
   customEvents: number
   adjacencyArray: number
@@ -488,6 +569,11 @@ const noteTraverse = (ledger: GraphLedger, command: Extract<GraphCommand, { read
   ledger.limited += command.query.limit === 'one' ? 1 : 0
   ledger.fromSecond += command.query.fromSecond ? 1 : 0
   ledger.valueSerialize += command.query.serialize === 'value' ? 1 : 0
+}
+
+const notePlain = (ledger: GraphLedger, command: Extract<GraphCommand, { readonly _tag: 'Plain' }>): void => {
+  ledger.plainForms[command.query.call] += 1
+  ledger.plainLogic += 1
 }
 
 const noteReplay = (ledger: GraphLedger, command: Extract<GraphCommand, { readonly _tag: 'Replay' }>): void => {
@@ -544,9 +630,11 @@ const zeroOutcomes = (): Record<JoinOutcome, number> => ({
 const emptyLedger = (): GraphLedger => ({
   operations: { adjacency: 0, shortest: 0, simple: 0, replay: 0, structure: 0, parallel: 0, join: 0 },
   forms: { adjacency: zeroForms(), shortest: zeroForms(), simple: zeroForms(), replay: zeroForms() },
+  plainForms: { 'data-first': 0, 'data-last': 0 },
   joins: { 'data-first': zeroOutcomes(), 'data-last': zeroOutcomes() },
   counters: 0,
   plain: 0,
+  plainLogic: 0,
   inputSeeded: 0,
   customEvents: 0,
   adjacencyArray: 0,
@@ -583,6 +671,7 @@ const publishedBehaviour: Behaviour = {
 const respond = (command: GraphCommand, behaviour: Behaviour): GraphResponse =>
   Match.value(command).pipe(
     Match.tag('Traverse', (traverse): GraphResponse => runTraverse(traverse, behaviour.traverse)),
+    Match.tag('Plain', (plain): GraphResponse => runPlain(plain)),
     Match.tag('Replay', (replay): GraphResponse => runReplay(replay, behaviour.replay)),
     Match.tag('Structure', (structure): GraphResponse => runStructure(structure)),
     Match.tag('Parallel', (parallel): GraphResponse => runParallel(parallel)),
@@ -596,6 +685,7 @@ const subjectOf = (behaviour: Behaviour): GraphHandle => {
     const response = attempt(() => respond(command, behaviour))
     Match.value(command).pipe(
       Match.tag('Traverse', (traverse) => noteTraverse(observed, traverse)),
+      Match.tag('Plain', (plain) => notePlain(observed, plain)),
       Match.tag('Replay', (replay) => noteReplay(observed, replay)),
       Match.tag('Structure', (structure) => noteStructure(observed, structure)),
       Match.tag('Parallel', (parallel) => noteParallel(observed, parallel)),

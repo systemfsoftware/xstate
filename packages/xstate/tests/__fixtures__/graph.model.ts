@@ -65,6 +65,18 @@ const ReplayQuery = Schema.Struct({
 })
 export type ReplayQuery = Schema.Schema.Type<typeof ReplayQuery>
 
+const PlainQuery = Schema.Struct({
+  operation: Schema.Literals(['shortest', 'simple']),
+  call: Schema.Literals(['data-first', 'data-last']),
+  filter: Schema.Boolean,
+  stop: Schema.Boolean,
+  target: Schema.Boolean,
+  limit: Schema.Literals(['unbounded', 'one']),
+  serialize: Schema.Literals(['default', 'value']),
+  input: Schema.Literals(['zero', 'one']),
+})
+export type PlainQuery = Schema.Schema.Type<typeof PlainQuery>
+
 const TreeEvent = Schema.Literals(['NEXT', 'BACK'])
 export type TreeEvent = Schema.Schema.Type<typeof TreeEvent>
 const TreeTarget = Schema.Literals(['none', 'self', 'sibling', 'child'])
@@ -119,6 +131,7 @@ export type JoinCall = Schema.Schema.Type<typeof JoinCall>
 
 export const GraphCommand = Schema.Union([
   Schema.TaggedStruct('Traverse', { machine: FlatMachine, query: TraverseQuery }),
+  Schema.TaggedStruct('Plain', { machine: FlatMachine, query: PlainQuery }),
   Schema.TaggedStruct('Replay', { machine: FlatMachine, sequence: Schema.Array(EventName), query: ReplayQuery }),
   Schema.TaggedStruct('Structure', { tree: TreeSpec }),
   Schema.TaggedStruct('Parallel', { spec: ParallelSpec }),
@@ -842,7 +855,10 @@ const attempt = (compute: () => GraphResponse): GraphResponse => {
   }
 }
 
-const traversalResponse = (traversal: Traversal, query: TraverseQuery): GraphResponse =>
+const traversalResponse = (
+  traversal: Traversal,
+  query: { readonly operation: 'adjacency' | 'shortest' | 'simple' },
+): GraphResponse =>
   Match.value(query.operation).pipe(
     Match.when('adjacency', (): GraphResponse => ({
       _tag: 'adjacency',
@@ -860,6 +876,21 @@ const traversalResponse = (traversal: Traversal, query: TraverseQuery): GraphRes
     })),
     Match.exhaustive,
   )
+
+const plainTraversalOf = (machine: FlatMachine, query: PlainQuery): Traversal => ({
+  machine,
+  states: machineStates(machine.states),
+  start: startSim(machine, machineStates(machine.states), { input: query.input, fromSecond: false }),
+  customEvents: true,
+  filter: query.filter,
+  stop: stopPresent(query),
+  target: query.target,
+  limit: limitOf(query),
+  serialize: serializerOf(query.serialize),
+})
+
+const plainResponse = (machine: FlatMachine, query: PlainQuery): GraphResponse =>
+  attempt(() => traversalResponse(plainTraversalOf(machine, query), query))
 
 const replayResponse = (
   machine: FlatMachine,
@@ -1028,6 +1059,7 @@ const responseOf = (command: GraphCommand): GraphResponse =>
       attempt(() =>
         traversalResponse(traversalOf(traverse.machine, traverse.query), traverse.query)
       )),
+    Match.tag('Plain', (plain): GraphResponse => plainResponse(plain.machine, plain.query)),
     Match.tag('Replay', (replay): GraphResponse => replayResponse(replay.machine, replay.sequence, replay.query)),
     Match.tag('Structure', (structure): GraphResponse => structureResponse(structure.tree)),
     Match.tag('Parallel', (parallel): GraphResponse => parallelResponse(parallel.spec)),

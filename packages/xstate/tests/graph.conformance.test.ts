@@ -12,12 +12,15 @@ import {
 } from '@systemfsoftware/xstate'
 import * as graphEntrypoint from '@systemfsoftware/xstate/graph'
 import {
+  adjacencyMapToArray,
+  type DirectedGraphNode,
   getAdjacencyMap,
   getPathsFromEvents,
   getShortestPaths,
   getSimplePaths,
   joinPaths,
   serializeSnapshot,
+  toDirectedGraph,
 } from '@systemfsoftware/xstate/graph'
 import { Effect, Layer } from 'effect'
 import { failReportOf, passReportOf } from './__fixtures__/checkReports.js'
@@ -144,9 +147,11 @@ const requiredForms: ReadonlyArray<readonly [keyof GraphLedger['forms'], Call]> 
 const positives = (observed: GraphLedger): ReadonlyArray<number> => [
   ...Object.values(observed.operations),
   ...requiredForms.map(([operation, call]) => observed.forms[operation][call]),
+  ...Object.values(observed.plainForms),
   ...Object.values(observed.joins).flatMap((outcomes) => Object.values(outcomes)),
   observed.counters,
   observed.plain,
+  observed.plainLogic,
   observed.inputSeeded,
   observed.customEvents,
   observed.adjacencyArray,
@@ -196,6 +201,222 @@ const snapshotRendering = () => ({
   plain: serializeSnapshot(createActor(plainMachine).getSnapshot()),
   counted: serializeSnapshot(createActor(countedMachine).getSnapshot()),
 })
+
+const lightMachine = createMachine({
+  id: 'light',
+  initial: 'green',
+  states: {
+    green: { on: { TIMER: { target: 'yellow' } } },
+    yellow: { on: { TIMER: { target: 'red' } } },
+    red: {
+      initial: 'walk',
+      states: {
+        walk: { on: { COUNTDOWN: { target: 'wait' } } },
+        wait: { on: { COUNTDOWN: { target: 'stop' } } },
+        stop: { on: { COUNTDOWN: { target: 'finished' } } },
+        finished: { type: 'final' },
+      },
+      onDone: { target: 'green' },
+    },
+  },
+})
+
+const expectedLightGraph = {
+  id: 'light',
+  edges: [],
+  children: [
+    {
+      id: 'light.green',
+      children: [],
+      edges: [{ source: 'light.green', target: 'light.yellow', label: { text: 'TIMER' } }],
+    },
+    {
+      id: 'light.yellow',
+      children: [],
+      edges: [{ source: 'light.yellow', target: 'light.red', label: { text: 'TIMER' } }],
+    },
+    {
+      id: 'light.red',
+      children: [
+        {
+          id: 'light.red.walk',
+          children: [],
+          edges: [{ source: 'light.red.walk', target: 'light.red.wait', label: { text: 'COUNTDOWN' } }],
+        },
+        {
+          id: 'light.red.wait',
+          children: [],
+          edges: [{ source: 'light.red.wait', target: 'light.red.stop', label: { text: 'COUNTDOWN' } }],
+        },
+        {
+          id: 'light.red.stop',
+          children: [],
+          edges: [{ source: 'light.red.stop', target: 'light.red.finished', label: { text: 'COUNTDOWN' } }],
+        },
+        { id: 'light.red.finished', children: [], edges: [] },
+      ],
+      edges: [{ source: 'light.red', target: 'light.green', label: { text: 'xstate.done.state' } }],
+    },
+  ],
+}
+
+const renderGraph = (node: DirectedGraphNode): object => ({
+  id: node.id,
+  children: node.children.map(renderGraph),
+  edges: node.edges.map((edge) => {
+    const json = edge.toJSON()
+    return { source: json.source, target: json.target, label: { text: json.label.text } }
+  }),
+})
+
+const digraphViews = () => ({
+  machine: renderGraph(toDirectedGraph(lightMachine)),
+  root: renderGraph(toDirectedGraph(lightMachine.root)),
+  proxied: renderGraph(toDirectedGraph(new Proxy(lightMachine, { getPrototypeOf: () => null }))),
+})
+
+const provenanceMachine = createMachine({
+  initial: 'a',
+  states: {
+    a: { on: { toB: { target: 'b' } } },
+    b: { on: { toC: { target: 'c' } } },
+    c: { on: { toA: { target: 'a' } } },
+  },
+})
+
+const provenanceSerializedKeys = (): ReadonlyArray<string> =>
+  Object.keys(
+    getAdjacencyMap(provenanceMachine, {
+      serializeState: (state, event, prevState) =>
+        `${state.value}|${event?.type ?? 'init'}|${prevState === undefined ? 'none' : prevState.value}`,
+    }),
+  )
+
+const replayFromSecondState = (): string => {
+  const machine = createMachine({
+    initial: 'red',
+    states: {
+      red: { on: { TIMER: { target: 'green' } } },
+      green: { on: { TIMER: { target: 'yellow' } } },
+      yellow: { on: { TIMER: { target: 'red' } } },
+    },
+  })
+  const path = getPathsFromEvents(machine, [{ type: 'TIMER' }], {
+    fromState: machine.resolveState({ value: 'yellow' }),
+  })[0]
+  return path === undefined ? 'none' : String(path.state.value)
+}
+
+const metadataLogicPath = (): number => {
+  const logic = Object.assign(
+    createLogic({
+      context: 0,
+      run: ({ context, event }: { readonly context: number; readonly event: { readonly type: string } }) =>
+        event.type === 'INC' ? { context: context + 1 } : undefined,
+    }),
+    { getStateNodeById: () => 'custom metadata' },
+  )
+  const path = getPathsFromEvents(logic, [{ type: 'INC' }], {
+    toState: (state) => state.context === 1,
+  })[0]
+  return path === undefined ? -1 : path.state.context
+}
+
+const rootedLogicAdjacencyKeys = (): ReadonlyArray<string> => {
+  const logic = Object.assign(
+    createLogic({ context: 0, run: () => undefined }),
+    { root: { id: 'x' }, getStateNodeById: () => 'x' },
+  )
+  return Object.keys(getAdjacencyMap(logic, { serializeState: (state) => `s${state.context}` }))
+}
+
+const countedCustomLogic = () => {
+  let calls = 0
+  const logic = createLogic({
+    context: ({ input }: { readonly input: number }) => {
+      calls += 1
+      return input
+    },
+    run: () => undefined,
+  })
+  return { logic, calls: () => calls }
+}
+
+const initOnceCustom = () => {
+  const shortest = countedCustomLogic()
+  const shortestPaths = getShortestPaths(shortest.logic, { input: 0, events: [] })
+  const simple = countedCustomLogic()
+  const simplePaths = getSimplePaths(simple.logic, { input: 0, events: [] })
+  return {
+    shortest: { length: shortestPaths.length, calls: shortest.calls() },
+    simple: { length: simplePaths.length, calls: simple.calls() },
+  }
+}
+
+const initOnceExplicitFromState = () => {
+  const run = (mode: 'shortest' | 'simple' | 'replay') => {
+    const counted = countedCustomLogic()
+    const options = { fromState: undefined, events: [] }
+    const paths = mode === 'replay'
+      ? getPathsFromEvents(counted.logic, [], options)
+      : mode === 'shortest'
+      ? getShortestPaths(counted.logic, options)
+      : getSimplePaths(counted.logic, options)
+    return { length: paths.length, calls: counted.calls() }
+  }
+  return { shortest: run('shortest'), simple: run('simple'), replay: run('replay') }
+}
+
+const prototypeKeys = ['__proto__', 'constructor', 'toString', 'hasOwnProperty', ''] as const
+
+const prototypeKeyCoverage = () =>
+  prototypeKeys.map((key) => {
+    const logic = createLogic({
+      context: ({ input }: { readonly input: number }) => input,
+      run: ({ context, event }: { readonly context: number; readonly event: { readonly type: string } }) =>
+        event.type === 'INC' ? { context: context + 1 } : undefined,
+    })
+    const options = {
+      input: 0,
+      events: [{ type: 'INC' }],
+      stopWhen: (state: { readonly context: number }) => state.context === 1,
+      serializeState: (state: { readonly context: number }) => state.context === 0 ? key : 'end',
+      serializeEvent: () => key,
+    }
+    const adjacency = getAdjacencyMap(logic, options)
+    const evidences = adjacencyMapToArray(adjacency).map((row) =>
+      `${row.nextState.context}|${JSON.stringify(row.event)}`
+    )
+    const shortest = getShortestPaths(logic, options).find((path) => path.state.context === 1)
+    const simple = getSimplePaths(logic, options).find((path) => path.state.context === 1)
+    return {
+      key,
+      adjacencyKeys: Object.keys(adjacency),
+      evidences,
+      shortest: shortest === undefined ? null : { weight: shortest.weight, steps: shortest.steps.length },
+      simple: simple === undefined ? null : { weight: simple.weight, steps: simple.steps.length },
+    }
+  })
+
+const expectedPrototypeCoverage = prototypeKeys.map((key) => ({
+  key,
+  adjacencyKeys: [key, 'end'],
+  evidences: ['1|{"type":"INC"}'],
+  shortest: { weight: 1, steps: 2 },
+  simple: { weight: 1, steps: 2 },
+}))
+
+const sameSourceSequences = (): ReadonlyArray<string> => {
+  const machine = createMachine({
+    initial: 'a',
+    states: {
+      a: { on: { GO_TO_B: { target: 'b' }, GO_TO_C: { target: 'c' } } },
+      b: { on: { GO_TO_A: { target: 'a' } } },
+      c: { on: { GO_TO_A: { target: 'a' } } },
+    },
+  })
+  return getSimplePaths(machine).map((path) => path.steps.map((step) => step.event.type).join(' → '))
+}
 
 const expectedEntrypointNames = [
   'adjacencyMapToArray',
@@ -340,6 +561,127 @@ Feature('Judging the published graph walk against a model of its traversal', { t
           expect(s.names.join(','), JSON.stringify(s.names)).toSatisfy(
             (names) => names === expectedEntrypointNames.join(','),
             'the entrypoint namespace holds exactly the nine graph operations',
+          )
+        ),
+      ),
+    )
+
+    scenario(
+      'toDirectedGraph renders a machine, its root state node and an identity-independent proxy alike',
+      Gherkin.Do.pipe(
+        Given('the directed graph of the machine, of its root state node and of a null-prototype proxy')(
+          'views',
+          () => Effect.succeed(digraphViews()),
+        ),
+        Then('each view matches the hand-written shape of the light statechart')((s, expect) =>
+          expect(s.views, JSON.stringify(s.views)).toEqual({
+            machine: expectedLightGraph,
+            root: expectedLightGraph,
+            proxied: expectedLightGraph,
+          })
+        ),
+      ),
+    )
+
+    scenario(
+      'The serializer receives each state with its entering event and its previous state',
+      Gherkin.Do.pipe(
+        Given('the adjacency keys of a three-state cycle serialized with provenance')(
+          'keys',
+          () => Effect.succeed(provenanceSerializedKeys()),
+        ),
+        Then('every key records the state, the event that entered it and the state it came from')((s, expect) =>
+          expect(s.keys, JSON.stringify(s.keys)).toEqual(['a|init|none', 'b|toB|a', 'c|toC|b', 'a|toA|c'])
+        ),
+      ),
+    )
+
+    scenario(
+      'Replaying from a specified from-state begins at that state',
+      Gherkin.Do.pipe(
+        Given('a single timer replay starting from the yellow state')(
+          'landed',
+          () => Effect.succeed(replayFromSecondState()),
+        ),
+        Then('the path lands on the state yellow transitions to')((s, expect) =>
+          expect(s.landed, s.landed).toEqual('red')
+        ),
+      ),
+    )
+
+    scenario(
+      'A custom logic carrying getStateNodeById is traversed as plain logic',
+      Gherkin.Do.pipe(
+        Given('an increment replayed on a custom logic that also carries getStateNodeById')(
+          'context',
+          () => Effect.succeed(metadataLogicPath()),
+        ),
+        Then('the reached state is the incremented context')((s, expect) =>
+          expect(s.context, JSON.stringify(s.context)).toEqual(1)
+        ),
+      ),
+    )
+
+    scenario(
+      'A logic carrying a non-machine root member is traversed as plain logic, not as a machine',
+      Gherkin.Do.pipe(
+        Given('the adjacency keys of a custom logic whose root member is not a machine root')(
+          'keys',
+          () => Effect.succeed(rootedLogicAdjacencyKeys()),
+        ),
+        Then('the traversal starts from the plain initial state and derives no event from snapshot nodes')((
+          s,
+          expect,
+        ) => expect(s.keys, JSON.stringify(s.keys)).toEqual(['s0'])),
+      ),
+    )
+
+    scenario(
+      'A custom logic initializes exactly once per traversal call, with and without an explicit from-state',
+      Gherkin.Do.pipe(
+        Given('the initialization counts of a custom logic across the path generators')(
+          'observed',
+          () => Effect.succeed({ custom: initOnceCustom(), explicitFromState: initOnceExplicitFromState() }),
+        ),
+        Then('each generator initializes its logic exactly once')((s, expect) =>
+          expect(s.observed, JSON.stringify(s.observed)).toEqual({
+            custom: { shortest: { length: 1, calls: 1 }, simple: { length: 1, calls: 1 } },
+            explicitFromState: {
+              shortest: { length: 1, calls: 1 },
+              simple: { length: 1, calls: 1 },
+              replay: { length: 1, calls: 1 },
+            },
+          })
+        ),
+      ),
+    )
+
+    scenario(
+      'Serialized state and event keys that collide with Object.prototype members address real entries',
+      Gherkin.Do.pipe(
+        Given('the adjacency and paths of a counter logic serialized under prototype-colliding keys')(
+          'observed',
+          () => Effect.succeed(prototypeKeyCoverage()),
+        ),
+        Then('every colliding key addresses a node and reaches the target in one step')((s, expect) =>
+          expect(s.observed, JSON.stringify(s.observed)).toEqual(expectedPrototypeCoverage)
+        ),
+      ),
+    )
+
+    scenario(
+      'Two transitions out of one state are both drawn as distinct simple paths',
+      Gherkin.Do.pipe(
+        Given('the simple-path event sequences of a state with two transitions')(
+          'sequences',
+          () => Effect.succeed(sameSourceSequences()),
+        ),
+        Then('both transitions appear as their own one-step path')((s, expect) =>
+          expect(s.sequences, JSON.stringify(s.sequences)).toSatisfy(
+            (sequences) =>
+              sequences.includes('@xstate.init → GO_TO_B') &&
+              sequences.includes('@xstate.init → GO_TO_C'),
+            'both transitions out of the source state are considered',
           )
         ),
       ),
