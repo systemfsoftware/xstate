@@ -8,7 +8,7 @@ import type {
   SnapshotFrom,
   StateNode,
 } from '../index.js'
-import { getAllOwnEvents, matchesEvent } from '../utils.js'
+import { getAllOwnEvents } from '../utils.js'
 import { createMockActorScope } from './actorScope.js'
 import type {
   AnyStateNode,
@@ -78,7 +78,6 @@ function createDefaultMachineOptions<TMachine extends AnyStateMachine>(
   EventFromLogic<TMachine>,
   InputFrom<TMachine>
 > {
-  const { events: getEvents, ...otherOptions } = options ?? {}
   const traversalOptions: TraversalOptions<
     SnapshotFrom<TMachine>,
     EventFromLogic<TMachine>,
@@ -86,17 +85,7 @@ function createDefaultMachineOptions<TMachine extends AnyStateMachine>(
   > = {
     serializeState: serializeSnapshot,
     serializeEvent,
-    events: (state) => {
-      const events = typeof getEvents === 'function' ? getEvents(state) : (getEvents ?? [])
-      return getAllOwnEvents(state).flatMap((defaultEvent) => {
-        const matchingEvents = events.filter((event) => matchesEvent(event as EventObject, defaultEvent))
-        if (matchingEvents.length) {
-          return matchingEvents
-        }
-        return [defaultEvent]
-      }) as any[]
-    },
-    ...otherOptions,
+    events: (state) => getAllOwnEvents(state) as Array<EventFromLogic<TMachine>>,
     fromState: options?.fromState ??
       (machine.getInitialSnapshot(
         createMockActorScope(),
