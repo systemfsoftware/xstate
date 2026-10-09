@@ -22,7 +22,6 @@ export const packageStrykerConfig = (mutate: ReadonlyArray<string>): StrykerConf
     coverageAnalysis: 'perTest',
     disableBail: true,
     htmlReporter: { fileName: 'reports/mutation-report.html' },
-    fileLogLevel: 'info',
     ignorePatterns: ['reports', 'coverage', 'dist'],
     incremental: true,
     incrementalFile: 'reports/stryker-incremental.json',
