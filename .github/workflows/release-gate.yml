@@ -144,7 +144,6 @@ jobs:
         with:
           command: |
             set -euo pipefail
-            mkdir -p .cache
             printf '{"schemaVersion":1,"survivors":[]}\n' > .cache/no-survivors.json
             jq -r '.shards[] | ".cache/shard-reports/\(.index)"' stryker-plan.json > .cache/shard-dirs.txt
             mapfile -t shard_dirs < .cache/shard-dirs.txt
