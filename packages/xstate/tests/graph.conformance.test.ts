@@ -172,7 +172,7 @@ Feature('Judging the published graph walk against a model of its traversal', { t
           And('every operation, machine shape, structural target and query option occurred')((s, expect) =>
             expect(s.observed, JSON.stringify(s.observed)).toSatisfy(
               liveness,
-              'the run exercised adjacency, shortest, simple, replay and structure queries, counted and plain machines, input seeding, event overrides, filtering, stopping, targeting, limits, from-state overrides, value serialization, branches and every structural target kind',
+              'the run exercised adjacency, shortest, simple, replay and structure queries, counted and plain machines, input seeding, filtering, stopping, targeting, limits, from-state overrides, value serialization, branches and every structural target kind',
             )
           ),
         ),
