@@ -133,6 +133,41 @@ jobs:
           name: mutation-report-shard-${{ strategy.job-index }}
           path: packages/*/reports/mutation-report.*
           if-no-files-found: ignore
+      - name: Re-run a failed shard's project runs with their output kept
+        if: failure()
+        timeout-minutes: 20
+        uses: ./.github/actions/sandbox
+        env:
+          MUTATION_SHARD: ${{ matrix.shard }}
+        with:
+          pass-env: |
+            GITHUB_ACTIONS
+            MUTATION_SHARD
+            MUTATION_SCOPE
+          command: |
+            set -uo pipefail
+            root="$PWD"
+            jq -r --arg shard "$MUTATION_SHARD" \
+              '.shards[] | select("\(.index)/\(.count)" == $shard) | .projects[].project' \
+              stryker-plan.json > .cache/shard-projects.txt
+            while read -r project; do
+              out="$root/reports/diagnostics/$project"
+              mkdir -p "$out"
+              (cd "$project" && "$root/node_modules/.bin/stryker" run --plan "$root/stryker-plan.json" \
+                --shard "$MUTATION_SHARD" --project "$project" \
+                --progressStreamFile "$out/mutation-stream.jsonl" \
+                --incremental --incrementalFile "$out/stryker-incremental.json" \
+                > "$out/stdout.log" 2> "$out/stderr.log")
+              echo "$project exited $?" | tee "$out/exit.txt"
+            done < .cache/shard-projects.txt
+      - if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: mutation-diagnostics-shard-${{ strategy.job-index }}
+          path: |
+            reports/diagnostics/
+            packages/*/stryker.log
+          if-no-files-found: ignore
 
   verdict:
     name: verdict · merged report
