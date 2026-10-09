@@ -1,6 +1,7 @@
 ---
 title: A sharded mutation gate passes with survivors until a job merges the shard reports and gates them
 date: 2026-10-09
+last_updated: 2026-10-09
 category: workflow-issues
 module: .github/workflows/release-gate.yml
 problem_type: workflow_issue
