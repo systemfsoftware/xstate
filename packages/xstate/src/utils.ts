@@ -1,6 +1,5 @@
 import isDevelopment from '#is-development'
 import { TARGETLESS_KEY, WILDCARD } from './constants.js'
-import { isMachineSnapshot } from './State.js'
 import type { StateNode } from './StateNode.js'
 import { isStateId } from './stateUtils.js'
 import type {
@@ -18,41 +17,10 @@ import type {
   Observer,
   OutputArg,
   SingleOrArray,
-  StateLike,
   StateValue,
   TransitionConfigTarget,
 } from './types.js'
 import { defaultWarn } from './warnSink.js'
-
-/** @public */
-export function matchesState(
-  parentStateId: StateValue,
-  childStateId: StateValue,
-): boolean {
-  const parentStateValue = toStateValue(parentStateId)
-  const childStateValue = toStateValue(childStateId)
-
-  if (typeof childStateValue === 'string') {
-    if (typeof parentStateValue === 'string') {
-      return childStateValue === parentStateValue
-    }
-
-    // Parent more specific than child
-    return false
-  }
-
-  if (typeof parentStateValue === 'string') {
-    return parentStateValue in childStateValue
-  }
-
-  return Object.keys(parentStateValue).every((key) => {
-    if (!(key in childStateValue)) {
-      return false
-    }
-
-    return matchesState(parentStateValue[key]!, childStateValue[key]!)
-  })
-}
 
 /** @public */
 export function checkStateIn(
@@ -65,83 +33,6 @@ export function checkStateIn(
   }
 
   return snapshot.matches(stateValue)
-}
-
-export function toStatePath(stateId: string | string[]): string[] {
-  if (isArray(stateId)) {
-    return stateId
-  }
-
-  const result: string[] = []
-  let segment = ''
-
-  for (let i = 0; i < stateId.length; i++) {
-    const char = stateId.charCodeAt(i)
-    switch (char) {
-      // \
-      case 92:
-        // consume the next character
-        segment += stateId[i + 1]
-        // and skip over it
-        i++
-        continue
-      // .
-      case 46:
-        result.push(segment)
-        segment = ''
-        continue
-    }
-    segment += stateId[i]
-  }
-
-  result.push(segment)
-
-  return result
-}
-
-function toStateValue(stateValue: StateLike<any> | StateValue): StateValue {
-  if (isMachineSnapshot(stateValue)) {
-    return stateValue.value
-  }
-
-  if (typeof stateValue !== 'string') {
-    return stateValue as StateValue
-  }
-
-  const statePath = toStatePath(stateValue)
-
-  return pathToStateValue(statePath)
-}
-
-/** @public */
-export function pathToStateValue(statePath: string[]): StateValue {
-  if (statePath.length === 1) {
-    const [onlySegment] = statePath
-    if (onlySegment === undefined) {
-      throw new Error('State path must not be empty.')
-    }
-    return onlySegment
-  }
-
-  const value: StateValue = {}
-  let marker = value
-
-  for (let i = 0; i < statePath.length - 1; i++) {
-    const segment = statePath[i]
-    const nextSegment = statePath[i + 1]
-    if (segment === undefined || nextSegment === undefined) {
-      continue
-    }
-    if (i === statePath.length - 2) {
-      marker[segment] = nextSegment
-    } else {
-      const previous = marker
-      marker = {}
-      previous[segment] = marker
-    }
-  }
-
-  return value
 }
 
 export function mapValues<P, O extends Record<string, unknown>>(

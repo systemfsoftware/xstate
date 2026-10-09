@@ -2,16 +2,15 @@ import { Conformance } from '@systemfsoftware/conformance-spec'
 import { And, Gherkin, Given, it, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import { assertEvent } from '@systemfsoftware/xstate'
 import { Effect, Layer } from 'effect'
+import { failReportOf, passReportOf } from './__fixtures__/checkReports.js'
 import {
   type AssertionSubject,
   boundGreetMessageOf,
-  failReportOf,
   greetMessageOf,
   greetOrNotifyMessageOf,
   makeBoundAssertionSubject,
   makeEventAssertionSubject,
   makeWildcardBlindSubject,
-  passReportOf,
   runAssertionCommand,
   userWildcardTypeOf,
 } from './__fixtures__/eventAssertion.js'

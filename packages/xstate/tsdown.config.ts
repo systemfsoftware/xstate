@@ -47,6 +47,6 @@ export default defineConfig({
     customExports: injectTypes,
   },
   outExtensions: () => ({ js: '.mjs', dts: '.d.ts' }),
-  deps: { onlyBundle: false },
+  deps: { onlyBundle: [] },
   tsconfig: './tsconfig.build.json',
 })

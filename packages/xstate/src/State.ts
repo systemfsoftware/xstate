@@ -3,6 +3,7 @@ import { ACTOR_REF_TYPE } from './createActor.js'
 import { findNonJsonPath } from './persistedSnapshotFormat.js'
 import { isRemoteActorRef } from './remoteActorRef.js'
 import { copySnapshotActorRef, getSnapshotActorRef, setSnapshotActorRef } from './snapshotActorRef.js'
+import { matchesState } from './stateMatching.js'
 import { getStateValue } from './stateUtils.js'
 import { getTimerStart } from './timerClock.js'
 import type {
@@ -27,7 +28,7 @@ import type {
   StateValue,
   StateValueMap,
 } from './types.js'
-import { isActorRefLike, matchesState } from './utils.js'
+import { isActorRefLike } from './utils.js'
 import { defaultWarn } from './warnSink.js'
 
 const emptySnapshotRecord = Object.freeze({})

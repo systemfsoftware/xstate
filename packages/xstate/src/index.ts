@@ -158,6 +158,7 @@ export { deliverEvent, runStep, stopActor, terminateActor } from './runtimeHelpe
 export { type Spawner } from './spawn.js'
 export { isMachineSnapshot, type MachineSnapshot } from './State.js'
 export { StateMachine } from './StateMachine.js'
+export { matchesState, pathToStateValue } from './stateMatching.js'
 export { StateNode } from './StateNode.js'
 export { getStateNodes, InfiniteTransitionError } from './stateUtils.js'
 export type {
@@ -193,11 +194,5 @@ export type {
   Sources,
   WidenLiterals,
 } from './types.v6.js'
-export {
-  checkStateIn,
-  getAllOwnEventDescriptors as __unsafe_getAllOwnEventDescriptors,
-  matchesState,
-  pathToStateValue,
-  toObserver,
-} from './utils.js'
+export { checkStateIn, getAllOwnEventDescriptors as __unsafe_getAllOwnEventDescriptors, toObserver } from './utils.js'
 export { waitFor } from './waitFor.js'

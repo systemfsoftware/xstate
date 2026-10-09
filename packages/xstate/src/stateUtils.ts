@@ -15,6 +15,7 @@ import {
 import { isInertActorScope } from './inertActorScope.js'
 import type { MachineSnapshot } from './State.js'
 import { cloneMachineSnapshot } from './State.js'
+import { toStatePath } from './stateMatching.js'
 import type { StateNode } from './StateNode.js'
 import { transitionEffectSignal, transitionEffectTargets } from './system.js'
 import {
@@ -49,14 +50,7 @@ import type {
   TransitionDefinition,
 } from './types.js'
 import { getEventOutput, isErrorEvent, matchesEvent, matchesEventDescriptor } from './utils.js'
-import {
-  normalizeTarget,
-  resolveOutput,
-  resolveReferencedActor,
-  toArray,
-  toStatePath,
-  toTransitionConfigArray,
-} from './utils.js'
+import { normalizeTarget, resolveOutput, resolveReferencedActor, toArray, toTransitionConfigArray } from './utils.js'
 
 type AnyStateNodeIterable = Iterable<AnyStateNode>
 
