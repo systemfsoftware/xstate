@@ -25,7 +25,7 @@
     "attw": "attw --pack .",
     "api:check": "api-extractor run && api-extractor run --config api-extractor.actors.json && api-extractor run --config api-extractor.durable.json && api-extractor run --config api-extractor.fsm.json && api-extractor run --config api-extractor.graph.json && api-extractor run --config api-extractor.validation.json",
     "api:update": "api-extractor run --local && api-extractor run --local --config api-extractor.actors.json && api-extractor run --local --config api-extractor.durable.json && api-extractor run --local --config api-extractor.fsm.json && api-extractor run --local --config api-extractor.graph.json && api-extractor run --local --config api-extractor.validation.json",
-    "lint": "f=${OXLINT_FORMAT:-${AGENT:+agent}}; oxlint src/assert.ts src/stateMatching.ts src/mapState.ts tests/event-assertions.conformance.test.ts tests/state-matching.conformance.test.ts tests/map-state.conformance.test.ts tests/__fixtures__ --format=${f:-default}",
+    "lint": "f=${OXLINT_FORMAT:-${AGENT:+agent}}; oxlint src/assert.ts src/stateMatching.ts src/mapState.ts src/graph tests/event-assertions.conformance.test.ts tests/state-matching.conformance.test.ts tests/map-state.conformance.test.ts tests/graph.conformance.test.ts tests/__fixtures__ --format=${f:-default}",
     "mutation": "stryker run"
   },
   "devDependencies": {
