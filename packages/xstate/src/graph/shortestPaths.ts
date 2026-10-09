@@ -31,9 +31,10 @@ import type {
   TraversalOptions,
 } from './types.js'
 
-interface WeightEntry<TEvent extends EventObject> {
+interface WeightEntry<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
   weight: number
-  state: SerializedSnapshot | undefined
+  snapshot: TSnapshot
+  origin: SerializedSnapshot | undefined
   event: TEvent | undefined
 }
 
@@ -45,10 +46,9 @@ interface PathPlan<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
 interface ShortestContext<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
   adjacency: AdjacencyMap<TSnapshot, TEvent>
   serializeState: TraversalConfig<TSnapshot, TEvent>['serializeState']
-  stateMap: Map<SerializedSnapshot, TSnapshot>
-  weightMap: Map<SerializedSnapshot, WeightEntry<TEvent>>
+  weightMap: Map<SerializedSnapshot, WeightEntry<TSnapshot, TEvent>>
   visited: Set<SerializedSnapshot>
-  unvisited: Set<SerializedSnapshot>
+  unvisited: Map<SerializedSnapshot, WeightEntry<TSnapshot, TEvent>>
 }
 
 const createNullDict = <TValue>(): Record<string, TValue> => {
@@ -66,53 +66,34 @@ const initialSnapshotOf = <TSnapshot>(
   actorScope: AnyActorScope,
 ): TSnapshot => logic.getInitialSnapshot(actorScope, input)
 
-const mustGet = <TKey, TValue>(map: Map<TKey, TValue>, key: TKey): TValue => {
-  const value = map.get(key)
-  if (value === undefined) {
-    throw new Error('Missing traversal entry')
-  }
-  return value
-}
-
-const improveExisting = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
-  context: ShortestContext<TSnapshot, TEvent>,
-  fromSerialized: SerializedSnapshot,
-  weight: number,
-  nextSerialized: SerializedSnapshot,
-  event: TEvent,
-): void => {
-  const { weight: nextWeight } = mustGet(context.weightMap, nextSerialized)
-  if (nextWeight > weight + 1) {
-    context.weightMap.set(nextSerialized, { weight: weight + 1, state: fromSerialized, event })
-  }
-}
-
-const improveWeight = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
-  context: ShortestContext<TSnapshot, TEvent>,
-  fromSerialized: SerializedSnapshot,
-  weight: number,
-  nextSerialized: SerializedSnapshot,
-  event: TEvent,
-): void => {
-  if (context.weightMap.has(nextSerialized)) {
-    improveExisting(context, fromSerialized, weight, nextSerialized, event)
-  } else {
-    context.weightMap.set(nextSerialized, { weight: weight + 1, state: fromSerialized, event })
-  }
-}
-
 const discover = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: ShortestContext<TSnapshot, TEvent>,
   nextSerialized: SerializedSnapshot,
+  entry: WeightEntry<TSnapshot, TEvent>,
 ): void => {
   if (!context.visited.has(nextSerialized)) {
-    context.unvisited.add(nextSerialized)
+    context.unvisited.set(nextSerialized, entry)
   }
+}
+
+const recordReach = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: ShortestContext<TSnapshot, TEvent>,
+  nextSerialized: SerializedSnapshot,
+  weight: number,
+  origin: SerializedSnapshot,
+  snapshot: TSnapshot,
+  event: TEvent,
+): void => {
+  const existing = context.weightMap.get(nextSerialized)
+  const entry = existing === undefined ? { weight, snapshot, origin, event } : { ...existing, snapshot }
+  context.weightMap.set(nextSerialized, entry)
+  discover(context, nextSerialized, entry)
 }
 
 const relaxTransition = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: ShortestContext<TSnapshot, TEvent>,
   fromSerialized: SerializedSnapshot,
+  fromSnapshot: TSnapshot,
   weight: number,
   transitions: AdjacencyMap<TSnapshot, TEvent>[SerializedSnapshot]['transitions'],
   serializedEvent: SerializedEvent,
@@ -122,34 +103,33 @@ const relaxTransition = <TSnapshot extends AnySnapshot, TEvent extends EventObje
     return
   }
   const nextSerialized = toSerializedSnapshot(
-    context.serializeState(transition.state, transition.event, context.stateMap.get(fromSerialized)),
+    context.serializeState(transition.state, transition.event, fromSnapshot),
   )
-  context.stateMap.set(nextSerialized, transition.state)
-  improveWeight(context, fromSerialized, weight, nextSerialized, transition.event)
-  discover(context, nextSerialized)
+  recordReach(context, nextSerialized, weight + 1, fromSerialized, transition.state, transition.event)
 }
 
 const relaxTransitions = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: ShortestContext<TSnapshot, TEvent>,
   fromSerialized: SerializedSnapshot,
+  fromSnapshot: TSnapshot,
   weight: number,
   adjacencyValue: AdjacencyMap<TSnapshot, TEvent>[SerializedSnapshot],
 ): void => {
   for (const serializedEvent of Object.keys(adjacencyValue.transitions).map(toSerializedEvent)) {
-    relaxTransition(context, fromSerialized, weight, adjacencyValue.transitions, serializedEvent)
+    relaxTransition(context, fromSerialized, fromSnapshot, weight, adjacencyValue.transitions, serializedEvent)
   }
 }
 
 const relaxState = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: ShortestContext<TSnapshot, TEvent>,
   fromSerialized: SerializedSnapshot,
+  entry: WeightEntry<TSnapshot, TEvent>,
 ): void => {
-  const weightEntry = mustGet(context.weightMap, fromSerialized)
   const adjacencyValue = context.adjacency[fromSerialized]
   if (adjacencyValue === undefined) {
     return
   }
-  relaxTransitions(context, fromSerialized, weightEntry.weight, adjacencyValue)
+  relaxTransitions(context, fromSerialized, entry.snapshot, entry.weight, adjacencyValue)
   context.visited.add(fromSerialized)
   context.unvisited.delete(fromSerialized)
 }
@@ -157,13 +137,12 @@ const relaxState = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
 const runTraversal = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: ShortestContext<TSnapshot, TEvent>,
 ): void => {
-  for (const fromSerialized of context.unvisited) {
-    relaxState(context, fromSerialized)
+  for (const [fromSerialized, entry] of context.unvisited) {
+    relaxState(context, fromSerialized, entry)
   }
 }
 
 const firstPlanPath = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
-  stateMap: Map<SerializedSnapshot, TSnapshot>,
   statePlanMap: StatePlanMap<TSnapshot, TEvent>,
   fromSerialized: SerializedSnapshot,
 ): StatePath<TSnapshot, TEvent> | undefined => {
@@ -172,42 +151,38 @@ const firstPlanPath = <TSnapshot extends AnySnapshot, TEvent extends EventObject
 }
 
 const stepTo = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
-  stateMap: Map<SerializedSnapshot, TSnapshot>,
-  fromSerialized: SerializedSnapshot,
+  fromState: TSnapshot,
   event: TEvent | undefined,
-): Array<Step<TSnapshot, TEvent>> => event === undefined ? [] : [{ state: mustGet(stateMap, fromSerialized), event }]
+): Array<Step<TSnapshot, TEvent>> => event === undefined ? [] : [{ state: fromState, event }]
 
 const stepsToward = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
-  stateMap: Map<SerializedSnapshot, TSnapshot>,
   statePlanMap: StatePlanMap<TSnapshot, TEvent>,
   fromSerialized: SerializedSnapshot,
   event: TEvent | undefined,
 ): Steps<TSnapshot, TEvent> => {
-  const path = firstPlanPath(stateMap, statePlanMap, fromSerialized)
+  const path = firstPlanPath(statePlanMap, fromSerialized)
   return path === undefined
     ? []
-    : path.steps.concat(stepTo(stateMap, fromSerialized, event))
+    : path.steps.concat(stepTo(path.state, event))
 }
 
 const predecessorSteps = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
-  stateMap: Map<SerializedSnapshot, TSnapshot>,
   statePlanMap: StatePlanMap<TSnapshot, TEvent>,
-  entry: WeightEntry<TEvent>,
+  entry: WeightEntry<TSnapshot, TEvent>,
 ): Steps<TSnapshot, TEvent> => {
-  const { state: fromSerialized, event } = entry
-  return fromSerialized === undefined
+  const origin = entry.origin
+  return origin === undefined
     ? []
-    : stepsToward(stateMap, statePlanMap, fromSerialized, event)
+    : stepsToward(statePlanMap, origin, entry.event)
 }
 
 const buildPath = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
-  stateMap: Map<SerializedSnapshot, TSnapshot>,
   statePlanMap: StatePlanMap<TSnapshot, TEvent>,
-  entry: WeightEntry<TEvent>,
+  entry: WeightEntry<TSnapshot, TEvent>,
   stateSerial: SerializedSnapshot,
 ): StatePath<TSnapshot, TEvent> => {
-  const state = mustGet(stateMap, stateSerial)
-  const steps = predecessorSteps(stateMap, statePlanMap, entry)
+  const state = entry.snapshot
+  const steps = predecessorSteps(statePlanMap, entry)
   statePlanMap[stateSerial] = {
     state,
     paths: [{ state, steps, weight: entry.weight }],
@@ -216,13 +191,12 @@ const buildPath = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
 }
 
 const collectPaths = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
-  stateMap: Map<SerializedSnapshot, TSnapshot>,
-  weightMap: Map<SerializedSnapshot, WeightEntry<TEvent>>,
+  weightMap: Map<SerializedSnapshot, WeightEntry<TSnapshot, TEvent>>,
 ): Array<StatePath<TSnapshot, TEvent>> => {
   const statePlanMap: StatePlanMap<TSnapshot, TEvent> = createNullDict<PathPlan<TSnapshot, TEvent>>()
   const paths: Array<StatePath<TSnapshot, TEvent>> = []
   weightMap.forEach((entry, stateSerial) => {
-    paths.push(buildPath(stateMap, statePlanMap, entry, stateSerial))
+    paths.push(buildPath(statePlanMap, entry, stateSerial))
   })
   return paths
 }
@@ -243,9 +217,14 @@ const seed = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   fromState: TSnapshot,
 ): void => {
   const serialized = toSerializedSnapshot(context.serializeState(fromState, undefined, undefined))
-  context.stateMap.set(serialized, fromState)
-  context.weightMap.set(serialized, { weight: 0, state: undefined, event: undefined })
-  context.unvisited.add(serialized)
+  const entry: WeightEntry<TSnapshot, TEvent> = {
+    weight: 0,
+    snapshot: fromState,
+    origin: undefined,
+    event: undefined,
+  }
+  context.weightMap.set(serialized, entry)
+  context.unvisited.set(serialized, entry)
 }
 
 function computeShortestPaths<TLogic extends AnyActorLogic>(
@@ -266,14 +245,13 @@ function computeShortestPaths<TLogic extends AnyActorLogic>(
   const context: ShortestContext<TInternalState, TEvent> = {
     adjacency,
     serializeState: resolvedOptions.serializeState,
-    stateMap: new Map(),
     weightMap: new Map(),
     visited: new Set(),
-    unvisited: new Set(),
+    unvisited: new Map(),
   }
   seed(context, fromState)
   runTraversal(context)
-  return applyTarget(collectPaths(context.stateMap, context.weightMap), resolvedOptions.toState)
+  return applyTarget(collectPaths(context.weightMap), resolvedOptions.toState)
 }
 
 export function getShortestPaths<TLogic extends AnyActorLogic>(

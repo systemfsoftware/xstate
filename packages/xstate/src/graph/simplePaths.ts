@@ -41,10 +41,14 @@ interface Transition<TSnapshot, TEvent> {
   state: TSnapshot
 }
 
+interface SnapshotBox<TSnapshot> {
+  snapshot: TSnapshot
+}
+
 interface SimpleContext<TSnapshot extends AnySnapshot, TEvent extends EventObject> {
   adjacency: AdjacencyMap<TSnapshot, TEvent>
   serializeState: TraversalConfig<TSnapshot, TEvent>['serializeState']
-  stateMap: Map<SerializedSnapshot, TSnapshot>
+  stateMap: Map<SerializedSnapshot, SnapshotBox<TSnapshot>>
   visitCtx: VisitedContext<TSnapshot, TEvent>
   steps: Steps<TSnapshot, TEvent>
   pathMap: StatePlanMap<TSnapshot, TEvent>
@@ -65,31 +69,35 @@ const initialSnapshotOf = <TSnapshot>(
   actorScope: AnyActorScope,
 ): TSnapshot => logic.getInitialSnapshot(actorScope, input)
 
-const mustGet = <TKey, TValue>(map: Map<TKey, TValue>, key: TKey): TValue => {
-  const value = map.get(key)
-  if (value === undefined) {
-    throw new Error('Missing traversal entry')
-  }
-  return value
+const boxFor = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
+  context: SimpleContext<TSnapshot, TEvent>,
+  serialized: SerializedSnapshot,
+  snapshot: TSnapshot,
+): SnapshotBox<TSnapshot> => {
+  const existing = context.stateMap.get(serialized)
+  const box = existing === undefined ? { snapshot } : existing
+  box.snapshot = snapshot
+  context.stateMap.set(serialized, box)
+  return box
 }
 
 const createPlan = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   pathMap: StatePlanMap<TSnapshot, TEvent>,
-  stateMap: Map<SerializedSnapshot, TSnapshot>,
   serialized: SerializedSnapshot,
+  state: TSnapshot,
 ): PathPlan<TSnapshot, TEvent> => {
-  const plan: PathPlan<TSnapshot, TEvent> = { state: mustGet(stateMap, serialized), paths: [] }
+  const plan: PathPlan<TSnapshot, TEvent> = { state, paths: [] }
   pathMap[serialized] = plan
   return plan
 }
 
 const planAt = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   pathMap: StatePlanMap<TSnapshot, TEvent>,
-  stateMap: Map<SerializedSnapshot, TSnapshot>,
   serialized: SerializedSnapshot,
+  state: TSnapshot,
 ): PathPlan<TSnapshot, TEvent> => {
   const existing = pathMap[serialized]
-  return existing === undefined ? createPlan(pathMap, stateMap, serialized) : existing
+  return existing === undefined ? createPlan(pathMap, serialized, state) : existing
 }
 
 const recordPath = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
@@ -97,7 +105,7 @@ const recordPath = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   toSerialized: SerializedSnapshot,
   fromState: TSnapshot,
 ): void => {
-  const plan = planAt(context.pathMap, context.stateMap, toSerialized)
+  const plan = planAt(context.pathMap, toSerialized, fromState)
   plan.paths.push({
     state: fromState,
     weight: context.steps.length,
@@ -107,36 +115,37 @@ const recordPath = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
 
 function expandInto<TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: SimpleContext<TSnapshot, TEvent>,
-  fromSerialized: SerializedSnapshot,
+  box: SnapshotBox<TSnapshot>,
   toSerialized: SerializedSnapshot,
   serializedEvent: SerializedEvent,
   event: TEvent,
   nextSerialized: SerializedSnapshot,
+  nextBox: SnapshotBox<TSnapshot>,
 ): void {
   context.visitCtx.edges.add(serializedEvent)
-  context.steps.push({ state: mustGet(context.stateMap, fromSerialized), event })
-  visit(context, nextSerialized, toSerialized)
+  context.steps.push({ state: box.snapshot, event })
+  visit(context, nextSerialized, nextBox, toSerialized)
 }
 
 const descendInto = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: SimpleContext<TSnapshot, TEvent>,
-  fromSerialized: SerializedSnapshot,
+  box: SnapshotBox<TSnapshot>,
   toSerialized: SerializedSnapshot,
   serializedEvent: SerializedEvent,
   transition: Transition<TSnapshot, TEvent>,
 ): void => {
   const nextSerialized = toSerializedSnapshot(
-    context.serializeState(transition.state, transition.event, context.stateMap.get(fromSerialized)),
+    context.serializeState(transition.state, transition.event, box.snapshot),
   )
-  context.stateMap.set(nextSerialized, transition.state)
+  const nextBox = boxFor(context, nextSerialized, transition.state)
   if (!context.visitCtx.vertices.has(nextSerialized)) {
-    expandInto(context, fromSerialized, toSerialized, serializedEvent, transition.event, nextSerialized)
+    expandInto(context, box, toSerialized, serializedEvent, transition.event, nextSerialized, nextBox)
   }
 }
 
 const descendTransition = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: SimpleContext<TSnapshot, TEvent>,
-  fromSerialized: SerializedSnapshot,
+  box: SnapshotBox<TSnapshot>,
   toSerialized: SerializedSnapshot,
   transitions: AdjacencyMap<TSnapshot, TEvent>[SerializedSnapshot]['transitions'],
   serializedEvent: SerializedEvent,
@@ -145,43 +154,44 @@ const descendTransition = <TSnapshot extends AnySnapshot, TEvent extends EventOb
   if (transition === undefined) {
     return
   }
-  descendInto(context, fromSerialized, toSerialized, serializedEvent, transition)
+  descendInto(context, box, toSerialized, serializedEvent, transition)
 }
 
 const descendTransitions = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: SimpleContext<TSnapshot, TEvent>,
-  fromSerialized: SerializedSnapshot,
+  box: SnapshotBox<TSnapshot>,
   toSerialized: SerializedSnapshot,
   adjacencyValue: AdjacencyMap<TSnapshot, TEvent>[SerializedSnapshot],
 ): void => {
   for (const serializedEvent of Object.keys(adjacencyValue.transitions).map(toSerializedEvent)) {
-    descendTransition(context, fromSerialized, toSerialized, adjacencyValue.transitions, serializedEvent)
+    descendTransition(context, box, toSerialized, adjacencyValue.transitions, serializedEvent)
   }
 }
 
 const descend = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: SimpleContext<TSnapshot, TEvent>,
   fromSerialized: SerializedSnapshot,
+  box: SnapshotBox<TSnapshot>,
   toSerialized: SerializedSnapshot,
 ): void => {
   const adjacencyValue = context.adjacency[fromSerialized]
   if (adjacencyValue === undefined) {
     return
   }
-  descendTransitions(context, fromSerialized, toSerialized, adjacencyValue)
+  descendTransitions(context, box, toSerialized, adjacencyValue)
 }
 
 function visit<TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: SimpleContext<TSnapshot, TEvent>,
   fromSerialized: SerializedSnapshot,
+  box: SnapshotBox<TSnapshot>,
   toSerialized: SerializedSnapshot,
 ): void {
-  const fromState = mustGet(context.stateMap, fromSerialized)
   context.visitCtx.vertices.add(fromSerialized)
   if (fromSerialized === toSerialized) {
-    recordPath(context, toSerialized, fromState)
+    recordPath(context, toSerialized, box.snapshot)
   } else {
-    descend(context, fromSerialized, toSerialized)
+    descend(context, fromSerialized, box, toSerialized)
   }
   context.steps.pop()
   context.visitCtx.vertices.delete(fromSerialized)
@@ -190,18 +200,18 @@ function visit<TSnapshot extends AnySnapshot, TEvent extends EventObject>(
 const seed = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: SimpleContext<TSnapshot, TEvent>,
   fromState: TSnapshot,
-): SerializedSnapshot => {
+): { serialized: SerializedSnapshot; box: SnapshotBox<TSnapshot> } => {
   const serialized = toSerializedSnapshot(context.serializeState(fromState, undefined))
-  context.stateMap.set(serialized, fromState)
-  return serialized
+  return { serialized, box: boxFor(context, serialized, fromState) }
 }
 
 const visitEachStart = <TSnapshot extends AnySnapshot, TEvent extends EventObject>(
   context: SimpleContext<TSnapshot, TEvent>,
   fromSerialized: SerializedSnapshot,
+  box: SnapshotBox<TSnapshot>,
 ): void => {
   for (const nextSerialized of Object.keys(context.adjacency).map(toSerializedSnapshot)) {
-    visit(context, fromSerialized, nextSerialized)
+    visit(context, fromSerialized, box, nextSerialized)
   }
 }
 
@@ -240,8 +250,8 @@ function computeSimplePaths<TLogic extends AnyActorLogic>(
     steps: [],
     pathMap: createNullDict<PathPlan<TState, TEvent>>(),
   }
-  const fromSerialized = seed(context, fromState)
-  visitEachStart(context, fromSerialized)
+  const { serialized: fromSerialized, box } = seed(context, fromState)
+  visitEachStart(context, fromSerialized, box)
   const simplePaths = Object.values(context.pathMap).flatMap((plan) => plan.paths)
   return applyTarget(simplePaths, resolvedOptions.toState)
 }

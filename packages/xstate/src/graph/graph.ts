@@ -138,19 +138,6 @@ function defaultSerializeState<TLogic extends AnyActorLogic>(
   return JSON.stringify(state)
 }
 
-function firstDefined<T>(
-  candidates: readonly (T | undefined)[],
-  fallback: T,
-): T {
-  return candidates.find((candidate) => candidate !== undefined) ?? fallback
-}
-
-function optionSerializeState<TLogic extends AnyActorLogic>(
-  options: OptionsOf<TLogic> | undefined,
-): SerializeState<TLogic> | undefined {
-  return options?.serializeState
-}
-
 function optionFromState<TLogic extends AnyActorLogic>(
   options: OptionsOf<TLogic> | undefined,
 ): SnapshotFrom<TLogic> | undefined {
@@ -278,13 +265,7 @@ export function resolveTraversalOptions<TLogic extends AnyActorLogic>(
   },
 ): TraversalConfig<SnapshotFrom<TLogic>, EventFromLogic<TLogic>> {
   const resolvedDefaultOptions = resolveDefaultOptions(logic, traversalOptions)
-  const serializeState: SerializeState<TLogic> = firstDefined(
-    [
-      optionSerializeState<TLogic>(traversalOptions),
-      optionSerializeState<TLogic>(resolvedDefaultOptions),
-    ],
-    defaultSerializeState<TLogic>,
-  )
+  const serializeState: SerializeState<TLogic> = defaultSerializeState<TLogic>
   const fromState = optionFromState<TLogic>(traversalOptions) ??
     optionFromState<TLogic>(resolvedDefaultOptions)
   const traversalConfig: TraversalConfig<
