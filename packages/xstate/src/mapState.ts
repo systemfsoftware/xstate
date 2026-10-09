@@ -1,4 +1,5 @@
 import type { MachineSnapshot } from './State.js'
+import { isAtomicStateNode } from './stateUtils.js'
 import type { AnyMachineSnapshot, AnyStateNode, StateSchema } from './types.js'
 
 type StateSchemaFromSnapshot<TSnapshot extends AnyMachineSnapshot> = TSnapshot extends MachineSnapshot<
@@ -66,7 +67,10 @@ const mappedStatesOf = <TSnapshot extends AnyMachineSnapshot, TResult>(
 const mapActiveStates = <TSnapshot extends AnyMachineSnapshot, TResult>(
   snapshot: TSnapshot,
   mapper: NodeMapper<TSnapshot, TResult>,
-): MappedStateNode<TResult>[] => mappedStatesOf(snapshot, new Set(snapshot.nodes), snapshot.machine.root, mapper)
+): MappedStateNode<TResult>[] =>
+  snapshot.nodes.some(isAtomicStateNode)
+    ? mappedStatesOf(snapshot, new Set(snapshot.nodes), snapshot.machine.root, mapper)
+    : []
 
 /**
  * Maps a machine snapshot to an array of result objects based on active states.

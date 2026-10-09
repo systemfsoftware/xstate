@@ -82,7 +82,9 @@ Feature('Judging the published mapState against a model of active state nodes', 
             'subject',
             () => Effect.succeed(makeStateMappingSubject()),
           ),
-          When('the sequential model check maps each generated machine snapshot through it')(
+          When(
+            'the sequential model check maps each generated machine snapshot through it: the initial one, the one after a NEXT event, and the error one left by a context factory that threw',
+          )(
             'report',
             (s) => checkOver(s.subject, row.seed),
           ),

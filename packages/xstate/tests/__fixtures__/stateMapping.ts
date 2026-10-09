@@ -1,46 +1,66 @@
 import { createActor, mapState, setup, types } from '@systemfsoftware/xstate'
 import { Context, Effect, Layer, Match, pipe } from 'effect'
-import {
-  activeChildrenOf,
-  distinctChildrenOf,
-  mappedResultOf,
-  type MappedState,
-  type MapStateCommand,
-  type StateTree,
-} from './stateMapping.model.js'
+import { mappedResultOf, type MappedState, type MapStateCommand, type StateTree } from './stateMapping.model.js'
 
 interface NodeConfig {
   readonly type?: 'final' | 'parallel'
   readonly initial?: string
+  readonly on?: { readonly NEXT: string }
   readonly states?: Readonly<Record<string, NodeConfig>>
 }
 
-const statesOf = (children: ReadonlyArray<readonly [string, StateTree]>): Record<string, NodeConfig> =>
-  Object.fromEntries(children.map(([name, child]) => [name, nodeConfigOf(child)]))
+type Children = ReadonlyArray<readonly [string, StateTree]>
 
-const nodeConfigOf = (tree: StateTree): NodeConfig =>
+const firstOfEachName = (children: Children): Children =>
+  children.reduce<Children>(
+    (kept, entry) => kept.some(([name]) => name === entry[0]) ? kept : [...kept, entry],
+    [],
+  )
+
+const regionsOf = (children: Children): Record<string, NodeConfig> =>
+  Object.fromEntries(firstOfEachName(children).map(([name, child]) => [name, nodeConfigOf(child, undefined)]))
+
+const siblingsOf = (children: Children): Record<string, NodeConfig> => {
+  const kept = firstOfEachName(children)
+  return Object.fromEntries(
+    kept.map(([name, child], index) => [name, nodeConfigOf(child, kept[(index + 1) % kept.length]?.[0])]),
+  )
+}
+
+const nodeConfigOf = (tree: StateTree, nextSibling: string | undefined): NodeConfig =>
   Match.value(tree).pipe(
-    Match.tag('Atomic', (): NodeConfig => ({})),
+    Match.tag('Atomic', (): NodeConfig => nextSibling === undefined ? {} : { on: { NEXT: nextSibling } }),
     Match.tag('Final', (): NodeConfig => ({ type: 'final' })),
     Match.tag('Compound', (compound): NodeConfig => {
-      const [initial = ''] = activeChildrenOf(compound).map(([name]) => name)
-      return { initial, states: statesOf(distinctChildrenOf(compound.children)) }
+      const names = firstOfEachName(compound.children).map(([name]) => name)
+      return { initial: names[compound.initial % names.length] ?? '', states: siblingsOf(compound.children) }
     }),
-    Match.tag(
-      'Parallel',
-      (parallel): NodeConfig => ({ type: 'parallel', states: statesOf(distinctChildrenOf(parallel.children)) }),
-    ),
+    Match.tag('Parallel', (parallel): NodeConfig => ({ type: 'parallel', states: regionsOf(parallel.children) })),
     Match.exhaustive,
   )
 
-const machineFor = (tree: StateTree) =>
-  setup({ schemas: { context: types<{ tag: string }>(), input: types<{ tag: string }>() } }).createMachine({
-    context: ({ input }) => ({ tag: input.tag }),
-    ...nodeConfigOf(tree),
+const contextOf = (snapshot: MapStateCommand['snapshot'], tag: string): { tag: string } => {
+  if (snapshot === 'context-threw') {
+    throw new Error('the context factory failed')
+  }
+  return { tag }
+}
+
+const machineFor = (command: MapStateCommand) =>
+  setup({
+    schemas: {
+      context: types<{ tag: string }>(),
+      input: types<{ tag: string }>(),
+      events: { NEXT: types<{}>() },
+    },
+  }).createMachine({
+    context: ({ input }) => contextOf(command.snapshot, input.tag),
+    ...nodeConfigOf(command.machine, undefined),
+    on: { NEXT: {} },
   })
 
 interface TaggedSnapshot {
-  readonly context: { readonly tag: string }
+  readonly context: { readonly tag?: string }
 }
 
 interface Mapper {
@@ -65,7 +85,7 @@ const mapperOf = (tree: StateTree, path: readonly string[]): Mapper | undefined 
   }
   const map = (snapshot: TaggedSnapshot): string => mappedResultOf(path)(snapshot.context.tag)
   const children = Match.value(tree).pipe(
-    Match.tag('Compound', 'Parallel', (branch) => distinctChildrenOf(branch.children)),
+    Match.tag('Compound', 'Parallel', (branch) => firstOfEachName(branch.children)),
     Match.orElse(() => []),
   )
   const states = childMappersOf(children, path)
@@ -101,8 +121,22 @@ export class StateMapping extends Context.Service<StateMapping, (command: MapSta
 
 type Mapping = (command: MapStateCommand) => ReadonlyArray<MappedState>
 
+const snapshotFor = (command: MapStateCommand) => {
+  const actor = createActor(machineFor(command), { input: { tag: command.tag } })
+  return Match.value(command.snapshot).pipe(
+    Match.when('after-next', () => {
+      actor.start()
+      actor.send({ type: 'NEXT' })
+      const snapshot = actor.getSnapshot()
+      actor.stop()
+      return snapshot
+    }),
+    Match.orElse(() => actor.getSnapshot()),
+  )
+}
+
 const publishedMapping: Mapping = (command) => {
-  const snapshot = createActor(machineFor(command.machine), { input: { tag: command.tag } }).getSnapshot()
+  const snapshot = snapshotFor(command)
   const mapper = mapperOf(command.machine, []) ?? {}
   const results = Match.value(command.call).pipe(
     Match.when('data-first', () => mapState(snapshot, mapper)),
