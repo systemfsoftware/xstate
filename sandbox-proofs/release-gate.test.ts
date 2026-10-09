@@ -52,6 +52,16 @@ const sandboxSteps = async (job: JobName, runs: string): Promise<readonly Sandbo
       command: step.with?.command ?? '',
     }))
 
+const onlySandboxStep = async (job: JobName, runs: string): Promise<SandboxStep> => {
+  const [step, ...others] = await sandboxSteps(job, runs)
+  if (step === undefined || others.length > 0) {
+    throw new Error(
+      `expected one ${job} step running "${runs}", found ${[step, ...others].map((found) => found?.name)}`,
+    )
+  }
+  return step
+}
+
 const inSandbox = (step: SandboxStep, root: string, env: Record<string, string> = {}) =>
   run(
     'sandbox',
@@ -65,6 +75,11 @@ const inSandbox = (step: SandboxStep, root: string, env: Record<string, string> 
     ],
     { cwd: root, env: { ...env, SANDBOX_PROJECT: root } },
   )
+
+const writeStrykerStub = async (root: string, script: string): Promise<void> => {
+  await Deno.mkdir(`${root}/node_modules/.bin`, { recursive: true })
+  await Deno.writeTextFile(`${root}/node_modules/.bin/stryker`, `#!/usr/bin/env bash\n${script}`, { mode: 0o755 })
+}
 
 const STRYKER_DIST = `${repoRoot}node_modules/@systemfsoftware/stryker-js/dist`
 const GUARD_REGION = /\/\/#region src\/refuse-local-mutation\.cell\.ts\n([\s\S]*?)\/\/#endregion/g
@@ -149,9 +164,7 @@ Deno.test('each release-gate planner step runs in the sandbox on only its declar
 
 Deno.test('the release-gate mutation step passes stryker every variable its main-CI guard reads, and never the local override', async () => {
   const required = [...await guardEnvReads()].filter((name) => name !== GUARD_OVERRIDE)
-  const steps = await sandboxSteps('mutation', 'stryker run')
-  if (steps.length !== 1) throw new Error(`expected one stryker run step, found ${steps.map((step) => step.name)}`)
-  const step = steps[0]!
+  const step = await onlySandboxStep('mutation', 'stryker run')
   const missing = required.filter((name) => !step.passEnv.includes(name))
   if (missing.length > 0 || step.passEnv.includes(GUARD_OVERRIDE)) {
     throw new Error(
@@ -160,14 +173,7 @@ Deno.test('the release-gate mutation step passes stryker every variable its main
   }
   const root = await writeFixture()
   try {
-    await Deno.mkdir(`${root}/node_modules/.bin`, { recursive: true })
-    await Deno.writeTextFile(
-      `${root}/node_modules/.bin/stryker`,
-      '#!/usr/bin/env bash\nenv > .cache/stryker-env.txt\n',
-      {
-        mode: 0o755,
-      },
-    )
+    await writeStrykerStub(root, 'env > .cache/stryker-env.txt\n')
     const runner = Object.fromEntries([...required, GUARD_OVERRIDE].map((name) => [name, `runner-${name}`]))
     const outcome = await inSandbox(step, root, { ...runner, MUTATION_SHARD: '1/1' })
     if (outcome.code !== 0) throw new Error(`"${step.name}" exited ${outcome.code}:\n${outcome.out}`)
@@ -204,23 +210,19 @@ const verdictFixture = async (mergeExitCode: number): Promise<string> => {
     `${root}/.cache/stryker-plan.json`,
     `${JSON.stringify(PLAN_WITH_MATRIX_IN_REVERSE_SHARD_ORDER)}\n`,
   )
-  await Deno.mkdir(`${root}/node_modules/.bin`, { recursive: true })
-  await Deno.writeTextFile(
-    `${root}/node_modules/.bin/stryker`,
-    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> .cache/stryker-calls.txt\n[ "$1" = merge ] && exit ${mergeExitCode}\nexit 0\n`,
-    { mode: 0o755 },
+  await writeStrykerStub(
+    root,
+    `printf '%s\\n' "$*" >> .cache/stryker-calls.txt\n[ "$1" = merge ] && exit ${mergeExitCode}\nexit 0\n`,
   )
   return root
 }
 
 const verdictStep = async (): Promise<SandboxStep> => {
   const needs = (await releaseGateJobs()).verdict.needs
-  if (!(needs === 'mutation' || needs?.includes('mutation'))) {
+  if (![needs ?? []].flat().includes('mutation')) {
     throw new Error(`the verdict job needs ${JSON.stringify(needs)}, not every mutation shard`)
   }
-  const steps = await sandboxSteps('verdict', 'stryker merge')
-  if (steps.length !== 1) throw new Error(`expected one stryker merge step, found ${steps.map((step) => step.name)}`)
-  return steps[0]!
+  return await onlySandboxStep('verdict', 'stryker merge')
 }
 
 const strykerCalls = async (root: string): Promise<readonly string[]> =>
