@@ -1,11 +1,11 @@
 import type { StateValue, StateValueMap } from './types.js'
 
-const segmentAfterDot = /\.((?:\\[\s\S]|\\$|[^.\\])*)/g
+const dotAndSegment = /\.(?:\\[\s\S]|[^.\\])*\\?/g
 const escapedCharacter = /\\([\s\S])/g
 
 export const toStatePath = (stateId: string | readonly string[]): string[] =>
   typeof stateId === 'string'
-    ? Array.from(`.${stateId}`.matchAll(segmentAfterDot), ([, segment = '']) => segment.replace(escapedCharacter, '$1'))
+    ? Array.from(`.${stateId}`.matchAll(dotAndSegment), ([dotted]) => dotted.slice(1).replace(escapedCharacter, '$1'))
     : [...stateId]
 
 /** @public */

@@ -53,19 +53,16 @@ Feature('Judging the published state matching against a model of active state pa
             'observed',
             (s) => Effect.succeed(s.subject.observed),
           ),
-          And('each call form answered both ways, escaped state ids were matched, and leaf names held a dot')(
+          And(
+            'each call form answered both ways, and every escape the id grammar allows reached the published matching',
+          )(
             (s, expect) => {
-              const { answers, idArguments, escapedIdArguments, nestedDottedLeafArguments } = s.observed
-              return expect(
-                { answers: Object.values(answers), idArguments, escapedIdArguments, nestedDottedLeafArguments },
-                JSON.stringify(s.observed),
-              ).toSatisfy(
+              const { answers, ...argumentCounts } = s.observed
+              return expect({ answers: Object.values(answers), argumentCounts }, JSON.stringify(s.observed)).toSatisfy(
                 (value) =>
                   value.answers.every((tally) => tally.matched > 0 && tally.unmatched > 0) &&
-                  value.idArguments > 0 &&
-                  value.escapedIdArguments > 0 &&
-                  value.nestedDottedLeafArguments > 0,
-                'data-first, data-last and snapshot matching each returned true and false, state ids with an escaped dot were passed, and state values nested a leaf name containing a dot',
+                  Object.values(value.argumentCounts).every((count) => count > 0),
+                'data-first, data-last and snapshot matching each returned true and false, and the run passed state ids, ids with an escaped dot, nested leaf names containing a dot, ids escaping whitespace, ids ending in a lone backslash, and string state values holding a backslash',
               )
             },
           ),

@@ -10,33 +10,60 @@ import {
 import { Context, Effect, Layer, Match, pipe } from 'effect'
 import { type MatchCommand, type ModelStateValue, type StateTree, stateValueOf, treesOf } from './stateValue.model.js'
 
-const escapedKey = (key: string): string => key.replace(/[\\.]/g, '\\$&')
+type Escape = MatchCommand['escape']
 
-const idOf = (value: ModelStateValue): string | undefined => {
+const escapedKey = (key: string, escape: Escape): string =>
+  key.replace(escape === 'every-character' ? /[\s\S]/g : /[\\.]/g, '\\$&')
+
+const idOf = (value: ModelStateValue, escape: Escape): string | undefined => {
   if (typeof value === 'string') {
-    return escapedKey(value)
+    return escapedKey(value, escape)
   }
   const entries = Object.entries(value)
   const [only] = entries
   if (entries.length !== 1 || only === undefined) {
     return undefined
   }
-  const rest = idOf(only[1])
-  return rest === undefined ? undefined : `${escapedKey(only[0])}.${rest}`
+  const rest = idOf(only[1], escape)
+  return rest === undefined ? undefined : `${escapedKey(only[0], escape)}.${rest}`
+}
+
+const withBareFinalBackslash = (id: string): string => id.endsWith('\\\\') ? id.slice(0, -1) : id
+
+const writtenIdOf = (value: ModelStateValue, escape: Escape): string | undefined => {
+  const id = idOf(value, escape)
+  return id !== undefined && escape === 'bare-final-backslash' ? withBareFinalBackslash(id) : id
 }
 
 interface Argument {
   readonly value: StateValue
   readonly asId: boolean
   readonly escapesADot: boolean
+  readonly escapesWhitespace: boolean
+  readonly endsInALoneBackslash: boolean
+  readonly isAStringWithABackslash: boolean
 }
 
-const argumentOf = (tree: StateTree, form: MatchCommand['parentForm']): Argument => {
+const argumentOf = (tree: StateTree, form: MatchCommand['parentForm'], escape: Escape): Argument => {
   const value = stateValueOf(tree)
-  const id = form === 'id' ? idOf(value) : undefined
+  const id = form === 'id' ? writtenIdOf(value, escape) : undefined
   return id === undefined
-    ? { value, asId: false, escapesADot: false }
-    : { value: id, asId: true, escapesADot: id.includes('\\.') }
+    ? {
+      value,
+      asId: false,
+      escapesADot: false,
+      escapesWhitespace: false,
+      endsInALoneBackslash: false,
+      isAStringWithABackslash: typeof value === 'string' && value.includes('\\'),
+    }
+    : {
+      value: id,
+      asId: true,
+      escapesADot: id.includes('\\.'),
+      escapesWhitespace: escape === 'every-character' && /\s/.test(id),
+      endsInALoneBackslash: escape === 'bare-final-backslash' && id.endsWith('\\'),
+      isAStringWithABackslash: false,
+    }
 }
 
 interface NodeConfig {
@@ -62,6 +89,9 @@ export interface MatchingLedger {
   idArguments: number
   escapedIdArguments: number
   nestedDottedLeafArguments: number
+  whitespaceEscapingIdArguments: number
+  loneFinalBackslashIdArguments: number
+  backslashStringValueArguments: number
 }
 
 export interface MatchingHandle {
@@ -122,11 +152,14 @@ const subjectOf = (matcher: Matcher): MatchingSubject => {
     idArguments: 0,
     escapedIdArguments: 0,
     nestedDottedLeafArguments: 0,
+    whitespaceEscapingIdArguments: 0,
+    loneFinalBackslashIdArguments: 0,
+    backslashStringValueArguments: 0,
   }
   const match = (command: MatchCommand): boolean => {
     const [parentTree, childTree] = treesOf(command)
-    const parent = argumentOf(parentTree, command.parentForm)
-    const child = argumentOf(childTree, command.childForm)
+    const parent = argumentOf(parentTree, command.parentForm, command.escape)
+    const child = argumentOf(childTree, command.call === 'snapshot' ? 'value' : command.childForm, command.escape)
     const matched = matcher(command.call, childTree, parent.value, child.value)
     const tally = observed.answers[command.call]
     tally.matched += matched ? 1 : 0
@@ -135,6 +168,9 @@ const subjectOf = (matcher: Matcher): MatchingSubject => {
       observed.idArguments += argument.asId ? 1 : 0
       observed.escapedIdArguments += argument.escapesADot ? 1 : 0
       observed.nestedDottedLeafArguments += nestsADottedLeaf(argument.value) ? 1 : 0
+      observed.whitespaceEscapingIdArguments += argument.escapesWhitespace ? 1 : 0
+      observed.loneFinalBackslashIdArguments += argument.endsInALoneBackslash ? 1 : 0
+      observed.backslashStringValueArguments += argument.isAStringWithABackslash ? 1 : 0
     }
     return matched
   }
