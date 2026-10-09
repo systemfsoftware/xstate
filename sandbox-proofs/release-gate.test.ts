@@ -15,6 +15,7 @@ interface SandboxStep {
 const repoRoot = new URL('..', import.meta.url).pathname
 
 const Job = S.Struct({
+  needs: S.optional(S.Union([S.String, S.Array(S.String)])),
   steps: S.Array(S.Struct({
     name: S.optional(S.String),
     uses: S.optional(S.String),
@@ -26,20 +27,23 @@ const Job = S.Struct({
   })),
 })
 
-const Workflow = S.Struct({ jobs: S.Struct({ plan: Job, mutation: Job }) })
+const Workflow = S.Struct({ jobs: S.Struct({ plan: Job, mutation: Job, verdict: Job }) })
+
+type JobName = keyof typeof Workflow.Type.jobs
 
 const lines = (value: string | undefined): readonly string[] =>
   (value ?? '').split('\n').map((line) => line.trim()).filter((line) => line !== '')
 
-const sandboxSteps = async (
-  job: 'plan' | 'mutation',
-  runs: string,
-): Promise<readonly SandboxStep[]> => {
+const releaseGateJobs = async (): Promise<typeof Workflow.Type.jobs> => {
   const decoded = S.decodeUnknownResult(Workflow)(
     parseYaml(await Deno.readTextFile(`${repoRoot}.github/workflows/release-gate.yml`)),
   )
   if (Result.isFailure(decoded)) throw new Error(`release-gate.yml: ${decoded.failure.message}`)
-  return decoded.success.jobs[job].steps
+  return decoded.success.jobs
+}
+
+const sandboxSteps = async (job: JobName, runs: string): Promise<readonly SandboxStep[]> =>
+  (await releaseGateJobs())[job].steps
     .filter((step) => step.uses === SANDBOX_ACTION && step.with?.command?.includes(runs))
     .map((step) => ({
       name: step.name ?? '',
@@ -47,6 +51,15 @@ const sandboxSteps = async (
       passEnv: lines(step.with?.['pass-env']),
       command: step.with?.command ?? '',
     }))
+
+const onlySandboxStep = async (job: JobName, runs: string): Promise<SandboxStep> => {
+  const [step, ...others] = await sandboxSteps(job, runs)
+  if (step === undefined || others.length > 0) {
+    throw new Error(
+      `expected one ${job} step running "${runs}", found ${[step, ...others].map((found) => found?.name)}`,
+    )
+  }
+  return step
 }
 
 const inSandbox = (step: SandboxStep, root: string, env: Record<string, string> = {}) =>
@@ -62,6 +75,11 @@ const inSandbox = (step: SandboxStep, root: string, env: Record<string, string> 
     ],
     { cwd: root, env: { ...env, SANDBOX_PROJECT: root } },
   )
+
+const writeStrykerStub = async (root: string, script: string): Promise<void> => {
+  await Deno.mkdir(`${root}/node_modules/.bin`, { recursive: true })
+  await Deno.writeTextFile(`${root}/node_modules/.bin/stryker`, `#!/usr/bin/env bash\n${script}`, { mode: 0o755 })
+}
 
 const STRYKER_DIST = `${repoRoot}node_modules/@systemfsoftware/stryker-js/dist`
 const GUARD_REGION = /\/\/#region src\/refuse-local-mutation\.cell\.ts\n([\s\S]*?)\/\/#endregion/g
@@ -146,9 +164,7 @@ Deno.test('each release-gate planner step runs in the sandbox on only its declar
 
 Deno.test('the release-gate mutation step passes stryker every variable its main-CI guard reads, and never the local override', async () => {
   const required = [...await guardEnvReads()].filter((name) => name !== GUARD_OVERRIDE)
-  const steps = await sandboxSteps('mutation', 'stryker run')
-  if (steps.length !== 1) throw new Error(`expected one stryker run step, found ${steps.map((step) => step.name)}`)
-  const step = steps[0]!
+  const step = await onlySandboxStep('mutation', 'stryker run')
   const missing = required.filter((name) => !step.passEnv.includes(name))
   if (missing.length > 0 || step.passEnv.includes(GUARD_OVERRIDE)) {
     throw new Error(
@@ -157,14 +173,7 @@ Deno.test('the release-gate mutation step passes stryker every variable its main
   }
   const root = await writeFixture()
   try {
-    await Deno.mkdir(`${root}/node_modules/.bin`, { recursive: true })
-    await Deno.writeTextFile(
-      `${root}/node_modules/.bin/stryker`,
-      '#!/usr/bin/env bash\nenv > .cache/stryker-env.txt\n',
-      {
-        mode: 0o755,
-      },
-    )
+    await writeStrykerStub(root, 'env > .cache/stryker-env.txt\n')
     const runner = Object.fromEntries([...required, GUARD_OVERRIDE].map((name) => [name, `runner-${name}`]))
     const outcome = await inSandbox(step, root, { ...runner, MUTATION_SHARD: '1/1' })
     if (outcome.code !== 0) throw new Error(`"${step.name}" exited ${outcome.code}:\n${outcome.out}`)
@@ -177,6 +186,79 @@ Deno.test('the release-gate mutation step passes stryker every variable its main
     if (lost.length > 0 || seen.has(GUARD_OVERRIDE)) {
       throw new Error(`stryker lost [${lost}]${seen.has(GUARD_OVERRIDE) ? ` and saw ${GUARD_OVERRIDE}` : ''}`)
     }
+  } finally {
+    await Deno.remove(root, { recursive: true })
+  }
+})
+
+const PLAN_WITH_MATRIX_IN_REVERSE_SHARD_ORDER = {
+  version: 1,
+  targetSeconds: 900,
+  shards: [1, 2].map((index) => ({
+    index,
+    count: 2,
+    predictedSeconds: 5,
+    projects: [{ project: '../packages/core', mutants: [String(index).repeat(16)] }],
+  })),
+  matrix: { include: [{ shard: '2/2', predictedSeconds: 5 }, { shard: '1/2', predictedSeconds: 5 }] },
+}
+
+const verdictFixture = async (mergeExitCode: number): Promise<string> => {
+  const root = await Deno.makeTempDir({ prefix: 'release-gate-verdict-' })
+  await Deno.mkdir(`${root}/.cache`)
+  await Deno.writeTextFile(
+    `${root}/.cache/stryker-plan.json`,
+    `${JSON.stringify(PLAN_WITH_MATRIX_IN_REVERSE_SHARD_ORDER)}\n`,
+  )
+  await writeStrykerStub(
+    root,
+    `printf '%s\\n' "$*" >> .cache/stryker-calls.txt\n[ "$1" = merge ] && exit ${mergeExitCode}\nexit 0\n`,
+  )
+  return root
+}
+
+const verdictStep = async (): Promise<SandboxStep> => {
+  const needs = (await releaseGateJobs()).verdict.needs
+  if (![needs ?? []].flat().includes('mutation')) {
+    throw new Error(`the verdict job needs ${JSON.stringify(needs)}, not every mutation shard`)
+  }
+  return await onlySandboxStep('verdict', 'stryker merge')
+}
+
+const strykerCalls = async (root: string): Promise<readonly string[]> =>
+  lines(await Deno.readTextFile(`${root}/.cache/stryker-calls.txt`))
+
+Deno.test('the release-gate verdict job waits on every mutation shard, merges their reports in plan order, and gates the merged report with no accepted survivor', async () => {
+  const step = await verdictStep()
+  const root = await verdictFixture(0)
+  try {
+    const outcome = await inSandbox(step, root)
+    if (outcome.code !== 0) throw new Error(`"${step.name}" exited ${outcome.code}:\n${outcome.out}`)
+    const expected = [
+      'merge --plan .cache/stryker-plan.json --out reports/mutation' +
+      ' .cache/shard-reports/mutation-shard-1/.cache/reports/shards/1' +
+      ' .cache/shard-reports/mutation-shard-0/.cache/reports/shards/2',
+      'gate --baseline .cache/no-survivors.json',
+    ]
+    const calls = await strykerCalls(root)
+    if (JSON.stringify(calls) !== JSON.stringify(expected)) throw new Error(`stryker ran ${JSON.stringify(calls)}`)
+    const baseline = await Deno.readTextFile(`${root}/.cache/no-survivors.json`)
+    if (JSON.stringify(JSON.parse(baseline)) !== '{"schemaVersion":1,"survivors":[]}') {
+      throw new Error(`the gate's baseline accepts survivors: ${baseline}`)
+    }
+  } finally {
+    await Deno.remove(root, { recursive: true })
+  }
+})
+
+Deno.test('a failed shard-report merge fails the verdict step before the gate reads a merged report', async () => {
+  const step = await verdictStep()
+  const root = await verdictFixture(3)
+  try {
+    const outcome = await inSandbox(step, root)
+    if (outcome.code === 0) throw new Error(`"${step.name}" passed after the merge failed:\n${outcome.out}`)
+    const calls = await strykerCalls(root)
+    if (calls.some((call) => call.startsWith('gate'))) throw new Error(`the gate ran after the merge failed: ${calls}`)
   } finally {
     await Deno.remove(root, { recursive: true })
   }
