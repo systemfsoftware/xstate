@@ -1,3 +1,4 @@
+import { basename, dirname, join, relative } from '@std/path'
 import { parse as parseYaml } from '@std/yaml'
 import { Schema as S } from 'effect'
 import * as Result from 'effect/Result'
@@ -23,6 +24,10 @@ const Job = S.Struct({
       hosts: S.optional(S.String),
       'pass-env': S.optional(S.String),
       command: S.optional(S.String),
+      name: S.optional(S.String),
+      path: S.optional(S.String),
+      pattern: S.optional(S.String),
+      'merge-multiple': S.optional(S.Boolean),
     })),
   })),
 })
@@ -101,16 +106,129 @@ const guardEnvReads = async (): Promise<ReadonlySet<string>> => {
   return reads
 }
 
-const PLAN = {
-  version: 1,
-  targetSeconds: 900,
-  shards: [{
-    index: 1,
-    count: 1,
-    predictedSeconds: 5,
-    projects: [{ project: '../packages/core', mutants: ['0123456789abcdef'] }],
-  }],
-  matrix: { include: [{ shard: '1/1', predictedSeconds: 5 }] },
+const PROJECT = 'packages/core'
+const STREAM_FILE = 'mutation-stream.jsonl'
+const UPLOAD_ARTIFACT = 'actions/upload-artifact@v6'
+const DOWNLOAD_ARTIFACT = 'actions/download-artifact@v6'
+const SHARD_OUT_MARKER = /const SHARD_OUT_MARKER = "([^"]+)"/
+const GLOB_SEGMENT = /[*?[]/
+const JOB_INDEX = '${{ strategy.job-index }}'
+
+interface Plan {
+  readonly version: number
+  readonly targetSeconds: number
+  readonly shards: ReadonlyArray<{
+    readonly index: number
+    readonly count: number
+    readonly predictedSeconds: number
+    readonly projects: ReadonlyArray<{ readonly project: string; readonly mutants: readonly string[] }>
+  }>
+  readonly matrix: { readonly include: ReadonlyArray<{ readonly shard: string; readonly predictedSeconds: number }> }
+}
+
+const flagOf = (command: string, flag: string): string => {
+  const value = command.match(new RegExp(`${flag} (\\S+)`))?.[1]
+  if (value === undefined) throw new Error(`${JSON.stringify(command)} passes no ${flag}`)
+  return value
+}
+
+type StepInputs = NonNullable<typeof Job.Type.steps[number]['with']>
+
+const onlyArtifactStep = async (
+  job: JobName,
+  action: string,
+  pick: (inputs: StepInputs) => boolean,
+): Promise<StepInputs> => {
+  const found = (await releaseGateJobs())[job].steps.flatMap((step) =>
+    step.uses === action && step.with !== undefined && pick(step.with) ? [step.with] : []
+  )
+  if (found.length !== 1) throw new Error(`expected one ${job} step using ${action}, found ${found.length}`)
+  return found[0]!
+}
+
+const planFileOf = async (): Promise<string> => flagOf((await onlySandboxStep('plan', 'stryker plan')).command, '--out')
+
+const planOf = async (matrix: readonly string[]): Promise<Plan> => {
+  const project = relative(dirname(await planFileOf()), PROJECT)
+  return {
+    version: 1,
+    targetSeconds: 900,
+    shards: matrix.map((_, at) => ({
+      index: at + 1,
+      count: matrix.length,
+      predictedSeconds: 5,
+      projects: [{ project, mutants: [String(at + 1).repeat(16)] }],
+    })),
+    matrix: { include: matrix.map((shard) => ({ shard, predictedSeconds: 5 })) },
+  }
+}
+
+const shardOutMarker = async (): Promise<string> => {
+  for await (const entry of Deno.readDir(STRYKER_DIST)) {
+    if (!entry.name.endsWith('.mjs')) continue
+    const marker = (await Deno.readTextFile(`${STRYKER_DIST}/${entry.name}`)).match(SHARD_OUT_MARKER)?.[1]
+    if (marker !== undefined) return marker
+  }
+  throw new Error(`stryker-js in ${STRYKER_DIST} defines no SHARD_OUT_MARKER`)
+}
+
+const searchRootOf = (pattern: string): string => {
+  const segments = pattern.split('/').filter((segment) => segment !== '' && segment !== '.')
+  const firstGlob = segments.findIndex((segment) => GLOB_SEGMENT.test(segment))
+  return (firstGlob === -1 ? segments : segments.slice(0, firstGlob)).join('/')
+}
+
+const commonRootOf = (roots: readonly string[]): string => {
+  const split = roots.map((root) => root.split('/'))
+  const common: string[] = []
+  for (const [at, segment] of split[0]!.entries()) {
+    if (!split.every((other) => other[at] === segment)) break
+    common.push(segment)
+  }
+  return common.join('/')
+}
+
+const isUnder = (root: string, file: string): boolean => root === '' || file.startsWith(`${root}/`)
+
+const streamOf = (mutants: readonly string[]): string =>
+  mutants.map((id) => `${JSON.stringify({ _tag: 'mutant', id, status: 'Killed' })}\n`).join('')
+
+const shardArtifactTree = async (plan: Plan): Promise<ReadonlyMap<string, string>> => {
+  const shardPlan = flagOf((await onlySandboxStep('mutation', 'stryker run')).command, '--plan')
+  const planDownload = await onlyArtifactStep('mutation', DOWNLOAD_ARTIFACT, (inputs) => inputs.name === 'stryker-plan')
+  const downloadedPlan = join(planDownload.path ?? '.', basename(await planFileOf()))
+  if (downloadedPlan !== join(shardPlan)) {
+    throw new Error(`a shard job downloads the plan to ${downloadedPlan} but runs ${shardPlan}`)
+  }
+  const upload = await onlyArtifactStep(
+    'mutation',
+    UPLOAD_ARTIFACT,
+    (inputs) => inputs.name?.startsWith('mutation-shard-') ?? false,
+  )
+  const download = await onlyArtifactStep('verdict', DOWNLOAD_ARTIFACT, (inputs) => inputs.pattern !== undefined)
+  const roots = lines(upload.path).map(searchRootOf)
+  const artifactRoot = roots.length > 1 ? commonRootOf(roots) : roots[0]!
+  const marker = await shardOutMarker()
+  const matches = new RegExp(`^${(download.pattern ?? '').replaceAll('*', '.*')}$`)
+  const jobs = plan.matrix.include.map((entry) => entry.shard)
+  const names = jobs.map((_, job) => (upload.name ?? '').replace(JOB_INDEX, String(job)))
+  const downloaded = names.filter((name) => matches.test(name))
+  const into = (name: string): string =>
+    download['merge-multiple'] === true || downloaded.length === 1
+      ? download.path ?? '.'
+      : join(download.path ?? '.', name)
+  const tree = new Map<string, string>()
+  for (const shard of plan.shards) {
+    const name = names[jobs.indexOf(`${shard.index}/${shard.count}`)]!
+    if (!downloaded.includes(name)) continue
+    for (const project of shard.projects) {
+      const written = join(dirname(shardPlan), marker, String(shard.index), project.project, STREAM_FILE)
+      if (!roots.some((root) => isUnder(root, written))) continue
+      const inArtifact = artifactRoot === '' ? written : relative(artifactRoot, written)
+      tree.set(join(into(name), inArtifact), streamOf(project.mutants))
+    }
+  }
+  return tree
 }
 
 const writeFixture = async (): Promise<string> => {
@@ -131,8 +249,10 @@ const writeFixture = async (): Promise<string> => {
     `${root}/packages/core/package.json`,
     `${JSON.stringify({ name: '@fixture/core', scripts: { mutation: 'stryker run' } })}\n`,
   )
-  await Deno.mkdir(`${root}/.cache`)
-  await Deno.writeTextFile(`${root}/.cache/stryker-plan.json`, `${JSON.stringify(PLAN)}\n`)
+  const planFile = await planFileOf()
+  await Deno.mkdir(`${root}/${dirname(planFile)}`, { recursive: true })
+  await Deno.mkdir(`${root}/.cache`, { recursive: true })
+  await Deno.writeTextFile(`${root}/${planFile}`, `${JSON.stringify(await planOf(['1/1']))}\n`)
   return root
 }
 
@@ -191,28 +311,23 @@ Deno.test('the release-gate mutation step passes stryker every variable its main
   }
 })
 
-const PLAN_WITH_MATRIX_IN_REVERSE_SHARD_ORDER = {
-  version: 1,
-  targetSeconds: 900,
-  shards: [1, 2].map((index) => ({
-    index,
-    count: 2,
-    predictedSeconds: 5,
-    projects: [{ project: '../packages/core', mutants: [String(index).repeat(16)] }],
-  })),
-  matrix: { include: [{ shard: '2/2', predictedSeconds: 5 }, { shard: '1/2', predictedSeconds: 5 }] },
+const verdictPlanFile = async (): Promise<string> => {
+  const download = await onlyArtifactStep('verdict', DOWNLOAD_ARTIFACT, (inputs) => inputs.name === 'stryker-plan')
+  return join(download.path ?? '.', basename(await planFileOf()))
 }
 
-const verdictFixture = async (mergeExitCode: number): Promise<string> => {
+const verdictFixture = async (plan: Plan, mergeExitCode: number): Promise<string> => {
   const root = await Deno.makeTempDir({ prefix: 'release-gate-verdict-' })
-  await Deno.mkdir(`${root}/.cache`)
-  await Deno.writeTextFile(
-    `${root}/.cache/stryker-plan.json`,
-    `${JSON.stringify(PLAN_WITH_MATRIX_IN_REVERSE_SHARD_ORDER)}\n`,
-  )
+  const planFile = await verdictPlanFile()
+  await Deno.mkdir(`${root}/${dirname(planFile)}`, { recursive: true })
+  await Deno.writeTextFile(`${root}/${planFile}`, `${JSON.stringify(plan)}\n`)
+  for (const [file, stream] of await shardArtifactTree(plan)) {
+    await Deno.mkdir(`${root}/${dirname(file)}`, { recursive: true })
+    await Deno.writeTextFile(`${root}/${file}`, stream)
+  }
   await writeStrykerStub(
     root,
-    `printf '%s\\n' "$*" >> .cache/stryker-calls.txt\n[ "$1" = merge ] && exit ${mergeExitCode}\nexit 0\n`,
+    `mkdir -p .cache\nprintf '%s\\n' "$*" >> .cache/stryker-calls.txt\n[ "$1" = merge ] && exit ${mergeExitCode}\nexit 0\n`,
   )
   return root
 }
@@ -228,32 +343,76 @@ const verdictStep = async (): Promise<SandboxStep> => {
 const strykerCalls = async (root: string): Promise<readonly string[]> =>
   lines(await Deno.readTextFile(`${root}/.cache/stryker-calls.txt`))
 
-Deno.test('the release-gate verdict job waits on every mutation shard, merges their reports in plan order, and gates the merged report with no accepted survivor', async () => {
-  const step = await verdictStep()
-  const root = await verdictFixture(0)
-  try {
-    const outcome = await inSandbox(step, root)
-    if (outcome.code !== 0) throw new Error(`"${step.name}" exited ${outcome.code}:\n${outcome.out}`)
-    const expected = [
-      'merge --plan .cache/stryker-plan.json --out reports/mutation' +
-      ' .cache/shard-reports/mutation-shard-1/.cache/reports/shards/1' +
-      ' .cache/shard-reports/mutation-shard-0/.cache/reports/shards/2',
-      'gate --baseline .cache/no-survivors.json',
-    ]
-    const calls = await strykerCalls(root)
-    if (JSON.stringify(calls) !== JSON.stringify(expected)) throw new Error(`stryker ran ${JSON.stringify(calls)}`)
-    const baseline = await Deno.readTextFile(`${root}/.cache/no-survivors.json`)
-    if (JSON.stringify(JSON.parse(baseline)) !== '{"schemaVersion":1,"survivors":[]}') {
-      throw new Error(`the gate's baseline accepts survivors: ${baseline}`)
-    }
-  } finally {
-    await Deno.remove(root, { recursive: true })
+const decodeStreamLine = S.decodeUnknownResult(S.fromJsonString(S.Struct({ id: S.String })))
+
+const mergeArgsOf = (call: string): { readonly plan: string; readonly out: string; readonly dirs: string[] } => {
+  const [verb, ...args] = call.split(' ')
+  if (verb !== 'merge') throw new Error(`expected a merge call, got ${JSON.stringify(call)}`)
+  const merge = { plan: '', out: '', dirs: [] as string[] }
+  for (let at = 0; at < args.length; at++) {
+    if (args[at] === '--plan') merge.plan = args[++at]!
+    else if (args[at] === '--out') merge.out = args[++at]!
+    else merge.dirs.push(args[at]!)
   }
-})
+  return merge
+}
+
+const unmergedMutants = async (root: string, plan: Plan, dirs: readonly string[]): Promise<readonly string[]> => {
+  if (dirs.length !== plan.shards.length) {
+    throw new Error(`merge got ${dirs.length} shard directories for ${plan.shards.length} shards: ${dirs}`)
+  }
+  const missing: string[] = []
+  for (const [at, shard] of plan.shards.entries()) {
+    for (const project of shard.projects) {
+      const stream = await Deno.readTextFile(join(root, dirs[at]!, project.project, STREAM_FILE)).catch(() => '')
+      const reported = new Set(
+        lines(stream).flatMap((line) => {
+          const decoded = decodeStreamLine(line)
+          return Result.isSuccess(decoded) ? [decoded.success.id] : []
+        }),
+      )
+      missing.push(...project.mutants.filter((id) => !reported.has(id)))
+    }
+  }
+  return missing
+}
+
+for (
+  const [label, matrix] of [
+    ['one shard', ['1/1']],
+    ['two shards whose matrix lists them in reverse plan order', ['2/2', '1/2']],
+  ] as const
+) {
+  Deno.test(`the release-gate verdict merges, for ${label}, each shard's report directory where the shard job wrote and uploaded it, and gates the merged report with no accepted survivor`, async () => {
+    const step = await verdictStep()
+    const plan = await planOf(matrix)
+    const root = await verdictFixture(plan, 0)
+    try {
+      const outcome = await inSandbox(step, root)
+      if (outcome.code !== 0) throw new Error(`"${step.name}" exited ${outcome.code}:\n${outcome.out}`)
+      const [mergeCall, gateCall, ...rest] = await strykerCalls(root)
+      const merge = mergeArgsOf(mergeCall ?? '')
+      if (merge.plan !== await verdictPlanFile()) throw new Error(`merge read the plan at ${merge.plan}`)
+      const missing = await unmergedMutants(root, plan, merge.dirs)
+      if (missing.length > 0) {
+        throw new Error(`planned mutant(s) missing from the shard reports: ${missing.join(', ')} (merge ${mergeCall})`)
+      }
+      if (gateCall !== 'gate --baseline .cache/no-survivors.json' || rest.length > 0) {
+        throw new Error(`after the merge stryker ran ${JSON.stringify([gateCall, ...rest])}`)
+      }
+      const baseline = await Deno.readTextFile(`${root}/.cache/no-survivors.json`)
+      if (JSON.stringify(JSON.parse(baseline)) !== '{"schemaVersion":1,"survivors":[]}') {
+        throw new Error(`the gate's baseline accepts survivors: ${baseline}`)
+      }
+    } finally {
+      await Deno.remove(root, { recursive: true })
+    }
+  })
+}
 
 Deno.test('a failed shard-report merge fails the verdict step before the gate reads a merged report', async () => {
   const step = await verdictStep()
-  const root = await verdictFixture(3)
+  const root = await verdictFixture(await planOf(['2/2', '1/2']), 3)
   try {
     const outcome = await inSandbox(step, root)
     if (outcome.code === 0) throw new Error(`"${step.name}" passed after the merge failed:\n${outcome.out}`)

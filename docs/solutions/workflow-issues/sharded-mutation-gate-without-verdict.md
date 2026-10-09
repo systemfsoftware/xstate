@@ -23,24 +23,25 @@ tags: [stryker, mutation-testing, release-gate, sharding, ci]
 ## Symptoms
 
 - Release gate run 37869702486 on `9857b0b3` was green, and its report held 3 Survived mutants and 1 NoCoverage mutant in the state-id parser behind `toStatePath`.
+- Once the verdict job existed, run 37892133106 on `21fe21ef` failed it with `planned mutant(s) missing from the shard reports` naming all 114 planned mutants, while the one shard's stream held every one of them.
 
 ## Solution
 
 A `verdict` job needs every `mutation` shard, downloads `stryker-plan` and every `mutation-shard-*` artifact, and runs stryker's own commands:
 
 ```bash
-stryker merge --plan .cache/stryker-plan.json --out reports/mutation <one dir per shard, in plan order>
+stryker merge --plan stryker-plan.json --out reports/mutation <one dir per shard, in plan order>
 stryker gate --baseline .cache/no-survivors.json   # {"schemaVersion":1,"survivors":[]}
 ```
 
-- **Shard directory.** A shard run writes under stryker-js's `SHARD_OUT_MARKER` (`reports/shards`) plus the shard index, joined with each plan project path. Merge resolves projects the same way, so pass the shard's `reports/shards/<index>` directory even though `<index>` never exists on disk: the plan's `../packages/<name>` steps back out of it.
-- **Artifact for each shard.** `strategy.job-index` follows matrix order, which can differ from plan order, so find a shard's artifact by its matrix label `index/count`.
+- **Plan at the repository root.** `stryker plan` writes each project path relative to the plan file's directory, and the shard run and merge join that path under their own directories. A plan in `.cache/` gives `../packages/<name>`, which climbs out of the shard's `reports/shards/<index>` directory, so every shard writes the same `.cache/reports/shards/packages/<name>`. At the root the path is `packages/<name>` and shard `k` writes `reports/shards/<k>/packages/<name>/`.
+- **One layout for any shard count.** Each shard uploads the single directory `reports/shards/`, so its artifact holds `<k>/packages/<name>/`: upload-artifact v6's `findFilesToUpload` roots a single path at that path and several paths at their common ancestor. The verdict downloads every `mutation-shard-*` artifact with `merge-multiple: true` into `.cache/shard-reports`, so shard `k`'s reports are at `.cache/shard-reports/<k>` whether one shard ran or many. Without `merge-multiple`, download-artifact v6's `run` puts each artifact under its name only when more than one matches, and extracts a lone match straight into the path (its `artifacts.length === 1` case); that is what broke run 37892133106, which had one shard. The per-shard HTML report goes in its own `mutation-report-shard-*` artifact so it stays out of that pattern.
 - **Fail-closed paths.** Merge raises `ShardReportGap` when a planned mutant has no report. `stryker gate` reads its `GATE_REPORT_FILE`, the file merge writes. It rejects any Survived or NoCoverage mutant missing from the baseline (`GateRejected`) and fails when the baseline is missing or undecodable (`GateInputUnusable`). An empty baseline is the same bar as `thresholds.break: 100`.
 - **Errexit.** Keep `set -euo pipefail`, and write `jq`'s output to a file before `mapfile` reads it. A process substitution hides a `jq` failure from `set -e`.
 
 ## Prevention
 
-The release-gate sandbox proof runs the verdict step in the sandbox with a recording `stryker` stub. It fails if the job stops needing `mutation`, maps shards by position, accepts a survivor in the baseline, or runs the gate after a failed merge. Local `stryker merge` and `stryker gate` runs are refused on this host, so the first proof with real reports is the job's first run on main.
+`pnpm test:sandbox` runs the release-gate sandbox proof, which builds the verdict job's workspace from the workflow itself: the plan where the plan step writes it, each shard's stream under stryker-js's `SHARD_OUT_MARKER`, the upload root, and the download-artifact extraction rule. It then runs the verdict step with a recording `stryker` stub and resolves each shard directory merge receives the way merge does. It runs for one shard and for two shards listed in reverse matrix order, and fails if a planned mutant's stream is not where merge looks. It also fails if the job stops needing `mutation`, accepts a survivor in the baseline, or runs the gate after a failed merge. Local `stryker merge` and `stryker gate` runs are refused on this host, so the proof with real reports is the job's run on main.
 
 ## Related Issues
 
