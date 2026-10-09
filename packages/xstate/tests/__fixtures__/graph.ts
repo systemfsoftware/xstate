@@ -33,7 +33,7 @@ const startSignals = (query: { readonly input: 'zero' | 'one' }): StartSignals =
 })
 
 const initialContext = (machine: FlatMachine, query: { readonly input: 'zero' | 'one' }): { readonly count?: number } =>
-  machine.counter ? { count: machine.inputSeeded ? startSignals(query).start : 0 } : {}
+  machine.counter || machine.inputSeeded ? { count: machine.inputSeeded ? startSignals(query).start : 0 } : {}
 
 const plainOnOf = (
   machine: FlatMachine,
@@ -108,7 +108,6 @@ const traverseOptions = <M extends AnyStateMachine>(
   query: Extract<GraphCommand, { readonly _tag: 'Traverse' }>['query'],
   ignoreFilter: boolean,
 ) => ({
-  ...(query.events === 'override' ? { events: graphEvents.override } : {}),
   ...(query.filter && !ignoreFilter ? { filterEvents: backFilter } : {}),
   ...(query.stop || query.target ? { stopWhen: stopPredicate(states) } : {}),
   ...(query.target ? { toState: stopPredicate(states) } : {}),
@@ -122,7 +121,7 @@ const traverseOptions = <M extends AnyStateMachine>(
     }
     : {}),
   ...(query.serialize === 'value' ? { serializeState: valueStateString } : {}),
-  ...(flat.counter ? { input: startSignals(query) } : {}),
+  ...(flat.counter || flat.inputSeeded ? { input: startSignals(query) } : {}),
 })
 
 const duplicateFirst = (paths: ReadonlyArray<PathView>): ReadonlyArray<PathView> => {
@@ -189,7 +188,7 @@ const runReplay = (
       }
       : {}),
     ...(query.serialize === 'value' ? { serializeState: valueStateString } : {}),
-    ...(command.machine.counter ? { input: startSignals(query) } : {}),
+    ...(command.machine.counter || command.machine.inputSeeded ? { input: startSignals(query) } : {}),
   }
   const events = command.sequence.map((type) => ({ type }))
   const serialize = projectState(query.serialize)
@@ -278,7 +277,6 @@ export interface GraphLedger {
   counters: number
   plain: number
   inputSeeded: number
-  overrideEvents: number
   filtered: number
   stopped: number
   targeted: number
@@ -302,7 +300,6 @@ const noteTraverse = (ledger: GraphLedger, command: Extract<GraphCommand, { read
   ledger.counters += command.machine.counter ? 1 : 0
   ledger.plain += command.machine.counter ? 0 : 1
   ledger.inputSeeded += command.machine.inputSeeded ? 1 : 0
-  ledger.overrideEvents += command.query.events === 'override' ? 1 : 0
   ledger.filtered += command.query.filter ? 1 : 0
   ledger.stopped += command.query.stop || command.query.target ? 1 : 0
   ledger.targeted += command.query.target ? 1 : 0
@@ -337,7 +334,6 @@ const emptyLedger = (): GraphLedger => ({
   counters: 0,
   plain: 0,
   inputSeeded: 0,
-  overrideEvents: 0,
   filtered: 0,
   stopped: 0,
   targeted: 0,
@@ -384,7 +380,7 @@ const subjectOf = (behaviour: Behaviour): GraphHandle => {
       Match.tag('Structure', (structure) => noteStructure(observed, structure)),
       Match.exhaustive,
     )
-    return respond(command, behaviour)
+    return attempt(() => respond(command, behaviour))
   }
   return { observed, layer: Layer.succeed(GraphSubject, run) }
 }

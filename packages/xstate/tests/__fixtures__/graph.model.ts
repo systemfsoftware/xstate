@@ -27,7 +27,6 @@ export type FlatMachine = Schema.Schema.Type<typeof FlatMachine>
 
 const TraverseQuery = Schema.Struct({
   operation: Schema.Literals(['adjacency', 'shortest', 'simple']),
-  events: Schema.Literals(['default', 'override']),
   filter: Schema.Boolean,
   stop: Schema.Boolean,
   target: Schema.Boolean,
@@ -60,7 +59,7 @@ const treeLeaf = Schema.TaggedStruct('Leaf', { key: StateName, transitions: Sche
 const treeBranch = Schema.TaggedStruct('Branch', {
   key: StateName,
   initial: Schema.Literals([0, 1]),
-  children: Schema.Array(treeLeaf),
+  children: Schema.Array(treeLeaf).check(Schema.isMinLength(1)),
   transitions: Schema.Array(treeTransition),
 })
 const treeChild = Schema.Union([treeLeaf, treeBranch])
@@ -206,41 +205,22 @@ export const serializerOf = (mode: 'default' | 'value'): (sim: Sim) => string =>
 
 export const eventJsonOf = (event: object): string => JSON.stringify(event)
 
-const eventObject = (type: string, amount: number | undefined): EventObjectView =>
-  amount === undefined ? { type } : { type, amount }
-
-export const OVERRIDE_EVENTS: ReadonlyArray<EventObjectView> = [
-  { type: 'NEXT', amount: 7 },
-  { type: 'BACK', amount: 9 },
-]
-
 const defaultEvents = (
   machine: FlatMachine,
   states: ReadonlyArray<StateName>,
   sim: Sim,
-): ReadonlyArray<EventObjectView> =>
-  stateEventTypes(machine, states, sim.value).map((type) => eventObject(type, undefined))
-
-const replacementsFor = (event: EventObjectView): ReadonlyArray<EventObjectView> => {
-  const matches = OVERRIDE_EVENTS.filter((candidate) => candidate.type === event.type)
-  return matches.length > 0 ? matches : [event]
-}
+): ReadonlyArray<EventObjectView> => stateEventTypes(machine, states, sim.value).map((type) => ({ type }))
 
 const effectiveEvents = (
   machine: FlatMachine,
   states: ReadonlyArray<StateName>,
   sim: Sim,
-  override: boolean,
-): ReadonlyArray<EventObjectView> => {
-  const defaults = defaultEvents(machine, states, sim)
-  return override ? defaults.flatMap((event) => replacementsFor(event)) : defaults
-}
+): ReadonlyArray<EventObjectView> => defaultEvents(machine, states, sim)
 
 export interface Traversal {
   readonly machine: FlatMachine
   readonly states: ReadonlyArray<StateName>
   readonly start: Sim
-  readonly override: boolean
   readonly filter: boolean
   readonly stop: boolean
   readonly target: boolean
@@ -271,7 +251,6 @@ const traversalFrom = (
   query: {
     readonly input: 'zero' | 'one'
     readonly fromSecond: boolean
-    readonly events: 'default' | 'override'
     readonly filter: boolean
     readonly stop: boolean
     readonly target: boolean
@@ -282,7 +261,6 @@ const traversalFrom = (
   machine,
   states,
   start: startSim(machine, states, query),
-  override: query.events === 'override',
   filter: query.filter,
   stop: stopPresent(query),
   target: query.target,
@@ -341,7 +319,7 @@ const pushTransition = (
 }
 
 const expandTransitions = (work: AdjWork, node: MutableAdjNode, sim: Sim, traversal: Traversal): void => {
-  effectiveEvents(traversal.machine, traversal.states, sim, traversal.override)
+  effectiveEvents(traversal.machine, traversal.states, sim)
     .filter((event) => keepsEvent(traversal, event))
     .forEach((event) => pushTransition(work, node, sim, event, traversal))
 }
@@ -570,7 +548,6 @@ const replayTraversal = (machine: FlatMachine, query: ReplayQuery): Traversal =>
   machine,
   states: machineStates(machine.states),
   start: startSim(machine, machineStates(machine.states), query),
-  override: query.candidate === 'last',
   filter: query.filter,
   stop: stopPresent(query),
   target: query.target,
@@ -829,7 +806,6 @@ export const flatMachine = {
 }
 
 export const graphEvents = {
-  override: OVERRIDE_EVENTS,
   candidates: CANDIDATES,
   serialize: serializerOf,
   json: eventJsonOf,
