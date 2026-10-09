@@ -17,6 +17,8 @@ const scopedMutate = (mutate: ReadonlyArray<string>, scope: string | undefined):
 export const packageStrykerConfig = (mutate: ReadonlyArray<string>): StrykerConfig =>
   ({
     checkers: [{ plugin: '@systemfsoftware/stryker-js-typescript-checker' }],
+    // At the default of 4 (2 checkers, each driving tsgo), shards on the 16 GB hosted runner exited 3 or lost the VM.
+    concurrency: 2,
     coverageAnalysis: 'perTest',
     disableBail: true,
     htmlReporter: { fileName: 'reports/mutation-report.html' },
