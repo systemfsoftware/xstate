@@ -15,7 +15,7 @@ export type StateTree = string | ReadonlyArray<readonly [string, StateTree]>
 
 const Form = Schema.Literals(['value', 'id'])
 const Call = Schema.Literals(['data-first', 'data-last', 'snapshot'])
-const Escape = Schema.Literals(['reserved', 'every-character', 'bare-final-backslash'])
+const Escape = Schema.Literals(['dot-and-backslash', 'every-character', 'bare-final-backslash'])
 
 export const MatchCommand = Schema.Union([
   Schema.TaggedStruct('Match', {
@@ -89,7 +89,7 @@ const readsAsStateId = (tree: StateTree, form: Form): tree is string => typeof t
 const argumentPathsOf = (tree: StateTree, form: Form): ReadonlyArray<StatePath> =>
   readsAsStateId(tree, form) ? [readStateId(tree)] : leafPathsOf(stateValueOf(tree), [])
 
-const childFormOf = (command: MatchCommand): Form => command.call === 'snapshot' ? 'value' : command.childForm
+export const childFormOf = (command: MatchCommand): Form => command.call === 'snapshot' ? 'value' : command.childForm
 
 const activeStatesInclude = (parent: ReadonlyArray<StatePath>, child: ReadonlyArray<StatePath>): boolean =>
   parent.every((wanted) => child.some((active) => isPrefixOf(wanted, active)))

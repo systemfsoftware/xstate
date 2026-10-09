@@ -8,7 +8,14 @@ import {
   type StateValueMap,
 } from '@systemfsoftware/xstate'
 import { Context, Effect, Layer, Match, pipe } from 'effect'
-import { type MatchCommand, type ModelStateValue, type StateTree, stateValueOf, treesOf } from './stateValue.model.js'
+import {
+  childFormOf,
+  type MatchCommand,
+  type ModelStateValue,
+  type StateTree,
+  stateValueOf,
+  treesOf,
+} from './stateValue.model.js'
 
 type Escape = MatchCommand['escape']
 
@@ -28,11 +35,11 @@ const idOf = (value: ModelStateValue, escape: Escape): string | undefined => {
   return rest === undefined ? undefined : `${escapedKey(only[0], escape)}.${rest}`
 }
 
-const withBareFinalBackslash = (id: string): string => id.endsWith('\\\\') ? id.slice(0, -1) : id
+const leaveFinalBackslashBare = (id: string): string => id.endsWith('\\\\') ? id.slice(0, -1) : id
 
 const writtenIdOf = (value: ModelStateValue, escape: Escape): string | undefined => {
   const id = idOf(value, escape)
-  return id !== undefined && escape === 'bare-final-backslash' ? withBareFinalBackslash(id) : id
+  return id !== undefined && escape === 'bare-final-backslash' ? leaveFinalBackslashBare(id) : id
 }
 
 interface Argument {
@@ -41,7 +48,7 @@ interface Argument {
   readonly escapesADot: boolean
   readonly escapesWhitespace: boolean
   readonly endsInALoneBackslash: boolean
-  readonly isAStringWithABackslash: boolean
+  readonly isAStringValueWithABackslash: boolean
 }
 
 const argumentOf = (tree: StateTree, form: MatchCommand['parentForm'], escape: Escape): Argument => {
@@ -54,7 +61,7 @@ const argumentOf = (tree: StateTree, form: MatchCommand['parentForm'], escape: E
       escapesADot: false,
       escapesWhitespace: false,
       endsInALoneBackslash: false,
-      isAStringWithABackslash: typeof value === 'string' && value.includes('\\'),
+      isAStringValueWithABackslash: typeof value === 'string' && value.includes('\\'),
     }
     : {
       value: id,
@@ -62,7 +69,7 @@ const argumentOf = (tree: StateTree, form: MatchCommand['parentForm'], escape: E
       escapesADot: id.includes('\\.'),
       escapesWhitespace: escape === 'every-character' && /\s/.test(id),
       endsInALoneBackslash: escape === 'bare-final-backslash' && id.endsWith('\\'),
-      isAStringWithABackslash: false,
+      isAStringValueWithABackslash: false,
     }
 }
 
@@ -159,7 +166,7 @@ const subjectOf = (matcher: Matcher): MatchingSubject => {
   const match = (command: MatchCommand): boolean => {
     const [parentTree, childTree] = treesOf(command)
     const parent = argumentOf(parentTree, command.parentForm, command.escape)
-    const child = argumentOf(childTree, command.call === 'snapshot' ? 'value' : command.childForm, command.escape)
+    const child = argumentOf(childTree, childFormOf(command), command.escape)
     const matched = matcher(command.call, childTree, parent.value, child.value)
     const tally = observed.answers[command.call]
     tally.matched += matched ? 1 : 0
@@ -170,7 +177,7 @@ const subjectOf = (matcher: Matcher): MatchingSubject => {
       observed.nestedDottedLeafArguments += nestsADottedLeaf(argument.value) ? 1 : 0
       observed.whitespaceEscapingIdArguments += argument.escapesWhitespace ? 1 : 0
       observed.loneFinalBackslashIdArguments += argument.endsInALoneBackslash ? 1 : 0
-      observed.backslashStringValueArguments += argument.isAStringWithABackslash ? 1 : 0
+      observed.backslashStringValueArguments += argument.isAStringValueWithABackslash ? 1 : 0
     }
     return matched
   }
