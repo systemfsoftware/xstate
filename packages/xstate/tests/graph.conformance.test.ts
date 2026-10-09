@@ -41,81 +41,83 @@ const typedMachine = typedSetup.createMachine({})
 
 type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
 
-const typedJoinState = createMachine({ initial: 'a', states: { a: {} } }).resolveState({ value: 'a' })
-const typedJoinPath = {
-  state: typedJoinState,
-  weight: 1,
-  steps: [{ state: typedJoinState, event: { type: 'GO' } }],
+export const typeLevelContract = () => {
+  const typedJoinState = createMachine({ initial: 'a', states: { a: {} } }).resolveState({ value: 'a' })
+  const typedJoinPath = {
+    state: typedJoinState,
+    weight: 1,
+    steps: [{ state: typedJoinState, event: { type: 'GO' } }],
+  }
+
+  const shortestDataFirst = getShortestPaths(typedMachine, { events: [{ type: 'FOO' }] })
+  const shortestDataLast = getShortestPaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine)
+  const shortestDataLastByDefault = getShortestPaths<typeof typedMachine>()(typedMachine)
+  const simpleDataFirst = getSimplePaths(typedMachine, { events: [{ type: 'FOO' }] })
+  const simpleDataLast = getSimplePaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine)
+  const simpleDataLastByDefault = getSimplePaths<typeof typedMachine>()(typedMachine)
+  const adjacencyDataFirst = getAdjacencyMap(typedMachine, {})
+  const adjacencyDataLast = getAdjacencyMap<
+    SnapshotFrom<typeof typedMachine>,
+    EventFromLogic<typeof typedMachine>,
+    InputFrom<typeof typedMachine>
+  >({})(typedMachine)
+  const replayDataFirst = getPathsFromEvents(typedMachine, [{ type: 'FOO' }])
+  const replayDataLast = getPathsFromEvents<
+    SnapshotFrom<typeof typedMachine>,
+    EventFromLogic<typeof typedMachine>,
+    InputFrom<typeof typedMachine>
+  >([{ type: 'FOO' }], { events: [{ type: 'FOO' }] })(typedMachine)
+  const replayDataLastByDefault = getPathsFromEvents<
+    SnapshotFrom<typeof typedMachine>,
+    EventFromLogic<typeof typedMachine>,
+    InputFrom<typeof typedMachine>
+  >([{ type: 'FOO' }])(typedMachine)
+  const joinDataFirst = joinPaths(typedJoinPath, typedJoinPath)
+  const joinDataLast = joinPaths(typedJoinPath)(typedJoinPath)
+
+  return [
+    getShortestPaths(typedMachine, { events: [{ type: 'FOO' }] }),
+    getShortestPaths(typedMachine, { events: [{ type: 'FOO' }] as const }),
+    getShortestPaths(typedMachine, { events: () => [{ type: 'FOO' }] as const }),
+    // @ts-expect-error an undeclared event type is refused
+    getShortestPaths(typedMachine, { events: [{ type: 'UNKNOWN' }] }),
+    // @ts-expect-error a declared event cannot receive another event's property
+    getShortestPaths(typedMachine, { events: [{ type: 'FOO', other: 'x' }] }),
+    getShortestPaths(typedMachine, { serializeEvent: () => '' }),
+    getShortestPaths(typedMachine, { serializeState: () => '' }),
+    getAdjacencyMap(typedMachine, {}),
+    getShortestPaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine),
+    getShortestPaths<typeof typedMachine>()(typedMachine),
+    getSimplePaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine),
+    getSimplePaths<typeof typedMachine>()(typedMachine),
+    getAdjacencyMap<
+      SnapshotFrom<typeof typedMachine>,
+      EventFromLogic<typeof typedMachine>,
+      InputFrom<typeof typedMachine>
+    >({})(typedMachine),
+    getPathsFromEvents<
+      SnapshotFrom<typeof typedMachine>,
+      EventFromLogic<typeof typedMachine>,
+      InputFrom<typeof typedMachine>
+    >([{ type: 'FOO' }], { events: [{ type: 'FOO' }] })(typedMachine),
+    getPathsFromEvents<
+      SnapshotFrom<typeof typedMachine>,
+      EventFromLogic<typeof typedMachine>,
+      InputFrom<typeof typedMachine>
+    >([{ type: 'FOO' }])(typedMachine),
+    joinPaths(typedJoinPath)(typedJoinPath),
+    // @ts-expect-error the data-last form refuses an undeclared event type too
+    getShortestPaths<typeof typedMachine>({ events: [{ type: 'UNKNOWN' }] })(typedMachine),
+    true satisfies Same<typeof shortestDataLast, typeof shortestDataFirst>,
+    true satisfies Same<typeof shortestDataLastByDefault, typeof shortestDataFirst>,
+    true satisfies Same<typeof simpleDataLast, typeof simpleDataFirst>,
+    true satisfies Same<typeof simpleDataLastByDefault, typeof simpleDataFirst>,
+    true satisfies Same<typeof adjacencyDataLast, typeof adjacencyDataFirst>,
+    true satisfies Same<typeof replayDataLast, typeof replayDataFirst>,
+    true satisfies Same<typeof replayDataLastByDefault, typeof replayDataFirst>,
+    true satisfies Same<typeof joinDataLast, typeof joinDataFirst>,
+  ] as const
 }
-
-const shortestDataFirst = getShortestPaths(typedMachine, { events: [{ type: 'FOO' }] })
-const shortestDataLast = getShortestPaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine)
-const shortestDataLastByDefault = getShortestPaths<typeof typedMachine>()(typedMachine)
-const simpleDataFirst = getSimplePaths(typedMachine, { events: [{ type: 'FOO' }] })
-const simpleDataLast = getSimplePaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine)
-const simpleDataLastByDefault = getSimplePaths<typeof typedMachine>()(typedMachine)
-const adjacencyDataFirst = getAdjacencyMap(typedMachine, {})
-const adjacencyDataLast = getAdjacencyMap<
-  SnapshotFrom<typeof typedMachine>,
-  EventFromLogic<typeof typedMachine>,
-  InputFrom<typeof typedMachine>
->({})(typedMachine)
-const replayDataFirst = getPathsFromEvents(typedMachine, [{ type: 'FOO' }])
-const replayDataLast = getPathsFromEvents<
-  SnapshotFrom<typeof typedMachine>,
-  EventFromLogic<typeof typedMachine>,
-  InputFrom<typeof typedMachine>
->([{ type: 'FOO' }], { events: [{ type: 'FOO' }] })(typedMachine)
-const replayDataLastByDefault = getPathsFromEvents<
-  SnapshotFrom<typeof typedMachine>,
-  EventFromLogic<typeof typedMachine>,
-  InputFrom<typeof typedMachine>
->([{ type: 'FOO' }])(typedMachine)
-const joinDataFirst = joinPaths(typedJoinPath, typedJoinPath)
-const joinDataLast = joinPaths(typedJoinPath)(typedJoinPath)
-
-export const typeLevelContract = [
-  getShortestPaths(typedMachine, { events: [{ type: 'FOO' }] }),
-  getShortestPaths(typedMachine, { events: [{ type: 'FOO' }] as const }),
-  getShortestPaths(typedMachine, { events: () => [{ type: 'FOO' }] as const }),
-  // @ts-expect-error an undeclared event type is refused
-  getShortestPaths(typedMachine, { events: [{ type: 'UNKNOWN' }] }),
-  // @ts-expect-error a declared event cannot receive another event's property
-  getShortestPaths(typedMachine, { events: [{ type: 'FOO', other: 'x' }] }),
-  getShortestPaths(typedMachine, { serializeEvent: () => '' }),
-  getShortestPaths(typedMachine, { serializeState: () => '' }),
-  getAdjacencyMap(typedMachine, {}),
-  getShortestPaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine),
-  getShortestPaths<typeof typedMachine>()(typedMachine),
-  getSimplePaths<typeof typedMachine>({ events: [{ type: 'FOO' }] })(typedMachine),
-  getSimplePaths<typeof typedMachine>()(typedMachine),
-  getAdjacencyMap<
-    SnapshotFrom<typeof typedMachine>,
-    EventFromLogic<typeof typedMachine>,
-    InputFrom<typeof typedMachine>
-  >({})(typedMachine),
-  getPathsFromEvents<
-    SnapshotFrom<typeof typedMachine>,
-    EventFromLogic<typeof typedMachine>,
-    InputFrom<typeof typedMachine>
-  >([{ type: 'FOO' }], { events: [{ type: 'FOO' }] })(typedMachine),
-  getPathsFromEvents<
-    SnapshotFrom<typeof typedMachine>,
-    EventFromLogic<typeof typedMachine>,
-    InputFrom<typeof typedMachine>
-  >([{ type: 'FOO' }])(typedMachine),
-  joinPaths(typedJoinPath)(typedJoinPath),
-  // @ts-expect-error the data-last form refuses an undeclared event type too
-  getShortestPaths<typeof typedMachine>({ events: [{ type: 'UNKNOWN' }] })(typedMachine),
-  true satisfies Same<typeof shortestDataLast, typeof shortestDataFirst>,
-  true satisfies Same<typeof shortestDataLastByDefault, typeof shortestDataFirst>,
-  true satisfies Same<typeof simpleDataLast, typeof simpleDataFirst>,
-  true satisfies Same<typeof simpleDataLastByDefault, typeof simpleDataFirst>,
-  true satisfies Same<typeof adjacencyDataLast, typeof adjacencyDataFirst>,
-  true satisfies Same<typeof replayDataLast, typeof replayDataFirst>,
-  true satisfies Same<typeof replayDataLastByDefault, typeof replayDataFirst>,
-  true satisfies Same<typeof joinDataLast, typeof joinDataFirst>,
-] as const
 
 const Feature = makeFeature({ it })
 
