@@ -113,7 +113,6 @@ const PROJECT = 'packages/core'
 const STREAM_FILE = 'mutation-stream.jsonl'
 const UPLOAD_ARTIFACT = 'actions/upload-artifact@v6'
 const DOWNLOAD_ARTIFACT = 'actions/download-artifact@v6'
-const SHARD_OUT_MARKER = /const SHARD_OUT_MARKER = "([^"]+)"/
 const GLOB_SEGMENT = /[*?[]/
 const JOB_INDEX = '${{ strategy.job-index }}'
 
@@ -166,13 +165,14 @@ const planOf = async (matrix: readonly string[]): Promise<Plan> => {
   }
 }
 
-const shardOutMarker = async (): Promise<string> => {
+const strykerConstant = async (name: string): Promise<string> => {
+  const definition = new RegExp(`const ${name} = "([^"]+)"`)
   for await (const entry of Deno.readDir(STRYKER_DIST)) {
     if (!entry.name.endsWith('.mjs')) continue
-    const marker = (await Deno.readTextFile(`${STRYKER_DIST}/${entry.name}`)).match(SHARD_OUT_MARKER)?.[1]
-    if (marker !== undefined) return marker
+    const value = (await Deno.readTextFile(`${STRYKER_DIST}/${entry.name}`)).match(definition)?.[1]
+    if (value !== undefined) return value
   }
-  throw new Error(`stryker-js in ${STRYKER_DIST} defines no SHARD_OUT_MARKER`)
+  throw new Error(`stryker-js in ${STRYKER_DIST} defines no ${name}`)
 }
 
 const searchRootOf = (pattern: string): string => {
@@ -210,7 +210,7 @@ const shardArtifactTree = async (plan: Plan): Promise<ReadonlyMap<string, string
   const download = await onlyArtifactStep('verdict', DOWNLOAD_ARTIFACT, (inputs) => inputs.pattern !== undefined)
   const roots = lines(upload.path).map(searchRootOf)
   const artifactRoot = common(roots)
-  const marker = await shardOutMarker()
+  const marker = await strykerConstant('SHARD_OUT_MARKER')
   const matches = new RegExp(`^${(download.pattern ?? '').replaceAll('*', '.*')}$`)
   const jobs = plan.matrix.include.map((entry) => entry.shard)
   const names = jobs.map((_, job) => (upload.name ?? '').replace(JOB_INDEX, String(job)))
@@ -339,13 +339,13 @@ const strykerCalls = async (root: string): Promise<readonly string[]> =>
 
 const decodeStreamLine = S.decodeUnknownResult(S.fromJsonString(S.Struct({ id: S.String })))
 
-const mergeArgsOf = (call: string): { readonly plan: string; readonly dirs: string[] } => {
+const mergeArgsOf = (call: string): { readonly plan: string; readonly out: string; readonly dirs: string[] } => {
   const [verb, ...args] = call.split(' ')
   if (verb !== 'merge') throw new Error(`expected a merge call, got ${JSON.stringify(call)}`)
-  const merge = { plan: '', dirs: [] as string[] }
+  const merge = { plan: '', out: '', dirs: [] as string[] }
   for (let at = 0; at < args.length; at++) {
     if (args[at] === '--plan') merge.plan = args[++at]!
-    else if (args[at] === '--out') at++
+    else if (args[at] === '--out') merge.out = args[++at]!
     else merge.dirs.push(args[at]!)
   }
   return merge
@@ -387,6 +387,8 @@ for (
       const [mergeCall, gateCall, ...rest] = await strykerCalls(root)
       const merge = mergeArgsOf(mergeCall ?? '')
       if (merge.plan !== await downloadedPlanOf('verdict')) throw new Error(`merge read the plan at ${merge.plan}`)
+      const gateReads = dirname(await strykerConstant('GATE_REPORT_FILE'))
+      if (merge.out !== gateReads) throw new Error(`merge wrote ${merge.out}, but the gate reads ${gateReads}`)
       const missing = await unmergedMutants(root, plan, merge.dirs)
       if (missing.length > 0) {
         throw new Error(`planned mutant(s) missing from the shard reports: ${missing.join(', ')} (merge ${mergeCall})`)
