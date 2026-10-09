@@ -23,16 +23,16 @@ Each package is also its own flake attribute, named after the last segment of it
 
 ## Toolchain
 
-| Tool                    | Role                                                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Nix**                 | Pins Node.js 24, pnpm 12.9.0, Deno and dprint, and builds the package tarballs                                      |
-| **Sandbox**             | pnpm-release-management's deny-by-default launcher; all dependency code runs in it                                  |
-| **pnpm + Turbo**        | Workspace catalog with exact pins, cached task graph                                                                |
-| **TypeScript 7 (tsgo)** | Typechecking through `@effect/tsgo`                                                                                 |
-| **oxlint**              | The `@systemfsoftware/oxlint-config-recommended` preset, at error severity                                          |
-| **Vitest**              | Unit and integration tests                                                                                          |
-| **Stryker**             | Mutation testing at a break threshold of 100, on `main` and scoped to each pull request's change (the release gate) |
-| **dprint**              | Formatting for code and Markdown                                                                                    |
+| Tool                    | Role                                                                               |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| **Nix**                 | Pins Node.js 24, pnpm 12.9.0, Deno and dprint, and builds the package tarballs     |
+| **Sandbox**             | pnpm-release-management's deny-by-default launcher; all dependency code runs in it |
+| **pnpm + Turbo**        | Workspace catalog with exact pins, cached task graph                               |
+| **TypeScript 7 (tsgo)** | Typechecking through `@effect/tsgo`                                                |
+| **oxlint**              | The `@systemfsoftware/oxlint-config-recommended` preset, at error severity         |
+| **Vitest**              | Unit and integration tests                                                         |
+| **Stryker**             | Mutation testing at a break threshold of 100, on `main` only (the release gate)    |
+| **dprint**              | Formatting for code and Markdown                                                   |
 
 ## Contributing
 

@@ -115,6 +115,8 @@ const UPLOAD_ARTIFACT = 'actions/upload-artifact@v6'
 const DOWNLOAD_ARTIFACT = 'actions/download-artifact@v6'
 const GLOB_SEGMENT = /[*?[]/
 const JOB_INDEX = '${{ strategy.job-index }}'
+const SHARD_RUNNER = '.github/scripts/run-shard.sh'
+const SHARD_SELECTOR = 'stryker-plan-gate.ts shard'
 
 interface Plan {
   readonly version: number
@@ -132,6 +134,15 @@ const flagOf = (command: string, flag: string): string => {
   const value = command.match(new RegExp(`${flag} (\\S+)`))?.[1]
   if (value === undefined) throw new Error(`${JSON.stringify(command)} passes no ${flag}`)
   return value
+}
+
+const shardRunnerPlanOf = (command: string): string => {
+  const words = command.split(/\s+/)
+  const plan = words[words.indexOf(SHARD_RUNNER) + 1]
+  if (!words.includes(SHARD_RUNNER) || plan === undefined) {
+    throw new Error(`${JSON.stringify(command)} passes no plan to ${SHARD_RUNNER}`)
+  }
+  return plan
 }
 
 type StepInputs = NonNullable<typeof Job.Type.steps[number]['with']>
@@ -197,7 +208,7 @@ const downloadedPlanOf = async (job: JobName): Promise<string> => {
 }
 
 const shardArtifactTree = async (plan: Plan): Promise<ReadonlyMap<string, string>> => {
-  const shardPlan = flagOf((await onlySandboxStep('mutation', 'stryker run')).command, '--plan')
+  const shardPlan = shardRunnerPlanOf((await onlySandboxStep('mutation', SHARD_RUNNER)).command)
   const downloadedPlan = await downloadedPlanOf('mutation')
   if (downloadedPlan !== join(shardPlan)) {
     throw new Error(`a shard job downloads the plan to ${downloadedPlan} but runs ${shardPlan}`)
@@ -238,6 +249,10 @@ const writeFixture = async (): Promise<string> => {
   await Deno.mkdir(`${root}/scripts`)
   for (const file of ['deno.json', 'deno.lock', 'stryker-plan-gate.ts']) {
     await Deno.copyFile(`${repoRoot}scripts/${file}`, `${root}/scripts/${file}`)
+  }
+  await Deno.mkdir(`${root}/.github/scripts`, { recursive: true })
+  for (const file of ['run-shard.sh', 'print-log-tails.sh']) {
+    await Deno.copyFile(`${repoRoot}.github/scripts/${file}`, `${root}/.github/scripts/${file}`)
   }
   await Deno.writeTextFile(`${root}/pnpm-workspace.yaml`, 'packages:\n  - packages/*\n')
   await Deno.writeTextFile(
@@ -282,9 +297,10 @@ Deno.test('each release-gate planner step runs in the sandbox on only its declar
   }
 })
 
-Deno.test('the release-gate mutation step passes stryker every variable its main-CI guard reads, and never the local override', async () => {
+Deno.test('the release-gate shard steps pass stryker every variable its main-CI guard reads, never the local override, and leave each project stream where the shard artifact uploads it', async () => {
   const required = [...await guardEnvReads()].filter((name) => name !== GUARD_OVERRIDE)
-  const step = await onlySandboxStep('mutation', 'stryker run')
+  const select = await onlySandboxStep('mutation', SHARD_SELECTOR)
+  const step = await onlySandboxStep('mutation', SHARD_RUNNER)
   const missing = required.filter((name) => !step.passEnv.includes(name))
   if (missing.length > 0 || step.passEnv.includes(GUARD_OVERRIDE)) {
     throw new Error(
@@ -293,10 +309,23 @@ Deno.test('the release-gate mutation step passes stryker every variable its main
   }
   const root = await writeFixture()
   try {
-    await writeStrykerStub(root, 'env > .cache/stryker-env.txt\n')
+    await writeStrykerStub(
+      root,
+      [
+        'while [ $# -gt 0 ]; do',
+        '  case $1 in --plan) plan=$2; shift ;; --progressStreamFile) stream=$2; shift ;; esac',
+        '  shift',
+        'done',
+        'env > "$(dirname "$plan")/.cache/stryker-env.txt"',
+        ': > "$stream"',
+        '',
+      ].join('\n'),
+    )
     const runner = Object.fromEntries([...required, GUARD_OVERRIDE].map((name) => [name, `runner-${name}`]))
-    const outcome = await inSandbox(step, root, { ...runner, MUTATION_SHARD: '1/1' })
-    if (outcome.code !== 0) throw new Error(`"${step.name}" exited ${outcome.code}:\n${outcome.out}`)
+    for (const shardStep of [select, step]) {
+      const outcome = await inSandbox(shardStep, root, { ...runner, MUTATION_SHARD: '1/1' })
+      if (outcome.code !== 0) throw new Error(`"${shardStep.name}" exited ${outcome.code}:\n${outcome.out}`)
+    }
     const seen = new Map(
       (await Deno.readTextFile(`${root}/.cache/stryker-env.txt`)).split('\n')
         .filter((line) => line.includes('='))
@@ -306,6 +335,11 @@ Deno.test('the release-gate mutation step passes stryker every variable its main
     if (lost.length > 0 || seen.has(GUARD_OVERRIDE)) {
       throw new Error(`stryker lost [${lost}]${seen.has(GUARD_OVERRIDE) ? ` and saw ${GUARD_OVERRIDE}` : ''}`)
     }
+    const marker = await strykerConstant('SHARD_OUT_MARKER')
+    const stream = join(root, dirname(shardRunnerPlanOf(step.command)), marker, '1', PROJECT, STREAM_FILE)
+    await Deno.stat(stream).catch(() => {
+      throw new Error(`the shard runner left no progress stream at ${stream}`)
+    })
   } finally {
     await Deno.remove(root, { recursive: true })
   }
