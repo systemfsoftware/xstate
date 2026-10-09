@@ -33,7 +33,6 @@ import {
 import {
   admitCandidate,
   type CandidateDecision,
-  firstAdmittedCandidate,
   isAdmitted,
   isStateId,
   selectTransition,
@@ -260,8 +259,6 @@ export function isInFinalState(
 
   return stateNode.type === 'final'
 }
-
-export { isStateId }
 
 function getLegacyEventType(event: EventObject): string | undefined {
   switch (event.type) {
@@ -2918,7 +2915,15 @@ function selectEventlessTransitions(
       }
       for (const transition of stateNode.always) {
         if (
-          evaluateCandidate(transition, event, snapshot, stateNode, actorScope)
+          isAdmitted(
+            admitTransitionCandidate(
+              transition,
+              event,
+              snapshot,
+              stateNode,
+              actorScope,
+            ),
+          )
         ) {
           enabledTransitionSet.add(transition)
           break loop
@@ -2989,24 +2994,4 @@ export function admitTransitionCandidate(
   }
 
   return decision
-}
-
-export function evaluateCandidate(
-  candidate: AnyTransitionDefinition,
-  event: EventObject,
-  snapshot: AnyMachineSnapshot,
-  stateNode: AnyStateNode,
-  actorScope: AnyActorScope,
-  selectionResults?: TransitionSelectionResults,
-): boolean {
-  return isAdmitted(
-    admitTransitionCandidate(
-      candidate,
-      event,
-      snapshot,
-      stateNode,
-      actorScope,
-      selectionResults,
-    ),
-  )
 }
