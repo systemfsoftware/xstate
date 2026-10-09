@@ -1,5 +1,7 @@
 import type { StrykerConfig } from '@systemfsoftware/stryker-js/config'
 
+const slackForAContendedFullSuiteRunMs = 45_000
+
 export const packageStrykerConfig = (mutate: ReadonlyArray<string>): StrykerConfig =>
   ({
     checkers: [{ plugin: '@systemfsoftware/stryker-js-typescript-checker' }],
@@ -18,5 +20,6 @@ export const packageStrykerConfig = (mutate: ReadonlyArray<string>): StrykerConf
       plugin: '@systemfsoftware/stryker-js-vitest-runner',
       options: { configFile: 'vitest.config.ts', dir: '.', related: true },
     },
+    timeoutMS: slackForAContendedFullSuiteRunMs,
     thresholds: { break: 100, high: 100, low: 100 },
   }) satisfies StrykerConfig
