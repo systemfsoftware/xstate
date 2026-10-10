@@ -181,6 +181,7 @@ export {
   transition,
 } from './transition.js'
 export { executeEffects, isBuiltInExecutableAction } from './transitionActions.js'
+export { checkStateIn } from './transitionGuards.js'
 export type * from './types.js'
 export { SpecialTargets } from './types.js'
 export type {
@@ -194,5 +195,5 @@ export type {
   Sources,
   WidenLiterals,
 } from './types.v6.js'
-export { checkStateIn, getAllOwnEventDescriptors as __unsafe_getAllOwnEventDescriptors, toObserver } from './utils.js'
+export { getAllOwnEventDescriptors as __unsafe_getAllOwnEventDescriptors, toObserver } from './utils.js'
 export { waitFor } from './waitFor.js'

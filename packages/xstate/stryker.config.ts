@@ -12,6 +12,7 @@ export default packageStrykerConfig([
   'src/graph/pathFromEvents.ts',
   'src/graph/shortestPaths.ts',
   'src/graph/simplePaths.ts',
+  'src/transitionGuards.ts',
   'src/historyRecall.ts',
   'src/stateNodePredicates.ts',
 ])

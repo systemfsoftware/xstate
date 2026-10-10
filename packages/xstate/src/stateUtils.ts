@@ -1,7 +1,7 @@
 import isDevelopment from '#is-development'
 import { builtInActions } from './actions.js'
 import { getActorScopeParent, isLazyActorScope, withActorScope, withActorSelfAndParent } from './actorScope.js'
-import { STATE_DELIMITER, STATE_IDENTIFIER, XSTATE_INIT, XSTATE_STOP, XSTATE_TIMER } from './constants.js'
+import { STATE_DELIMITER, XSTATE_INIT, XSTATE_STOP, XSTATE_TIMER } from './constants.js'
 import { parseDurationToMilliseconds } from './delay.js'
 import {
   createAfterEvent,
@@ -32,6 +32,15 @@ import {
   mergeContextPatch,
   resolveActionsWithContext,
 } from './transitionActions.js'
+import {
+  admitCandidate,
+  type CandidateDecision,
+  isAdmitted,
+  isStateId,
+  selectTransition,
+  type TransitionFunctionOutcome,
+  type TransitionSelection,
+} from './transitionGuards.js'
 import type {
   AnyAction,
   AnyActor,
@@ -51,7 +60,7 @@ import type {
   StateValue,
   TransitionDefinition,
 } from './types.js'
-import { getEventOutput, isErrorEvent, matchesEvent, matchesEventDescriptor } from './utils.js'
+import { getEventOutput, isErrorEvent, matchesEventDescriptor } from './utils.js'
 import { normalizeTarget, resolveOutput, resolveReferencedActor, toArray, toTransitionConfigArray } from './utils.js'
 
 type AnyStateNodeIterable = Iterable<AnyStateNode>
@@ -244,8 +253,6 @@ export function isInFinalState(
 
   return stateNode.type === 'final'
 }
-
-export const isStateId = (str: string) => str[0] === STATE_IDENTIFIER
 
 function getLegacyEventType(event: EventObject): string | undefined {
   switch (event.type) {
@@ -924,6 +931,15 @@ export type TransitionSelectionResult = {
   result: unknown
   reusable: boolean
 }
+
+const selectionResultOf = <Result>(
+  selection: TransitionSelection<Result>,
+): TransitionSelectionResult =>
+  selection.type === 'value'
+    ? { enabled: true, result: selection.result, reusable: true }
+    : selection.type === 'effect'
+    ? { enabled: true, result: undefined, reusable: false }
+    : { enabled: false, result: undefined, reusable: true }
 
 export type TransitionSelectionResults = Map<
   AnyTransitionDefinition,
@@ -2678,15 +2694,17 @@ export function hasEffect(
   actorScope: AnyActorScope,
 ): boolean {
   if (transition.to) {
-    return evaluateTransitionFunction(
-      transition.to,
-      context,
-      event,
-      snapshot,
-      actorScope,
-      snapshot.machine.sources,
-      transition.source.id,
-    ).enabled
+    return selectTransition(
+      evaluateTransitionOutcome(
+        transition.to,
+        context,
+        event,
+        snapshot,
+        actorScope,
+        snapshot.machine.sources,
+        transition.source.id,
+      ),
+    ).type !== 'absent'
   }
 
   return false
@@ -2741,7 +2759,7 @@ function getTransitionEffectEnqueue() {
   ))
 }
 
-function evaluateTransitionFunction(
+function evaluateTransitionOutcome(
   transitionTo: NonNullable<AnyTransitionDefinition['to']>,
   context: MachineContext,
   event: EventObject,
@@ -2749,7 +2767,7 @@ function evaluateTransitionFunction(
   actorScope: AnyActorScope,
   sources: AnyMachineSnapshot['machine']['sources'],
   sourceId: string,
-): TransitionSelectionResult {
+): TransitionFunctionOutcome<unknown> {
   let res
   const parent = getActorScopeParent(actorScope)
   if (parent) {
@@ -2778,7 +2796,7 @@ function evaluateTransitionFunction(
     )
   } catch (err) {
     if (err === transitionEffectSignal) {
-      return { enabled: true, result: undefined, reusable: false }
+      return { type: 'effectEnqueued' }
     }
     throw err
   } finally {
@@ -2789,7 +2807,7 @@ function evaluateTransitionFunction(
   }
   assertSyncTransitionResult(res, event, sourceId)
 
-  return { enabled: res !== undefined, result: res, reusable: true }
+  return { type: 'returned', value: res }
 }
 
 function stopChildren(
@@ -2850,7 +2868,15 @@ function selectEventlessTransitions(
       }
       for (const transition of stateNode.always) {
         if (
-          evaluateCandidate(transition, event, snapshot, stateNode, actorScope)
+          isAdmitted(
+            admitTransitionCandidate(
+              transition,
+              event,
+              snapshot,
+              stateNode,
+              actorScope,
+            ),
+          )
         ) {
           enabledTransitionSet.add(transition)
           break loop
@@ -2867,55 +2893,58 @@ function selectEventlessTransitions(
   )
 }
 
-export function evaluateCandidate(
+export function admitTransitionCandidate(
   candidate: AnyTransitionDefinition,
   event: EventObject,
   snapshot: AnyMachineSnapshot,
   stateNode: AnyStateNode,
   actorScope: AnyActorScope,
   selectionResults?: TransitionSelectionResults,
-): boolean {
-  if (candidate.matches && !matchesEvent(event, candidate.matches)) {
-    return false
+): CandidateDecision<unknown> {
+  const transitionTo = candidate.to
+  const decision = admitCandidate({
+    event,
+    snapshot,
+    matches: candidate.matches,
+    eventMatcher: candidate._eventMatcher,
+    runGuard: candidate.guard
+      ? () => {
+        const guardArgs = withActorSelfAndParent(
+          {
+            context: snapshot.context,
+            event,
+            output: getEventOutput(event),
+            children: snapshot.children,
+            actions: stateNode.machine.sources.actions,
+            actors: stateNode.machine.sources.actors,
+            guards: stateNode.machine.sources.guards,
+            delays: stateNode.machine.sources.delays,
+            _snapshot: snapshot,
+          },
+          actorScope,
+        )
+        return !!(candidate.guard as (args: typeof guardArgs) => boolean)(
+          guardArgs,
+        )
+      }
+      : undefined,
+    runTransitionFunction: transitionTo === undefined
+      ? undefined
+      : () =>
+        evaluateTransitionOutcome(
+          transitionTo,
+          snapshot.context,
+          event,
+          snapshot,
+          actorScope,
+          stateNode.machine.sources,
+          candidate.source.id,
+        ),
+  })
+
+  if (decision.type === 'enabled' || decision.type === 'disabled') {
+    selectionResults?.set(candidate, selectionResultOf(decision.selection))
   }
 
-  if (candidate._eventMatcher && !candidate._eventMatcher(event, snapshot)) {
-    return false
-  }
-
-  if (candidate.guard) {
-    const guardArgs = withActorSelfAndParent(
-      {
-        context: snapshot.context,
-        event,
-        output: getEventOutput(event),
-        children: snapshot.children,
-        actions: stateNode.machine.sources.actions,
-        actors: stateNode.machine.sources.actors,
-        guards: stateNode.machine.sources.guards,
-        delays: stateNode.machine.sources.delays,
-        _snapshot: snapshot,
-      },
-      actorScope,
-    )
-    if (!(candidate.guard as (args: typeof guardArgs) => boolean)(guardArgs)) {
-      return false
-    }
-  }
-
-  if (candidate.to) {
-    const evaluation = evaluateTransitionFunction(
-      candidate.to,
-      snapshot.context,
-      event,
-      snapshot,
-      actorScope,
-      stateNode.machine.sources,
-      candidate.source.id,
-    )
-    selectionResults?.set(candidate, evaluation)
-    return evaluation.enabled
-  }
-
-  return true
+  return decision
 }
