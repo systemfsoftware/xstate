@@ -93,7 +93,6 @@
     "packages/xstate/test/examples.cd.test.ts",
     "packages/xstate/test/final.test.ts",
     "packages/xstate/test/firstTenMinutes.v6.test.ts",
-    "packages/xstate/test/history.test.ts",
     "packages/xstate/test/id.test.ts",
     "packages/xstate/test/initial.test.ts",
     "packages/xstate/test/input.test.ts",
