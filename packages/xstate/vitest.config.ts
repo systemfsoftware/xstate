@@ -50,7 +50,6 @@ const unguarded = [
   'test/final.test.ts',
   'test/firstTenMinutes.v6.test.ts',
   'test/guards.test.ts',
-  'test/history.test.ts',
   'test/id.test.ts',
   'test/initial.test.ts',
   'test/input.test.ts',
