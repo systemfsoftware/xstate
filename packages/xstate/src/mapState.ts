@@ -1,5 +1,5 @@
 import type { MachineSnapshot } from './State.js'
-import { isAtomicStateNode } from './stateUtils.js'
+import { isAtomicStateNode } from './stateNodePredicates.js'
 import type { AnyMachineSnapshot, AnyStateNode, StateSchema } from './types.js'
 
 type StateSchemaFromSnapshot<TSnapshot extends AnyMachineSnapshot> = TSnapshot extends MachineSnapshot<
