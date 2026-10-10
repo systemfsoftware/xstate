@@ -8,5 +8,13 @@
     "customConditions": ["@systemfsoftware/source"],
     "noEmit": true
   },
-  "include": ["src/assert.ts", "src/stateMatching.ts", "src/mapState.ts", "src/fsm.ts", "src/graph"]
+  "include": [
+    "src/assert.ts",
+    "src/stateMatching.ts",
+    "src/mapState.ts",
+    "src/fsm.ts",
+    "src/graph",
+    "src/historyRecall.ts",
+    "src/stateNodePredicates.ts"
+  ]
 }
