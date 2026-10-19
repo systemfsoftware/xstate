@@ -61,7 +61,7 @@ jobs:
         name: Publish the plan
         run: cat .cache/mutation-plan.out >> "$GITHUB_OUTPUT"
       - if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: stryker-plan
           path: stryker-plan.json
@@ -84,7 +84,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/dev-shell
       - name: Download the shard plan
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: stryker-plan
           path: .
@@ -121,13 +121,13 @@ jobs:
             MUTATION_SHARD
           command: .github/scripts/run-shard.sh stryker-plan.json "$MUTATION_SHARD" .cache/shard-projects.tsv
       - if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-shard-${{ strategy.job-index }}
           path: reports/shards/
           if-no-files-found: ignore
       - if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-report-shard-${{ strategy.job-index }}
           path: packages/*/reports/mutation-report.*
@@ -157,13 +157,13 @@ jobs:
         uses: ./.github/actions/dev-shell
       - name: Download the shard plan
         if: needs.plan.outputs.has-shards == 'true'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: stryker-plan
           path: .
       - name: Download every shard's reports
         if: needs.plan.outputs.has-shards == 'true'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           pattern: mutation-shard-*
           path: .cache/shard-reports
@@ -180,7 +180,7 @@ jobs:
             ./node_modules/.bin/stryker merge --plan stryker-plan.json --out reports/mutation "${shard_dirs[@]}"
             ./node_modules/.bin/stryker gate --baseline .cache/no-survivors.json
       - if: always() && needs.plan.outputs.has-shards == 'true'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-report
           path: reports/mutation/
