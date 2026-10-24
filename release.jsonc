@@ -2,16 +2,16 @@
   // Consumed by the shared release toolchain
   // (systemfsoftware/pnpm-release-management) via the thin callers in
   // .github/workflows/release.yml and changeset-check.yml. Versioning
-  // delegates to pnpm's own workspace versioning (pnpm version -r); the release
-  // path writes a <pkg>@vX.Y.Z git tag and a GitHub Release per unreleased
-  // version. Nothing is published to a registry — distribution is this
-  // repository's Nix flake outputs consumed from a git ref.
+  // drives the changesets libraries per package; the release path writes a
+  // <pkg>@vX.Y.Z git tag and a GitHub Release per unreleased version.
+  // Nothing is published to a registry — distribution is this repository's
+  // Nix flake outputs consumed from a git ref.
   "base": "main",
   "branch": "changeset-release/main",
   "changesetDir": ".changeset",
   "changelogDir": ".changeset/changelogs",
   "versioning": {
-    "strategy": "pnpm",
+    "strategy": "changesets",
   },
   "gate": { "strategy": "turbo", "task": "build" },
   "pr": {

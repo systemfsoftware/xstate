@@ -9,21 +9,15 @@
       url = "github:systemfsoftware/comment-checker";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # pnpm-release-management#8's head: its sandbox gives macOS runs a private
-    # XDG_RUNTIME_DIR, where pnpm 12 takes its store-operation lock.
+    # pnpm-release-management's main, after #11: the reusable release.yml takes
+    # a `ci-workflow` input, packs this flake's `.#workspace-tarballs`, and runs
+    # its apps from the dev shell below through the `release-tools` this input
+    # exports. Its sandbox is Linux-only, as this flake's systems are.
     pnpm-release-management = {
-      url = "github:systemfsoftware/pnpm-release-management/8f1984418fef130956a3d1f50dc471fd1984d2ec";
+      url = "github:systemfsoftware/pnpm-release-management/aa712d954e6dd38bdd742e8fa7df8154fb20747c";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
     };
-    # The release workflows run pnpm-release-management's main; the Changeset
-    # Check runs its changeset-management CLI from this pin of main inside the
-    # dev shell, where the .sfs-deps tarballs the install needs exist. The pin
-    # above stays for its sandbox launcher, whose commits main does not carry.
-    # This pin keeps its own nixpkgs: its deno-compile runtime is pinned to
-    # that deno. 5432b8b declared a deps hash a sandboxed fetch never produces;
-    # c10c1c4's deps fetch byte-identically under the sandbox.
-    release-tools.url = "github:systemfsoftware/pnpm-release-management/c10c1c47121110b6fc5217251c07e6f7f3eb812d";
     # systemfsoftware#606's merge into main: its workspace tarballs carry
     # per-system integrity, so the macOS leg installs what Linux installs. It
     # keeps its own pnpm-release-management pin, whose mkPnpmConsumerStore the
@@ -62,7 +56,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, comment-checker, pnpm-release-management, release-tools, systemfsoftware, stryker-js-effect, are-the-types-wrong-effect, systemfsoftware-effect-cell-types-7, importPnpmLock }:
+  outputs = { self, nixpkgs, comment-checker, pnpm-release-management, systemfsoftware, stryker-js-effect, are-the-types-wrong-effect, systemfsoftware-effect-cell-types-7, importPnpmLock }:
     let
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" "aarch64-linux" ];
@@ -180,6 +174,8 @@
           sandbox-source = pkgs.applyPatches {
             name = "sandbox-source";
             src = "${pnpm-release-management}/nix/sandbox";
+            # Binds a linked worktree's git dir into the Linux sandbox; rebase
+            # the hunks when pnpm-release-management's sandbox.sh moves.
             patches = [ ./nix/patches/sandbox-linked-worktree-git.patch ];
           };
           sandbox = pkgs.callPackage "${sandbox-source}/default.nix" { };
@@ -220,7 +216,8 @@
               own.dprint
               own.comment-checker
               own.sandbox
-              release-tools.packages.${system}.changeset-management
+              # The release apps the reusable release.yml runs from this shell.
+              pnpm-release-management.packages.${system}.release-tools
               pkgs.actionlint
               pkgs.jq
               pkgs.nodejs_24
