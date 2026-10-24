@@ -1,6 +1,7 @@
 import { createInitEvent } from './eventUtils.js'
 import { attachSnapshotActorRef, createInertActorScope, setInertActorScopeSnapshot } from './inertActorScope.js'
-import { getProperAncestors, initialMicrostep, isAtomicStateNode, macrostep } from './stateUtils.js'
+import { isAtomicStateNode } from './stateNodePredicates.js'
+import { getProperAncestors, initialMicrostep, macrostep } from './stateUtils.js'
 import { hasAmbientInspector } from './system.js'
 import { beginSpawnAllocation, createSpawnEffect, finalizeTransitionResult } from './transitionActions.js'
 import type {
