@@ -29,7 +29,6 @@ import {
   hasEffect,
   initialMicrostep,
   isInFinalState,
-  isStateId,
   macrostep,
   resolveStateValue,
   transitionNode,
@@ -46,6 +45,7 @@ import {
   resolveActionsWithContext,
   takeSpawnAllocationCounters,
 } from './transitionActions.js'
+import { isStateId } from './transitionGuards.js'
 import type {
   ActorLogic,
   ActorLogicTransitionResult,

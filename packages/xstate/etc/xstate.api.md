@@ -702,6 +702,9 @@ export interface CancelExecutableActionObject extends BaseExecutableActionObject
 export type Cast<A, B> = A extends B ? A : B;
 
 // @public (undocumented)
+export function checkStateIn(stateValue: StateValue): (snapshot: AnyMachineSnapshot) => boolean;
+
+// @public (undocumented)
 export function checkStateIn(snapshot: AnyMachineSnapshot, stateValue: StateValue): boolean;
 
 // @public
@@ -3463,33 +3466,33 @@ export type WithRootSetupStateSchemas<TStateSchemas extends Record<string, Setup
 // Warnings were encountered during analysis:
 //
 // dist/base.types-3VgiVUy_.d.ts:199:3 - (ae-forgotten-export) The symbol "EventTypeFromSchemaKey" needs to be exported by the entry point index.d.ts
-// dist/index-DpYRYoBT.d.ts:71:3 - (ae-forgotten-export) The symbol "LogicTransition" needs to be exported by the entry point index.d.ts
-// dist/index-DpYRYoBT.d.ts:171:3 - (ae-forgotten-export) The symbol "Receiver" needs to be exported by the entry point index.d.ts
-// dist/index-DpYRYoBT.d.ts:362:3 - (ae-forgotten-export) The symbol "ObservableActor" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:229:5 - (ae-forgotten-export) The symbol "ConditionJSON" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:277:3 - (ae-forgotten-export) The symbol "PersistedSnapshotFromEntry" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:284:3 - (ae-forgotten-export) The symbol "SnapshotSourceVersion" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:334:3 - (ae-forgotten-export) The symbol "MachineForVersion" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:439:3 - (ae-forgotten-export) The symbol "SetupGuardSources" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:440:3 - (ae-forgotten-export) The symbol "SetupDelaySources" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1277:3 - (ae-forgotten-export) The symbol "StateTransitionConfigOrTarget" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1277:3 - (ae-forgotten-export) The symbol "SetupStateTarget" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1277:3 - (ae-forgotten-export) The symbol "KnownSetupStateTarget" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1405:5 - (ae-forgotten-export) The symbol "ValidateSetupSchemas" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1405:5 - (ae-forgotten-export) The symbol "InlineMachineSchemas" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:221:3 - (ae-forgotten-export) The symbol "RemovedTypesKey" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:222:3 - (ae-forgotten-export) The symbol "MachineSchemas" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:224:3 - (ae-forgotten-export) The symbol "GuardSourceMap" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:242:3 - (ae-forgotten-export) The symbol "MachineOptions" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:330:3 - (ae-forgotten-export) The symbol "InvokeSrcArgs" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:333:3 - (ae-forgotten-export) The symbol "ChildIdForLogic" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:1167:5 - (ae-forgotten-export) The symbol "ScheduledTimer" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:1921:5 - (ae-forgotten-export) The symbol "ProvidedActors" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:1923:5 - (ae-forgotten-export) The symbol "DelaySourceMap" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:2056:3 - (ae-forgotten-export) The symbol "DoneEventType" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:2610:3 - (ae-forgotten-export) The symbol "PersistedSnapshotLogicIdentity" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:3484:3 - (ae-forgotten-export) The symbol "EnqueueSpawner" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:3488:3 - (ae-forgotten-export) The symbol "SendableEventFromActorRef" needs to be exported by the entry point index.d.ts
+// dist/index-BMYfZluc.d.ts:71:3 - (ae-forgotten-export) The symbol "LogicTransition" needs to be exported by the entry point index.d.ts
+// dist/index-BMYfZluc.d.ts:171:3 - (ae-forgotten-export) The symbol "Receiver" needs to be exported by the entry point index.d.ts
+// dist/index-BMYfZluc.d.ts:362:3 - (ae-forgotten-export) The symbol "ObservableActor" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:229:5 - (ae-forgotten-export) The symbol "ConditionJSON" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:277:3 - (ae-forgotten-export) The symbol "PersistedSnapshotFromEntry" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:284:3 - (ae-forgotten-export) The symbol "SnapshotSourceVersion" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:334:3 - (ae-forgotten-export) The symbol "MachineForVersion" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:439:3 - (ae-forgotten-export) The symbol "SetupGuardSources" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:440:3 - (ae-forgotten-export) The symbol "SetupDelaySources" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:1277:3 - (ae-forgotten-export) The symbol "StateTransitionConfigOrTarget" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:1277:3 - (ae-forgotten-export) The symbol "SetupStateTarget" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:1277:3 - (ae-forgotten-export) The symbol "KnownSetupStateTarget" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:1405:5 - (ae-forgotten-export) The symbol "ValidateSetupSchemas" needs to be exported by the entry point index.d.ts
+// dist/index-BWO1lgHN.d.ts:1405:5 - (ae-forgotten-export) The symbol "InlineMachineSchemas" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:221:3 - (ae-forgotten-export) The symbol "RemovedTypesKey" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:222:3 - (ae-forgotten-export) The symbol "MachineSchemas" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:224:3 - (ae-forgotten-export) The symbol "GuardSourceMap" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:242:3 - (ae-forgotten-export) The symbol "MachineOptions" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:330:3 - (ae-forgotten-export) The symbol "InvokeSrcArgs" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:333:3 - (ae-forgotten-export) The symbol "ChildIdForLogic" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:1167:5 - (ae-forgotten-export) The symbol "ScheduledTimer" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:1926:5 - (ae-forgotten-export) The symbol "ProvidedActors" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:1928:5 - (ae-forgotten-export) The symbol "DelaySourceMap" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:2061:3 - (ae-forgotten-export) The symbol "DoneEventType" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:2615:3 - (ae-forgotten-export) The symbol "PersistedSnapshotLogicIdentity" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:3489:3 - (ae-forgotten-export) The symbol "EnqueueSpawner" needs to be exported by the entry point index.d.ts
+// dist/types-DNQON1bi.d.ts:3493:3 - (ae-forgotten-export) The symbol "SendableEventFromActorRef" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 
