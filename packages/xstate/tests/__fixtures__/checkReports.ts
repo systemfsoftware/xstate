@@ -1,9 +1,11 @@
 import { Conformance } from '@systemfsoftware/conformance-spec'
 import { Match, Schema } from 'effect'
 
-export class CheckRejected extends Schema.TaggedError<CheckRejected>()('CheckRejected', {
-  rendered: Schema.String,
-}) {
+export class CheckRejected
+  extends Schema.TaggedError<CheckRejected, { readonly brand: unique symbol }>()('CheckRejected', {
+    rendered: Schema.String,
+  })
+{
   override get message(): string {
     return this.rendered
   }
