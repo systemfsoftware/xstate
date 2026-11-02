@@ -21,9 +21,12 @@
     # dev shell, where the .sfs-deps tarballs the install needs exist. The pin
     # above stays for its sandbox launcher, whose commits main does not carry.
     # This pin keeps its own nixpkgs: its deno-compile runtime is pinned to
-    # that deno. 5432b8b declared a deps hash a sandboxed fetch never produces;
-    # c10c1c4's deps fetch byte-identically under the sandbox.
-    release-tools.url = "github:systemfsoftware/pnpm-release-management/c10c1c47121110b6fc5217251c07e6f7f3eb812d";
+    # that deno. PR #95 moved release.jsonc to the `changesets` versioning
+    # strategy, which pnpm-release-management#9 retired `pnpm` in favour of,
+    # so the CLI here must understand `changesets`: this pin rides main at
+    # ea99b74. A deps hash may not fetch under the sandbox; this pin's does,
+    # proven by running the Changeset Check against it in this dev shell.
+    release-tools.url = "github:systemfsoftware/pnpm-release-management/ea99b742203978134d6ae9e43dc9e9c43716e4dc";
     # systemfsoftware#606's merge into main: its workspace tarballs carry
     # per-system integrity, so the macOS leg installs what Linux installs. It
     # keeps its own pnpm-release-management pin, whose mkPnpmConsumerStore the
