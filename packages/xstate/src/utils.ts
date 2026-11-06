@@ -1,7 +1,6 @@
 import isDevelopment from '#is-development'
 import { TARGETLESS_KEY, WILDCARD } from './constants.js'
 import type { StateNode } from './StateNode.js'
-import { isStateId } from './stateUtils.js'
 import type {
   AnyActor,
   AnyEventObject,
@@ -17,23 +16,9 @@ import type {
   Observer,
   OutputArg,
   SingleOrArray,
-  StateValue,
   TransitionConfigTarget,
 } from './types.js'
 import { defaultWarn } from './warnSink.js'
-
-/** @public */
-export function checkStateIn(
-  snapshot: AnyMachineSnapshot,
-  stateValue: StateValue,
-) {
-  if (typeof stateValue === 'string' && isStateId(stateValue)) {
-    const target = snapshot.machine.getStateNodeById(stateValue)
-    return snapshot.nodes.some((sn) => sn === target)
-  }
-
-  return snapshot.matches(stateValue)
-}
 
 export function mapValues<P, O extends Record<string, unknown>>(
   collection: O,
@@ -290,13 +275,6 @@ export function getAllOwnEvents(snapshot: AnyMachineSnapshot) {
         )
       }) === index,
   )
-}
-
-export function matchesEvent(
-  event: EventObject,
-  pattern: Record<string, unknown>,
-): boolean {
-  return Object.entries(pattern).every(([key, value]) => Object.is((event as AnyEventObject)[key], value))
 }
 
 /**
