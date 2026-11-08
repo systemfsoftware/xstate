@@ -87,12 +87,12 @@ Git pack refs and Nix package versions are independent inputs. A release tag or 
 
 ## Planning Contract
 
-Product Contract unchanged. The public enrollment inventory and the separately held private inventory implement the approved split without publishing private repository identities.
+Product Contract unchanged.
 
 ### Key Technical Decisions
 
 - KTD1. **Publish one Git-sourced pack.** Create `compound-packs/xstate/` with top-level rule files and a README. Remote declarations use the repository URL and this exact subdirectory; the source repository uses a local path declaration. The resolver treats the README as descriptive, not as a rule.
-- KTD2. **Use a released tag, not a guessed version.** The release tool creates tags per package (`release.jsonc`); determine the actual tag from the consumed tarball's source release. The pack must already exist at that tag. The tag is not yet known and must not be invented. If a consumer uses no XState tarball, select a pack-bearing release tag and record that there is no tarball to match. If consumed tarballs come from distinct release tags, stop that enrollment until their source is aligned rather than silently violating R2.
+- KTD2. **Release before enrollment.** The initial Git pack ref is the first `@systemfsoftware/xstate` release tag that contains `compound-packs/`; thereafter the ref is the same tag as the consumed tarball. The actual tag does not exist yet and must not be invented. If a consumer uses no XState tarball, retain the initial pack-bearing tag until it consumes one. If consumed tarballs come from distinct release tags, align their source before enrollment.
 - KTD3. **Separate the decision from API detail.** The shared cell rule owns instance state and the machine-versus-other-state decision; the XState pack owns concrete fork APIs. The shared rule at the current default branch retains instance ownership but no longer contains the machine decision, so restore that decision rather than assuming a removable XState API section still exists.
 - KTD4. **Validate uptake, not just declaration.** Inspect resolver output and an actual planning session's cited rule selection. An unreachable Git source warns and continues; neither a config entry nor a successful resolution proves the agent used a rule.
 
@@ -122,9 +122,8 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 ### Assumptions and Dependencies
 
 - Participating public repositories are the unarchived first-party repositories with a tracked `.compound-engineering/config.yaml`, plus this library. Recheck the inventory before enrollment; a repository becoming a participant is not excluded by the snapshot.
-- The private enrollment inventory is held outside this public repository. Its owner must preserve it in approved private storage; a temporary local copy is not a durable handoff.
 - The first pack-bearing release tag and each consumer's tarball provenance are future inputs. No literal ref can be truthfully specified before that release exists.
-- A path-sourced declaration in this repository has no `ref` and no consumed tarball. R2 governs Git-sourced consumers with tarballs.
+- The library's own declaration is path-sourced and has no Git ref or consumed tarball.
 
 ---
 
@@ -138,13 +137,29 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 
 **Dependencies:** None.
 
-**Files:** Create `compound-packs/xstate/README.md`, `compound-packs/xstate/choose-state-representation.md`, `compound-packs/xstate/scope-machine-actors.md`, `compound-packs/xstate/type-events-and-guards.md`, and `compound-packs/xstate/test-machine-paths.md`; create `.compound-engineering/config.yaml`.
+**Files:** Create `compound-packs/xstate/README.md`, `compound-packs/xstate/choose-state-representation.md`, `compound-packs/xstate/scope-machine-actors.md`, `compound-packs/xstate/type-events-and-guards.md`, and `compound-packs/xstate/test-machine-paths.md`.
 
-**Approach:** Define named-state machine, observable store and keyed table in the choice rule. Make rule scopes and matching situations distinct. Use the APIs and experimental status in Source Evidence; cite exact source at the release being documented. Document KTD2 and the consumer declaration in the README. Declare the local pack by `source: compound-packs/xstate`; preserve any entries already present when this unit executes.
+**Approach:** Define named-state machine, observable store and keyed table in the choice rule. Make rule scopes and matching situations distinct. Use the APIs and experimental status in Source Evidence; cite exact source at the release being documented. Document KTD2 and the consumer declaration in the README.
 
 **Test expectation:** No new permanent test or gate: these files specify guidance and configuration rather than executable behavior.
 
-**Verification:** Inspect each rule's frontmatter and resolver output; use a real agent session for the lifecycle, keyed-counter and model-path scenarios in AE2-AE3. Ensure the selected guidance points to the fork and does not assert that installation enrolls a pack.
+**Verification:** Inspect each rule's frontmatter. After U5 and U3, inspect resolver output and use a real agent session for the lifecycle, keyed-counter and model-path scenarios in AE2-AE3. Ensure the selected guidance points to the fork and does not assert that installation enrolls a pack.
+
+### U5. Release the pack
+
+**Goal:** Cut the first `@systemfsoftware/xstate` release whose tag contains `compound-packs/`.
+
+**Requirements:** R1-R2.
+
+**Dependencies:** U1.
+
+**Files:** Release metadata and changeset files as required by the existing release process.
+
+**Approach:** Obtain the required human approval and use the existing release process. Record the actual first pack-bearing `@systemfsoftware/xstate` release tag for U3 and subsequent enrollments. Do not invent a tag or enroll consumers before it exists.
+
+**Test expectation:** No new permanent test or gate for the release instruction.
+
+**Verification:** Inspect the released tag's repository tree and confirm it contains the pack and the intended rule files.
 
 ### U2. Restore the shared ownership boundary
 
@@ -152,7 +167,7 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 
 **Requirements:** R7, R12-R14; AE4.
 
-**Dependencies:** U1 and a published pack-bearing release.
+**Dependencies:** U5 and the `systemfsoftware/systemfsoftware` enrollment in U3.
 
 **Target repository:** `systemfsoftware/systemfsoftware`.
 
@@ -170,11 +185,11 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 
 **Requirements:** R2-R6; AE1, AE4.
 
-**Dependencies:** U1 and a release tag containing its pack.
+**Dependencies:** U5.
 
 **Files:** `.compound-engineering/config.yaml` in each target repository in the inventory below.
 
-**Approach:** Each repository is an independent follow-up unit and PR. Append the declaration below without changing existing pack entries. Replace `TAG` with the actual pack-bearing release tag determined under KTD2; it is a variable, not a real tag. For a repository without a tarball, record the selected release and no-dependency case. Confirm the resolved pack ID is `xstate` and not duplicated.
+**Approach:** Each public repository below is an independent follow-up unit and PR. For Git-sourced consumers append the following declaration without changing existing entries; `TAG` is the value defined by KTD2, not a literal tag. Confirm the resolved pack ID is `xstate` and not duplicated.
 
 ```yaml
 - source: https://github.com/systemfsoftware/xstate
@@ -182,43 +197,30 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
   path: compound-packs/xstate
 ```
 
-| Target repository                            | Declaration | Existing configuration                                |
-| -------------------------------------------- | ----------- | ----------------------------------------------------- |
-| `systemfsoftware/systemfsoftware`            | U3 entry    | Preserve 13 path-sourced entries; coordinate with U2. |
-| `systemfsoftware/pnpm-release-management`    | U3 entry    | Preserve existing Git source and pack selection.      |
-| `systemfsoftware/effect-endgame-starter-kit` | U3 entry    | Preserve existing Git source.                         |
-| `systemfsoftware/api-extractor-effect`       | U3 entry    | Preserve existing Git source and pack selection.      |
-| `systemfsoftware/gritlint`                   | U3 entry    | Preserve existing Git source and pack selection.      |
-| `systemfsoftware/are-the-types-wrong-effect` | U3 entry    | Preserve existing Git source.                         |
-| `systemfsoftware/stryker-js-effect`          | U3 entry    | Preserve existing Git sources.                        |
-| `systemfsoftware/frontend`                   | U3 entry    | Preserve existing path and Git sources.               |
+Private first-party repositories are enrolled through the private tracker using the declaration template above.
+
+| Target repository                            | Declaration                     | Existing configuration                                                               |
+| -------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------ |
+| `systemfsoftware/xstate`                     | `source: compound-packs/xstate` | Create `.compound-engineering/config.yaml` if absent; preserve any existing entries. |
+| `systemfsoftware/systemfsoftware`            | U3 entry                        | Preserve 13 path-sourced entries; coordinate with U2.                                |
+| `systemfsoftware/pnpm-release-management`    | U3 entry                        | Preserve existing Git source and pack selection.                                     |
+| `systemfsoftware/effect-endgame-starter-kit` | U3 entry                        | Preserve existing Git source.                                                        |
+| `systemfsoftware/api-extractor-effect`       | U3 entry                        | Preserve existing Git source and pack selection.                                     |
+| `systemfsoftware/gritlint`                   | U3 entry                        | Preserve existing Git source and pack selection.                                     |
+| `systemfsoftware/are-the-types-wrong-effect` | U3 entry                        | Preserve existing Git source.                                                        |
+| `systemfsoftware/stryker-js-effect`          | U3 entry                        | Preserve existing Git sources.                                                       |
+| `systemfsoftware/frontend`                   | U3 entry                        | Preserve existing path and Git sources.                                              |
 
 **Test expectation:** No new permanent test or CI gate for declarations.
 
-**Verification:** For every target, verify the release ref and source resolve to `xstate`, then exercise one real agent session using a matching scenario. Include a target without an installed XState dependency. A missing or unreachable source is a failed enrollment verification, even though the resolver continues.
-
-### U4. Enroll private consumers
-
-**Goal:** Complete the same enrollment for each private participating repository without disclosing private identifiers in public artifacts.
-
-**Requirements:** R2-R6; AE1, AE4.
-
-**Dependencies:** U1 and a release tag containing its pack.
-
-**Files:** The independently maintained private enrollment inventory and each target's `.compound-engineering/config.yaml`.
-
-**Approach:** Use the private inventory to make one follow-up unit and PR per target. Apply the same U3 declaration, tag selection, preservation and uptake criteria. Recheck participation and tarball provenance at execution. Keep identifiers, local paths and private evidence out of this public plan and public PRs.
-
-**Test expectation:** No new permanent test or CI gate for declarations.
-
-**Verification:** Record resolver and real-session evidence in the appropriate private repository or private tracker.
+**Verification:** For each Git-sourced target, verify the release ref and source resolve to `xstate`; for the library, verify the local path resolves to `xstate`. Exercise one real agent session per target using a matching scenario. Include a target without an installed XState dependency. A missing or unreachable source is a failed enrollment verification, even though the resolver continues.
 
 ---
 
 ## Verification Contract
 
 - Validate changed Markdown with the owning repository's formatting check; run scoped checks permitted by its host policy. The full `pnpm check:ci` named by this repository's definition of done remains off-host acceptance evidence.
-- For U1-U4, verify the pack source, actual released ref, unique ID, top-level discoverability, relevant semantic matching and citations. A real session must demonstrate uptake; resolver output alone is insufficient.
+- For U1-U3 and U5, verify the pack source, actual released ref, unique ID, top-level discoverability, relevant semantic matching and citations. A real session must demonstrate uptake; resolver output alone is insufficient.
 - Verify every API and example against the source at the consumed release, including the experimental status of `testPaths`.
 - No implementation tests are planned for configuration and rule text, and no new enforcement gate is authorized.
 
@@ -226,8 +228,8 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 
 ## Definition of Done
 
-- U1 rules and local declaration are available; a release tag containing them exists.
+- U1 rules are available; U5 produces the first pack-bearing release; U3 declares the local pack.
 - U2 preserves ownership boundaries and refers to the pack without duplicated API guidance.
-- Every public and private enrollment unit has a recorded source ref, tag provenance, resolver result and real-session evidence.
+- Every public Git-sourced enrollment has a recorded source ref, tag provenance, resolver result and real-session evidence; the local enrollment has resolver and real-session evidence.
 - Each consuming tarball and declared ref satisfy R2; exceptions are not silently substituted.
 - Required off-host checks and review are complete; abandoned drafts and scratch artifacts are removed.
