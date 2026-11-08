@@ -82,3 +82,152 @@ Git pack refs and Nix package versions are independent inputs. A release tag or 
 - Fork source at `688aabff96cee96c168d80b277b7616f9faca67d`: [`@systemfsoftware/xstate` exports `createMachine` and `setup`](https://github.com/systemfsoftware/xstate/blob/688aabff96cee96c168d80b277b7616f9faca67d/packages/xstate/src/index.ts), with typed schemas and guards in [`setup`](https://github.com/systemfsoftware/xstate/blob/688aabff96cee96c168d80b277b7616f9faca67d/packages/xstate/src/setup.ts).
 - Fork source: [`@systemfsoftware/xstate-effect` exports `createEffectActor`](https://github.com/systemfsoftware/xstate/blob/688aabff96cee96c168d80b277b7616f9faca67d/packages/xstate-effect/src/index.ts), whose [implementation](https://github.com/systemfsoftware/xstate/blob/688aabff96cee96c168d80b277b7616f9faca67d/packages/xstate-effect/src/createEffectActor.ts) starts an actor and releases it with its enclosing scope.
 - Fork source: [`@systemfsoftware/xstate-store` exports `createStore`](https://github.com/systemfsoftware/xstate/blob/688aabff96cee96c168d80b277b7616f9faca67d/packages/xstate-store/src/index.ts); [`@systemfsoftware/xstate-test` exports `testPaths`](https://github.com/systemfsoftware/xstate/blob/688aabff96cee96c168d80b277b7616f9faca67d/packages/xstate-test/src/index.ts), documented as experimental in its [implementation](https://github.com/systemfsoftware/xstate/blob/688aabff96cee96c168d80b277b7616f9faca67d/packages/xstate-test/src/propertyTest.ts).
+
+---
+
+## Planning Contract
+
+Product Contract unchanged. The public enrollment inventory and the separately held private inventory implement the approved split without publishing private repository identities.
+
+### Key Technical Decisions
+
+- KTD1. **Publish one Git-sourced pack.** Create `compound-packs/xstate/` with top-level rule files and a README. Remote declarations use the repository URL and this exact subdirectory; the source repository uses a local path declaration. The resolver treats the README as descriptive, not as a rule.
+- KTD2. **Use a released tag, not a guessed version.** The release tool creates tags per package (`release.jsonc`); determine the actual tag from the consumed tarball's source release. The pack must already exist at that tag. The tag is not yet known and must not be invented. If a consumer uses no XState tarball, select a pack-bearing release tag and record that there is no tarball to match. If consumed tarballs come from distinct release tags, stop that enrollment until their source is aligned rather than silently violating R2.
+- KTD3. **Separate the decision from API detail.** The shared cell rule owns instance state and the machine-versus-other-state decision; the XState pack owns concrete fork APIs. The shared rule at the current default branch retains instance ownership but no longer contains the machine decision, so restore that decision rather than assuming a removable XState API section still exists.
+- KTD4. **Validate uptake, not just declaration.** Inspect resolver output and an actual planning session's cited rule selection. An unreachable Git source warns and continues; neither a config entry nor a successful resolution proves the agent used a rule.
+
+### High-Level Technical Design
+
+```mermaid
+flowchart LR
+  A[XState source and pack] --> B[Release tag containing pack]
+  B --> C[Consumer config declares source and ref]
+  C --> D[Resolver discovers top-level rules]
+  D --> E[Agent matches applies_when]
+  E --> F[Plan cites applicable guidance]
+  G[Shared cell rule] --> E
+```
+
+### Source Evidence
+
+All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b7616f9faca67d`, not upstream XState:
+
+- `packages/xstate/src/index.ts` exports `setup`, `createMachine`, and `types`; `packages/xstate/src/setup.ts` defines setup schemas, guards, and machine creation.
+- `packages/xstate-effect/src/index.ts` exports `createEffectActor`; `packages/xstate-effect/src/createEffectActor.ts` documents acquisition, startup, and scope-driven interruption and release.
+- `packages/xstate-store/src/index.ts` exports `createStore`; `packages/xstate-store/src/store.ts` defines its observable store.
+- `packages/xstate-test/src/index.ts` exports `testPaths`; `packages/xstate-test/src/propertyTest.ts` marks it experimental and describes path execution against a system under test. Do not substitute another package's model-test API.
+- `release.jsonc` describes per-package release tags; `packages/xstate/package.json` includes only `dist` in the package payload. Git pack distribution and package tarball contents are distinct.
+- The [Compound Packs guide](https://github.com/EveryInc/compound-engineering-plugin/blob/main/docs/guides/packs.md) specifies the entry shape, top-level frontmatter, ignored README, semantic matching and Git-source failure behavior.
+
+### Assumptions and Dependencies
+
+- Participating public repositories are the unarchived first-party repositories with a tracked `.compound-engineering/config.yaml`, plus this library. Recheck the inventory before enrollment; a repository becoming a participant is not excluded by the snapshot.
+- The private enrollment inventory is held outside this public repository. Its owner must preserve it in approved private storage; a temporary local copy is not a durable handoff.
+- The first pack-bearing release tag and each consumer's tarball provenance are future inputs. No literal ref can be truthfully specified before that release exists.
+- A path-sourced declaration in this repository has no `ref` and no consumed tarball. R2 governs Git-sourced consumers with tarballs.
+
+---
+
+## Implementation Units
+
+### U1. Publish XState pack rules
+
+**Goal:** Give agents source-backed rules for representation, actor lifetime, typed boundaries and model paths.
+
+**Requirements:** R1, R5, R7-R11, R14-R15; AE2-AE3.
+
+**Dependencies:** None.
+
+**Files:** Create `compound-packs/xstate/README.md`, `compound-packs/xstate/choose-state-representation.md`, `compound-packs/xstate/scope-machine-actors.md`, `compound-packs/xstate/type-events-and-guards.md`, and `compound-packs/xstate/test-machine-paths.md`; create `.compound-engineering/config.yaml`.
+
+**Approach:** Define named-state machine, observable store and keyed table in the choice rule. Make rule scopes and matching situations distinct. Use the APIs and experimental status in Source Evidence; cite exact source at the release being documented. Document KTD2 and the consumer declaration in the README. Declare the local pack by `source: compound-packs/xstate`; preserve any entries already present when this unit executes.
+
+**Test expectation:** No new permanent test or gate: these files specify guidance and configuration rather than executable behavior.
+
+**Verification:** Inspect each rule's frontmatter and resolver output; use a real agent session for the lifecycle, keyed-counter and model-path scenarios in AE2-AE3. Ensure the selected guidance points to the fork and does not assert that installation enrolls a pack.
+
+### U2. Restore the shared ownership boundary
+
+**Goal:** Keep state ownership and the choice of a machine in cell architecture without duplicating XState API instructions.
+
+**Requirements:** R7, R12-R14; AE4.
+
+**Dependencies:** U1 and a published pack-bearing release.
+
+**Target repository:** `systemfsoftware/systemfsoftware`.
+
+**Files:** Modify `compound-packs/cell-architecture/instance-state-lives-in-the-constructor.md` and `.compound-engineering/config.yaml`.
+
+**Approach:** Preserve the rule's instance-owned mutable state, cache and request-context boundaries. Add the named-state and Layer ownership decision and a link to the published XState pack. Do not duplicate its library API instructions. Enroll this repository using U3.
+
+**Test expectation:** No permanent test: verify the rule's text and agent selection rather than introducing a configuration gate.
+
+**Verification:** A scoped service planning session cites both the cell ownership rule and applicable XState guidance; a plain table case remains valid.
+
+### U3. Enroll public consumers
+
+**Goal:** Explicitly declare the pack in each identified public participating repository.
+
+**Requirements:** R2-R6; AE1, AE4.
+
+**Dependencies:** U1 and a release tag containing its pack.
+
+**Files:** `.compound-engineering/config.yaml` in each target repository in the inventory below.
+
+**Approach:** Each repository is an independent follow-up unit and PR. Append the declaration below without changing existing pack entries. Replace `TAG` with the actual pack-bearing release tag determined under KTD2; it is a variable, not a real tag. For a repository without a tarball, record the selected release and no-dependency case. Confirm the resolved pack ID is `xstate` and not duplicated.
+
+```yaml
+- source: https://github.com/systemfsoftware/xstate
+  ref: TAG
+  path: compound-packs/xstate
+```
+
+| Target repository                            | Declaration | Existing configuration                                |
+| -------------------------------------------- | ----------- | ----------------------------------------------------- |
+| `systemfsoftware/systemfsoftware`            | U3 entry    | Preserve 13 path-sourced entries; coordinate with U2. |
+| `systemfsoftware/pnpm-release-management`    | U3 entry    | Preserve existing Git source and pack selection.      |
+| `systemfsoftware/effect-endgame-starter-kit` | U3 entry    | Preserve existing Git source.                         |
+| `systemfsoftware/api-extractor-effect`       | U3 entry    | Preserve existing Git source and pack selection.      |
+| `systemfsoftware/gritlint`                   | U3 entry    | Preserve existing Git source and pack selection.      |
+| `systemfsoftware/are-the-types-wrong-effect` | U3 entry    | Preserve existing Git source.                         |
+| `systemfsoftware/stryker-js-effect`          | U3 entry    | Preserve existing Git sources.                        |
+| `systemfsoftware/frontend`                   | U3 entry    | Preserve existing path and Git sources.               |
+
+**Test expectation:** No new permanent test or CI gate for declarations.
+
+**Verification:** For every target, verify the release ref and source resolve to `xstate`, then exercise one real agent session using a matching scenario. Include a target without an installed XState dependency. A missing or unreachable source is a failed enrollment verification, even though the resolver continues.
+
+### U4. Enroll private consumers
+
+**Goal:** Complete the same enrollment for each private participating repository without disclosing private identifiers in public artifacts.
+
+**Requirements:** R2-R6; AE1, AE4.
+
+**Dependencies:** U1 and a release tag containing its pack.
+
+**Files:** The independently maintained private enrollment inventory and each target's `.compound-engineering/config.yaml`.
+
+**Approach:** Use the private inventory to make one follow-up unit and PR per target. Apply the same U3 declaration, tag selection, preservation and uptake criteria. Recheck participation and tarball provenance at execution. Keep identifiers, local paths and private evidence out of this public plan and public PRs.
+
+**Test expectation:** No new permanent test or CI gate for declarations.
+
+**Verification:** Record resolver and real-session evidence in the appropriate private repository or private tracker.
+
+---
+
+## Verification Contract
+
+- Validate changed Markdown with the owning repository's formatting check; run scoped checks permitted by its host policy. The full `pnpm check:ci` named by this repository's definition of done remains off-host acceptance evidence.
+- For U1-U4, verify the pack source, actual released ref, unique ID, top-level discoverability, relevant semantic matching and citations. A real session must demonstrate uptake; resolver output alone is insufficient.
+- Verify every API and example against the source at the consumed release, including the experimental status of `testPaths`.
+- No implementation tests are planned for configuration and rule text, and no new enforcement gate is authorized.
+
+---
+
+## Definition of Done
+
+- U1 rules and local declaration are available; a release tag containing them exists.
+- U2 preserves ownership boundaries and refers to the pack without duplicated API guidance.
+- Every public and private enrollment unit has a recorded source ref, tag provenance, resolver result and real-session evidence.
+- Each consuming tarball and declared ref satisfy R2; exceptions are not silently substituted.
+- Required off-host checks and review are complete; abandoned drafts and scratch artifacts are removed.
