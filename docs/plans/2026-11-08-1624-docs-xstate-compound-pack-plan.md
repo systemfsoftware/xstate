@@ -24,7 +24,7 @@ Provide versioned XState usage rules from the library's repository, and declare 
 
 ### Problem Frame
 
-The current cell-architecture rule contains concrete XState machine, actor and store APIs. Library evolution can make those details stale independently of the library's source, and a repo that has not declared the rule cannot receive it through pack discovery.
+The current cell-architecture rule keeps instance ownership but lacks the machine decision. Library-specific guidance belongs in its own declared pack so agents can discover guidance versioned with the fork.
 
 ### Key Decisions
 
@@ -37,7 +37,7 @@ The current cell-architecture rule contains concrete XState machine, actor and s
 **Source and enrollment**
 
 - R1. Place the XState pack in `systemfsoftware/xstate` as a resolver-readable source directory, with its rule files versioned alongside that repository's releases.
-- R2. A consumer's declared pack ref must equal the release tag of the `@systemfsoftware/xstate*` tarball it consumes; bump both together in one change. State this rule in the pack README and enrollment instructions. Do not add a CI check or gate.
+- R2. A consumer's declared pack ref follows KTD2; state that rule in the pack README and enrollment instructions. Do not add a CI check or gate.
 - R3. Enroll the pack in each participating first-party repository, including the library repository itself and repositories not yet depending on an `@systemfsoftware/xstate*` package.
 - R4. Declare the pack explicitly in each repository's `.compound-engineering/config.yaml`, preserving existing pack entries and avoiding duplicate pack IDs.
 - R5. State that a package dependency, Nix `file:` catalog entry, or installed tarball alone does not enroll a pack under the current resolver.
@@ -87,12 +87,12 @@ Git pack refs and Nix package versions are independent inputs. A release tag or 
 
 ## Planning Contract
 
-Product Contract unchanged.
+Product Contract changed: R2 and the problem frame reflect the accepted review rulings.
 
 ### Key Technical Decisions
 
 - KTD1. **Publish one Git-sourced pack.** Create `compound-packs/xstate/` with top-level rule files and a README. Remote declarations use the repository URL and this exact subdirectory; the source repository uses a local path declaration. The resolver treats the README as descriptive, not as a rule.
-- KTD2. **Release before enrollment.** The initial Git pack ref is the first `@systemfsoftware/xstate` release tag that contains `compound-packs/`; thereafter the ref is the same tag as the consumed tarball. The actual tag does not exist yet and must not be invented. If a consumer uses no XState tarball, retain the initial pack-bearing tag until it consumes one. If consumed tarballs come from distinct release tags, align their source before enrollment.
+- KTD2. **Couple the pack ref to the core release.** A consumer's pack ref is the `@systemfsoftware/xstate` release tag for the core version its lockfile resolves, whether directly or transitively through `@systemfsoftware/xstate-effect`. Tags of other packages, such as xstate-effect or xstate-store, are never used as the pack ref and need not equal it. A consumer whose lockfile resolves no core `@systemfsoftware/xstate` uses the first pack-bearing core tag recorded in U5.
 - KTD3. **Separate the decision from API detail.** The shared cell rule owns instance state and the machine-versus-other-state decision; the XState pack owns concrete fork APIs. The shared rule at the current default branch retains instance ownership but no longer contains the machine decision, so restore that decision rather than assuming a removable XState API section still exists.
 - KTD4. **Validate uptake, not just declaration.** Inspect resolver output and an actual planning session's cited rule selection. An unreachable Git source warns and continues; neither a config entry nor a successful resolution proves the agent used a rule.
 
@@ -122,8 +122,8 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 ### Assumptions and Dependencies
 
 - Participating public repositories are the unarchived first-party repositories with a tracked `.compound-engineering/config.yaml`, plus this library. Recheck the inventory before enrollment; a repository becoming a participant is not excluded by the snapshot.
-- The first pack-bearing release tag and each consumer's tarball provenance are future inputs. No literal ref can be truthfully specified before that release exists.
-- The library's own declaration is path-sourced and has no Git ref or consumed tarball.
+- The first pack-bearing core release tag and consumers' resolved core lockfile versions are future inputs. No literal ref can be truthfully specified before that release exists.
+- The library's own declaration is path-sourced and has no Git ref.
 
 ---
 
@@ -143,7 +143,7 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 
 **Test expectation:** No new permanent test or gate: these files specify guidance and configuration rather than executable behavior.
 
-**Verification:** Inspect each rule's frontmatter. After U5 and U3, inspect resolver output and use a real agent session for the lifecycle, keyed-counter and model-path scenarios in AE2-AE3. Ensure the selected guidance points to the fork and does not assert that installation enrolls a pack.
+**Verification:** Before U5, write 6 to 8 short code fixtures covering lifecycle versus status field, store versus Ref, keyed counter, and actor ownership inside versus outside a Layer scope. Give two independent agents only the rule texts and fixtures; each records for every fixture which rule applies and the required change. Any disagreement is a rule-text defect: fix it and rerun the check before release. Resolver output and citations alone do not satisfy this check. Inspect each rule's frontmatter. After U5 and U3, inspect resolver output and use a real agent session for the lifecycle, keyed-counter and model-path scenarios in AE2-AE3. Ensure the selected guidance points to the fork and does not assert that installation enrolls a pack.
 
 ### U5. Release the pack
 
@@ -213,7 +213,7 @@ Private first-party repositories are enrolled through the private tracker using 
 
 **Test expectation:** No new permanent test or CI gate for declarations.
 
-**Verification:** For each Git-sourced target, verify the release ref and source resolve to `xstate`; for the library, verify the local path resolves to `xstate`. Exercise one real agent session per target using a matching scenario. Include a target without an installed XState dependency. A missing or unreachable source is a failed enrollment verification, even though the resolver continues.
+**Verification:** For each Git-sourced target, compare the declared ref with the core version resolved in its lockfile under KTD2 and verify the source resolves to `xstate`; for the library, verify the local path resolves to `xstate`. Exercise one real agent session per target using a matching scenario. Include a target without an installed XState dependency. A missing or unreachable source is a failed enrollment verification, even though the resolver continues.
 
 ---
 
@@ -231,5 +231,5 @@ Private first-party repositories are enrolled through the private tracker using 
 - U1 rules are available; U5 produces the first pack-bearing release; U3 declares the local pack.
 - U2 preserves ownership boundaries and refers to the pack without duplicated API guidance.
 - Every public Git-sourced enrollment has a recorded source ref, tag provenance, resolver result and real-session evidence; the local enrollment has resolver and real-session evidence.
-- Each consuming tarball and declared ref satisfy R2; exceptions are not silently substituted.
+- Every Git-sourced enrollment satisfies the core lockfile ref rule in R2; exceptions are not silently substituted.
 - Required off-host checks and review are complete; abandoned drafts and scratch artifacts are removed.
