@@ -73,7 +73,7 @@ The current cell-architecture rule keeps instance ownership but lacks the machin
 
 The rollout covers first-party repositories participating in the shared Compound Engineering conventions, not arbitrary third-party repositories. Establish the complete repository inventory and each consumer's exact declaration during planning; enroll other repositories through follow-up PRs in those repositories.
 
-Git pack refs and Nix package versions are independent inputs. A release tag or commit must actually contain the pack before consumers can pin it; a repo hosted pack does not by itself put rules in a published npm tarball. The resolver warns and continues when a Git source is unreachable, so declared enrollment is not a fail-closed guarantee.
+The selected Git commit must contain the pack; a repo-hosted pack does not by itself put rules in a published npm tarball. The resolver warns and continues when a Git source is unreachable, so declared enrollment is not a fail-closed guarantee.
 
 ### Sources
 
@@ -87,12 +87,12 @@ Git pack refs and Nix package versions are independent inputs. A release tag or 
 
 ## Planning Contract
 
-Product Contract changed: R2 and the problem frame reflect the accepted review rulings.
+Product Contract changed: R2 and the problem frame reflect the accepted review rulings, and KTD2 follows the consumer flake revision.
 
 ### Key Technical Decisions
 
 - KTD1. **Publish one Git-sourced pack.** Create `compound-packs/xstate/` with top-level rule files and a README. Remote declarations use the repository URL and this exact subdirectory; the source repository uses a local path declaration. The resolver treats the README as descriptive, not as a rule.
-- KTD2. **Couple the pack ref to the core release.** A consumer's pack ref is the `@systemfsoftware/xstate` release tag for the core version its lockfile resolves, whether directly or transitively through `@systemfsoftware/xstate-effect`. Tags of other packages, such as xstate-effect or xstate-store, are never used as the pack ref and need not equal it. A consumer whose lockfile resolves no core `@systemfsoftware/xstate` uses the first pack-bearing core tag recorded in U5.
+- KTD2. **Couple the pack ref to the flake revision.** A consumer's pack ref is the systemfsoftware/xstate commit its flake.lock pins for its github:systemfsoftware/xstate input. When that pin moves, the pack ref moves with it in the same change. A consumer with no such input uses the commit that added this pack.
 - KTD3. **Separate the decision from API detail.** The shared cell rule owns instance state and the machine-versus-other-state decision; the XState pack owns concrete fork APIs. The shared rule at the current default branch retains instance ownership but no longer contains the machine decision, so restore that decision rather than assuming a removable XState API section still exists.
 - KTD4. **Validate uptake, not just declaration.** Inspect resolver output and an actual planning session's cited rule selection. An unreachable Git source warns and continues; neither a config entry nor a successful resolution proves the agent used a rule.
 
@@ -100,7 +100,7 @@ Product Contract changed: R2 and the problem frame reflect the accepted review r
 
 ```mermaid
 flowchart LR
-  A[XState source and pack] --> B[Release tag containing pack]
+  A[XState source and pack] --> B[Pack-bearing commit]
   B --> C[Consumer config declares source and ref]
   C --> D[Resolver discovers top-level rules]
   D --> E[Agent matches applies_when]
@@ -117,12 +117,12 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 - `packages/xstate-store/src/index.ts` exports `createStore`; `packages/xstate-store/src/store.ts` defines its observable store.
 - `packages/xstate-test/src/index.ts` exports `testPaths`; `packages/xstate-test/src/propertyTest.ts` marks it experimental and describes path execution against a system under test. Do not substitute another package's model-test API.
 - `release.jsonc` describes per-package release tags; `packages/xstate/package.json` includes only `dist` in the package payload. Git pack distribution and package tarball contents are distinct.
-- The [Compound Packs guide](https://github.com/EveryInc/compound-engineering-plugin/blob/main/docs/guides/packs.md) specifies the entry shape, top-level frontmatter, ignored README, semantic matching and Git-source failure behavior.
+- The [Compound Packs guide](https://github.com/EveryInc/compound-engineering-plugin/blob/main/docs/guides/packs.md) specifies the entry shape, including a SHA as `ref`, top-level frontmatter, ignored README, semantic matching and Git-source failure behavior.
 
 ### Assumptions and Dependencies
 
 - Participating public repositories are the unarchived first-party repositories with a tracked `.compound-engineering/config.yaml`, plus this library. Recheck the inventory before enrollment; a repository becoming a participant is not excluded by the snapshot.
-- The first pack-bearing core release tag and consumers' resolved core lockfile versions are future inputs. No literal ref can be truthfully specified before that release exists.
+- The pack was added at commit `e49280a6a73e085fd22e952299a8916d9d4b0f2d`. A consumer's pinned revision must contain the pack before enrollment.
 - The library's own declaration is path-sourced and has no Git ref.
 
 ---
@@ -139,23 +139,23 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 
 **Files:** Create `compound-packs/xstate/README.md`, `compound-packs/xstate/choose-state-representation.md`, `compound-packs/xstate/scope-machine-actors.md`, `compound-packs/xstate/type-events-and-guards.md`, and `compound-packs/xstate/test-machine-paths.md`.
 
-**Approach:** Define named-state machine, observable store and keyed table in the choice rule. Make rule scopes and matching situations distinct. Use the APIs and experimental status in Source Evidence; cite exact source at the release being documented. Document KTD2 and the consumer declaration in the README.
+**Approach:** Define named-state machine, observable store and keyed table in the choice rule. Make rule scopes and matching situations distinct. Use the APIs and experimental status in Source Evidence; cite exact source at the revision being documented. Document KTD2 and the consumer declaration in the README.
 
 **Test expectation:** No new permanent test or gate: these files specify guidance and configuration rather than executable behavior.
 
-**Verification:** Before U5, write 6 to 8 short code fixtures covering lifecycle versus status field, store versus Ref, keyed counter, and actor ownership inside versus outside a Layer scope. Give two independent agents only the rule texts and fixtures; each records for every fixture which rule applies and the required change. Any disagreement is a rule-text defect: fix it and rerun the check before release. Resolver output and citations alone do not satisfy this check. Inspect each rule's frontmatter. After U5 and U3, inspect resolver output and use a real agent session for the lifecycle, keyed-counter and model-path scenarios in AE2-AE3. Ensure the selected guidance points to the fork and does not assert that installation enrolls a pack.
+**Verification:** Before enrollment, write 6 to 8 short code fixtures covering lifecycle versus status field, store versus Ref, keyed counter, and actor ownership inside versus outside a Layer scope. Give two independent agents only the rule texts and fixtures; each records for every fixture which rule applies and the required change. Any disagreement is a rule-text defect: fix it and rerun the check before enrollment. Resolver output and citations alone do not satisfy this check. Inspect each rule's frontmatter. After U3, inspect resolver output and use a real agent session for the lifecycle, keyed-counter and model-path scenarios in AE2-AE3. Ensure the selected guidance points to the fork and does not assert that installation enrolls a pack.
 
-### U5. Release the pack
+### U5. Release the pack (optional)
 
-**Goal:** Cut the first `@systemfsoftware/xstate` release whose tag contains `compound-packs/`.
+**Goal:** Cut a release containing `compound-packs/` if separately authorized. This is not required by the ref rule.
 
-**Requirements:** R1-R2.
+**Requirements:** R1.
 
 **Dependencies:** U1.
 
 **Files:** Release metadata and changeset files as required by the existing release process.
 
-**Approach:** Obtain the required human approval and use the existing release process. Record the actual first pack-bearing `@systemfsoftware/xstate` release tag for U3 and subsequent enrollments. Do not invent a tag or enroll consumers before it exists.
+**Approach:** Obtain the required human approval and use the existing release process. Enrollment does not depend on this release.
 
 **Test expectation:** No new permanent test or gate for the release instruction.
 
@@ -167,7 +167,7 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 
 **Requirements:** R7, R12-R14; AE4.
 
-**Dependencies:** U5 and the `systemfsoftware/systemfsoftware` enrollment in U3.
+**Dependencies:** The `systemfsoftware/systemfsoftware` enrollment in U3.
 
 **Target repository:** `systemfsoftware/systemfsoftware`.
 
@@ -185,15 +185,15 @@ All fork API claims below are grounded at commit `688aabff96cee96c168d80b277b761
 
 **Requirements:** R2-R6; AE1, AE4.
 
-**Dependencies:** U5.
+**Dependencies:** U1 and a pack-bearing commit available to consumers.
 
 **Files:** `.compound-engineering/config.yaml` in each target repository in the inventory below.
 
-**Approach:** Each public repository below is an independent follow-up unit and PR. For Git-sourced consumers append the following declaration without changing existing entries; `TAG` is the value defined by KTD2, not a literal tag. Confirm the resolved pack ID is `xstate` and not duplicated.
+**Approach:** Each public repository below is an independent follow-up unit and PR. For Git-sourced consumers append the following declaration without changing existing entries; `XSTATE_REV` is the commit selected under KTD2, not a literal ref. Confirm the resolved pack ID is `xstate` and not duplicated.
 
 ```yaml
 - source: https://github.com/systemfsoftware/xstate
-  ref: TAG
+  ref: XSTATE_REV
   path: compound-packs/xstate
 ```
 
@@ -213,23 +213,23 @@ Private first-party repositories are enrolled through the private tracker using 
 
 **Test expectation:** No new permanent test or CI gate for declarations.
 
-**Verification:** For each Git-sourced target, compare the declared ref with the core version resolved in its lockfile under KTD2 and verify the source resolves to `xstate`; for the library, verify the local path resolves to `xstate`. Exercise one real agent session per target using a matching scenario. Include a target without an installed XState dependency. A missing or unreachable source is a failed enrollment verification, even though the resolver continues.
+**Verification:** For each Git-sourced target, compare the declared ref with its `github:systemfsoftware/xstate` input revision in `flake.lock` under KTD2, or with the pack-adding commit when no such input exists, and verify the source resolves to `xstate`; for the library, verify the local path resolves to `xstate`. Exercise one real agent session per target using a matching scenario. Include a target without an installed XState dependency. A missing or unreachable source is a failed enrollment verification, even though the resolver continues.
 
 ---
 
 ## Verification Contract
 
 - Validate changed Markdown with the owning repository's formatting check; run scoped checks permitted by its host policy. The full `pnpm check:ci` named by this repository's definition of done remains off-host acceptance evidence.
-- For U1-U3 and U5, verify the pack source, actual released ref, unique ID, top-level discoverability, relevant semantic matching and citations. A real session must demonstrate uptake; resolver output alone is insufficient.
-- Verify every API and example against the source at the consumed release, including the experimental status of `testPaths`.
+- For U1-U3, verify the pack source, selected commit ref, unique ID, top-level discoverability, relevant semantic matching and citations. A real session must demonstrate uptake; resolver output alone is insufficient.
+- Verify every API and example against the source at the consumed revision, including the experimental status of `testPaths`.
 - No implementation tests are planned for configuration and rule text, and no new enforcement gate is authorized.
 
 ---
 
 ## Definition of Done
 
-- U1 rules are available; U5 produces the first pack-bearing release; U3 declares the local pack.
+- U1 rules are available at a pack-bearing commit; U3 declares the local pack. U5 is optional and is not required by the ref rule.
 - U2 preserves ownership boundaries and refers to the pack without duplicated API guidance.
-- Every public Git-sourced enrollment has a recorded source ref, tag provenance, resolver result and real-session evidence; the local enrollment has resolver and real-session evidence.
-- Every Git-sourced enrollment satisfies the core lockfile ref rule in R2; exceptions are not silently substituted.
+- Every public Git-sourced enrollment has a recorded source ref, flake revision provenance or pack-adding fallback, resolver result and real-session evidence; the local enrollment has resolver and real-session evidence.
+- Every Git-sourced enrollment satisfies the flake revision ref rule in R2; exceptions are not silently substituted.
 - Required off-host checks and review are complete; abandoned drafts and scratch artifacts are removed.
