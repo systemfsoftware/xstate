@@ -17,13 +17,18 @@
       inputs.comment-checker.follows = "comment-checker";
     };
     # The release workflows run pnpm-release-management's main; the Changeset
-    # Check runs its changeset-management CLI from this pin of main inside the
-    # dev shell, where the .sfs-deps tarballs the install needs exist. The pin
+    # Check runs its changeset-management CLI from this pin inside the dev
+    # shell, where the .sfs-deps tarballs the install needs exist. The pin
     # above stays for its sandbox launcher, whose commits main does not carry.
     # This pin keeps its own nixpkgs: its deno-compile runtime is pinned to
-    # that deno. 5432b8b declared a deps hash a sandboxed fetch never produces;
-    # c10c1c4's deps fetch byte-identically under the sandbox.
-    release-tools.url = "github:systemfsoftware/pnpm-release-management/c10c1c47121110b6fc5217251c07e6f7f3eb812d";
+    # that deno. PR #95 moved release.jsonc to the `changesets` versioning
+    # strategy, which pnpm-release-management#9 retired `pnpm` in favour of,
+    # so the CLI here must understand `changesets`. 1bd7289 is the last main
+    # commit after #9 and before #60, whose changeset-management fetches turbo
+    # from registry.npmjs.org: this pin parses release.jsonc and runs the
+    # workspace's turbo, so the offline sandbox in changeset-check.yml stays
+    # offline — opening the sandbox to npm is rejected.
+    release-tools.url = "github:systemfsoftware/pnpm-release-management/1bd7289bd788e62961016bab46257877d25cef56";
     # systemfsoftware#606's merge into main: its workspace tarballs carry
     # per-system integrity, so the macOS leg installs what Linux installs. It
     # keeps its own pnpm-release-management pin, whose mkPnpmConsumerStore the
