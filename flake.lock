@@ -107,11 +107,34 @@
     "importPnpmLock_2": {
       "inputs": {
         "nixpkgs": [
+          "release-tools",
+          "nixpkgs"
+        ],
+        "systems": "systems_2"
+      },
+      "locked": {
+        "lastModified": 1790096829,
+        "narHash": "sha256-mnjMXjY/fo5OQH/iYNPijIqo0jAb/z7EhHtfXLlzOrs=",
+        "owner": "Scrumplex",
+        "repo": "importPnpmLock.nix",
+        "rev": "ca18d47b0e98a4b51404f69ce5ab51efb6ebc151",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Scrumplex",
+        "repo": "importPnpmLock.nix",
+        "rev": "ca18d47b0e98a4b51404f69ce5ab51efb6ebc151",
+        "type": "github"
+      }
+    },
+    "importPnpmLock_3": {
+      "inputs": {
+        "nixpkgs": [
           "systemfsoftware",
           "pnpm-release-management",
           "nixpkgs"
         ],
-        "systems": "systems_2"
+        "systems": "systems_3"
       },
       "locked": {
         "lastModified": 1790096829,
@@ -187,7 +210,7 @@
     "pnpm-release-management_2": {
       "inputs": {
         "comment-checker": "comment-checker_3",
-        "importPnpmLock": "importPnpmLock_2",
+        "importPnpmLock": "importPnpmLock_3",
         "nixpkgs": [
           "systemfsoftware",
           "nixpkgs"
@@ -211,20 +234,21 @@
     "release-tools": {
       "inputs": {
         "comment-checker": "comment-checker_2",
+        "importPnpmLock": "importPnpmLock_2",
         "nixpkgs": "nixpkgs_2"
       },
       "locked": {
-        "lastModified": 1791338691,
-        "narHash": "sha256-08KabPJqTo7qKVyxH0H8EM+utl24QKOTAhqGaKjItlI=",
+        "lastModified": 1791882147,
+        "narHash": "sha256-BjoRAfYCpcXyHxb1xKIOmQ3/F7Mi5o8eM/xew8n/RX4=",
         "owner": "systemfsoftware",
         "repo": "pnpm-release-management",
-        "rev": "c10c1c47121110b6fc5217251c07e6f7f3eb812d",
+        "rev": "1bd7289bd788e62961016bab46257877d25cef56",
         "type": "github"
       },
       "original": {
         "owner": "systemfsoftware",
         "repo": "pnpm-release-management",
-        "rev": "c10c1c47121110b6fc5217251c07e6f7f3eb812d",
+        "rev": "1bd7289bd788e62961016bab46257877d25cef56",
         "type": "github"
       }
     },
@@ -404,6 +428,21 @@
       }
     },
     "systems_2": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    },
+    "systems_3": {
       "locked": {
         "lastModified": 1681028828,
         "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
