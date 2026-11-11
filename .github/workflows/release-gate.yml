@@ -84,7 +84,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/dev-shell
       - name: Download the shard plan
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: stryker-plan
           path: .
@@ -157,13 +157,13 @@ jobs:
         uses: ./.github/actions/dev-shell
       - name: Download the shard plan
         if: needs.plan.outputs.has-shards == 'true'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: stryker-plan
           path: .
       - name: Download every shard's reports
         if: needs.plan.outputs.has-shards == 'true'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           pattern: mutation-shard-*
           path: .cache/shard-reports
