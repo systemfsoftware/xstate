@@ -74,15 +74,6 @@
       "outputs": [],
       "cache": true
     },
-    "//#assert-local-sfs": {
-      "inputs": [
-        "pnpm-lock.yaml",
-        "nix/*/pnpm-lock.yaml",
-        "nix/from-source/assert-local-sfs.awk"
-      ],
-      "outputs": [],
-      "cache": true
-    },
     "//#test:scripts": {
       "outputLogs": "errors-only",
       "inputs": [
@@ -90,8 +81,6 @@
         "flake.nix",
         "flake.lock",
         "pnpm-lock.yaml",
-        "nix/*/pnpm-lock.yaml",
-        "nix/from-source/assert-local-sfs.awk",
         "subtrees.toml",
         "dprint.json",
         "packages/*/vitest.config.ts",
@@ -101,9 +90,6 @@
         "packages/**/*.test.tsx"
       ],
       "outputs": [],
-      "dependsOn": [
-        "//#assert-local-sfs"
-      ],
       "cache": true
     },
     "test": {

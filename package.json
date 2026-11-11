@@ -23,7 +23,6 @@
   "packageManager": "pnpm@12.9.0",
   "private": true,
   "scripts": {
-    "assert-local-sfs": "awk -f nix/from-source/assert-local-sfs.awk pnpm-lock.yaml nix/*/pnpm-lock.yaml",
     "attw": "sandbox -- turbo --concurrency=${TURBO_CONCURRENCY:-50%} attw",
     "bootstrap": "sandbox -- pnpm install && sandbox -- pnpm rebuild --config.ignore-scripts=false && sandbox -- pnpm run prepare",
     "build": "sandbox -- turbo --concurrency=${TURBO_CONCURRENCY:-50%} build",

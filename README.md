@@ -12,7 +12,7 @@ Upstream XState is the reference, not a dependency: the fork keeps upstream's ob
 
 ## Install
 
-The packages are not published to a registry. Releases are git tags and GitHub Releases, and this repository's Nix flake builds each package's tarball:
+nix.systemfsoftware.com is the package registry for `@systemfsoftware` packages. Each release is also a git tag and a GitHub Release, and this repository's Nix flake builds each package's tarball:
 
 ```bash
 # every public package, plus index.json mapping each name to its tarball
