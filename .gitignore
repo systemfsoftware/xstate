@@ -12,5 +12,5 @@ packages/*/temp/
 .direnv/
 result
 result-*
-.sfs-deps
+.deps
 .cache/
