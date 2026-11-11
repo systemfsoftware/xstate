@@ -53,6 +53,19 @@ nix build .#workspace-tarballs
 
 Mutation testing is not part of `pnpm check:ci`, and pull requests do not run it. The release gate (`.github/workflows/release-gate.yml`) runs on every push to `main`: `stryker plan` once over every workspace package that declares a `mutation` script, then, in each planned shard, every project's `stryker run --shard --project` child at a break threshold of 100, with its stdout and stderr kept beside its progress stream (`.github/scripts/run-shard.sh`). A survivor on `main` gets a behaviour test in a follow-up pull request, and the next gate run proves it.
 
+## Toolchain
+
+| Tool                    | Role                                                                               |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| **Nix**                 | Pins Node.js 24, pnpm 12.9.0, Deno and dprint, and builds the package tarballs     |
+| **Sandbox**             | pnpm-release-management's deny-by-default launcher; all dependency code runs in it |
+| **pnpm + Turbo**        | Workspace catalog with exact pins, cached task graph                               |
+| **TypeScript 7 (tsgo)** | Typechecking through `@effect/tsgo`                                                |
+| **oxlint**              | The `@systemfsoftware/oxlint-config-recommended` preset, at error severity         |
+| **Vitest**              | Unit and integration tests                                                         |
+| **Stryker**             | Mutation testing at a break threshold of 100, on `main` only (the release gate)    |
+| **dprint**              | Formatting for code and Markdown                                                   |
+
 ## Pull Requests & Commits
 
 - We follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat(cli): ...`, `fix(core): ...`).
