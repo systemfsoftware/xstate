@@ -18,6 +18,15 @@ env:
     xstate-store
     xstate-store-react
     sandbox-proofs
+    dprint
+    sandbox
+    comment-checker
+    comment-checker-unwrapped
+    pnpm-store
+    sfs-deps
+    source-deps
+    stryker-js-source
+    stryker-tarballs
 
 jobs:
   push:
