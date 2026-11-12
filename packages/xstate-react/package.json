@@ -42,6 +42,7 @@
   "devDependencies": {
     "@effect/tsgo": "catalog:",
     "@microsoft/api-extractor": "catalog:",
+    "@opentelemetry/api": "catalog:",
     "@systemfsoftware/arethetypeswrong-cli": "catalog:",
     "@systemfsoftware/tsconfig": "catalog:",
     "@systemfsoftware/vitest": "catalog:",

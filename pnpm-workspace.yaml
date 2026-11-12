@@ -10,6 +10,7 @@ catalog:
   "@commitlint/types": 21.2.3
   "@effect/tsgo": 0.64.1
   "@microsoft/api-extractor": 7.59.1
+  "@opentelemetry/api": 1.9.1
   "@systemfsoftware/arethetypeswrong-cli": file:.deps/arethetypeswrong-cli.tgz
   "@systemfsoftware/conformance-spec": file:.deps/conformance-spec.tgz
   "@systemfsoftware/effect-cell-types": file:.deps/effect-cell-types.tgz
