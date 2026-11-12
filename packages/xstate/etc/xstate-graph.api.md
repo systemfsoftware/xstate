@@ -197,10 +197,10 @@ export interface VisitedContext<TState, TEvent> {
 
 // Warnings were encountered during analysis:
 //
-// dist/graph.d.ts:24:3 - (ae-forgotten-export) The symbol "DirectedGraphLabel" needs to be exported by the entry point graph.d.ts
-// dist/graph.d.ts:25:3 - (ae-forgotten-export) The symbol "AnyTransitionDefinition" needs to be exported by the entry point graph.d.ts
-// dist/graph.d.ts:152:3 - (ae-forgotten-export) The symbol "StateValue" needs to be exported by the entry point graph.d.ts
-// dist/graph.d.ts:153:3 - (ae-forgotten-export) The symbol "MachineContext" needs to be exported by the entry point graph.d.ts
+// dist/graph.d.ts:23:3 - (ae-forgotten-export) The symbol "DirectedGraphLabel" needs to be exported by the entry point graph.d.ts
+// dist/graph.d.ts:24:3 - (ae-forgotten-export) The symbol "AnyTransitionDefinition" needs to be exported by the entry point graph.d.ts
+// dist/graph.d.ts:147:3 - (ae-forgotten-export) The symbol "StateValue" needs to be exported by the entry point graph.d.ts
+// dist/graph.d.ts:148:3 - (ae-forgotten-export) The symbol "MachineContext" needs to be exported by the entry point graph.d.ts
 
 // (No @packageDocumentation comment for this package)
 

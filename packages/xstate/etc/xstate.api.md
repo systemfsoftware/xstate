@@ -131,9 +131,9 @@ export interface ActorLike<TCurrent, TEvent extends EventObject> extends Subscri
 }
 
 // @public
-export interface ActorLogic<in out TSnapshot extends Snapshot<unknown> // it's invariant because it's also part of `ActorScope["self"]["getSnapshot"]`
-, in out TEvent extends EventObject // it's invariant because it's also part of `ActorScope["self"]["send"]`
-, in TInput = NonReducibleUnknown, TSystem extends AnyActorSystem = AnyActorSystem, in out TEmitted extends EventObject = EventObject> {
+export interface ActorLogic<in out TSnapshot extends Snapshot<unknown>, // it's invariant because it's also part of `ActorScope["self"]["getSnapshot"]`
+in out TEvent extends EventObject, // it's invariant because it's also part of `ActorScope["self"]["send"]`
+in TInput = NonReducibleUnknown, TSystem extends AnyActorSystem = AnyActorSystem, in out TEmitted extends EventObject = EventObject> {
     config?: unknown;
     getExecutionErrorEvent?: (snapshot: TSnapshot, error: unknown) => TEvent | undefined;
     getInitialSnapshot: (actorScope: ActorScope<TSnapshot, TEvent, TSystem, TEmitted>, input: TInput) => TSnapshot;
@@ -434,10 +434,10 @@ export interface AnyActorRef extends Subscribable<any>, InteropObservable<any> {
 }
 
 // @public (undocumented)
-export type AnyActorScope = ActorScope<any // TSnapshot
-, any // TEvent
-, AnyActorSystem, any // TEmitted
-, any>;
+export type AnyActorScope = ActorScope<any, // TSnapshot
+any, // TEvent
+AnyActorSystem, any, // TEmitted
+any>;
 
 // @public (undocumented)
 export type AnyActorSystem = ActorSystem<any>;
@@ -460,8 +460,8 @@ export type AnyHistoryValue = HistoryValue;
 export type AnyInvokeConfig = LegacyInvokeConfig<any, any, any, any, any, any, any, any>;
 
 // @public (undocumented)
-export type AnyInvokeDefinition = InvokeDefinition<MachineContext, EventObject, EventObject, any // TMeta
-, Sources['actions'], Sources['actors'], Sources['guards'], Sources['delays']>;
+export type AnyInvokeDefinition = InvokeDefinition<MachineContext, EventObject, EventObject, any, // TMeta
+Sources['actions'], Sources['actors'], Sources['guards'], Sources['delays']>;
 
 // Warning: (ae-forgotten-export) The symbol "LoosenMachineSnapshot" needs to be exported by the entry point index.d.ts
 //
@@ -522,26 +522,26 @@ export interface AnyStateMachine extends AnyActorLogic {
 export type AnyStateNode = StateNode<any, any> | StateNode<never, EventObject> | StateNode<any, EventObject> | StateNode<never, any>;
 
 // @public (undocumented)
-export type AnyStateNodeConfig = StateNodeConfig<any, any, any, any, any, any, any, any, any, any, any, any, any // TInput
-, any // TInputMap
-, any // TSystemRegistry
-, any // TChildOutput
-, any>;
+export type AnyStateNodeConfig = StateNodeConfig<any, any, any, any, any, any, any, any, any, any, any, any, any, // TInput
+any, // TInputMap
+any, // TSystemRegistry
+any, // TChildOutput
+any>;
 
 // @public (undocumented)
-export type AnyTransitionConfig = TransitionConfig<any // TContext
-, any // TExpressionEvent
-, any // TEvent
-, any // TEmitted
-, any // TMeta
-, any // TActionMap
-, any // TActorMap
-, any // TGuardMap
-, any>;
+export type AnyTransitionConfig = TransitionConfig<any, // TContext
+any, // TExpressionEvent
+any, // TEvent
+any, // TEmitted
+any, // TMeta
+any, // TActionMap
+any, // TActorMap
+any, // TGuardMap
+any>;
 
 // @public (undocumented)
-export type AnyTransitionConfigFunction = TransitionConfigFunction<any, any, any, any, any, any, any, any, any, any, any // _TCtx
-, any>;
+export type AnyTransitionConfigFunction = TransitionConfigFunction<any, any, any, any, any, any, any, any, any, any, any, // _TCtx
+any>;
 
 // @public (undocumented)
 export type AnyTransitionDefinition = TransitionDefinition<any, any>;
@@ -779,9 +779,9 @@ export type ContextFactory<TContext extends MachineContext, TActorMap extends So
     spawn: Spawner;
     actors: TActorMap;
     input: TInput;
-    self: ActorSelf<MachineSnapshot<[TContext] extends [never] ? any : TContext, TEvent, Record<string, AnyActorRef | undefined> // TODO: this should be replaced with `TChildren`
-    , StateValue, string, unknown, TODO // TMeta
-    , TODO>, TEvent, AnyEventObject>;
+    self: ActorSelf<MachineSnapshot<[TContext] extends [never] ? any : TContext, TEvent, Record<string, AnyActorRef | undefined>, // TODO: this should be replaced with `TChildren`
+    StateValue, string, unknown, TODO, // TMeta
+    TODO>, TEvent, AnyEventObject>;
 }) => [TContext] extends [never] ? MachineContext : TContext;
 
 // @public (undocumented)
@@ -998,9 +998,9 @@ export function createMachine<TContextSchema extends StandardSchemaV1, const TEv
 } & ValidateTopLevelFinalOutputs<TSS, InferOutput<TContextSchema, MachineContext>, InferEvents<TEventSchemaMap> | InferInternalEvents<TInternalEventSchemaMap>>): [TSS] extends [never] ? AnyStateMachine : StateMachine<InferOutput<TContextSchema, MachineContext>, (InferEvents<TEventSchemaMap> | InferInternalEvents<TInternalEventSchemaMap>) | ([RoutableStateId<TSS>] extends [never] ? never : {
     type: 'xstate.route';
     to: RoutableStateId<TSS>;
-}), Cast<MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>, Record<string, AnyActorRef | undefined>>, StateValueFromStateSchema<TSS>, TTag & string, InferMachineInput<TInputSchema>, SchemaOrConfigOutput<TOutputSchema, TSS>, WithDefault<InferEvents<TEmittedSchemaMap>, AnyEventObject>, InferOutput<TMetaSchema, MetaObject> // TMeta
-, TSS // TStateSchema
-, TActionMap, TActorMap, TGuardMap, DelayMapFromNames<TDelays, TDelayMap>, InferInternalEvents<TInternalEventSchemaMap>, TransitionMetaFromSchemas<TMetaSchema, TTransitionMetaSchema>> & {
+}), Cast<MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>, Record<string, AnyActorRef | undefined>>, StateValueFromStateSchema<TSS>, TTag & string, InferMachineInput<TInputSchema>, SchemaOrConfigOutput<TOutputSchema, TSS>, WithDefault<InferEvents<TEmittedSchemaMap>, AnyEventObject>, InferOutput<TMetaSchema, MetaObject>, // TMeta
+TSS, // TStateSchema
+TActionMap, TActorMap, TGuardMap, DelayMapFromNames<TDelays, TDelayMap>, InferInternalEvents<TInternalEventSchemaMap>, TransitionMetaFromSchemas<TMetaSchema, TTransitionMetaSchema>> & {
     states: TSS;
 } & MachineIdentity<TSS>;
 
@@ -1018,9 +1018,9 @@ export function createMachine<TContext extends MachineContext = never, const TEv
 } & ValidateTopLevelFinalOutputs<TSS, WidenLiterals<TContext>, InferEvents<TEventSchemaMap> | InferInternalEvents<TInternalEventSchemaMap>>): [TSS] extends [never] ? AnyStateMachine : StateMachine<WidenLiterals<TContext>, (InferEvents<TEventSchemaMap> | InferInternalEvents<TInternalEventSchemaMap>) | ([RoutableStateId<TSS>] extends [never] ? never : {
     type: 'xstate.route';
     to: RoutableStateId<TSS>;
-}), Cast<MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>, Record<string, AnyActorRef | undefined>>, StateValueFromStateSchema<TSS>, TTag & string, InferMachineInput<TInputSchema>, SchemaOrConfigOutput<TOutputSchema, TSS>, WithDefault<InferEvents<TEmittedSchemaMap>, AnyEventObject>, InferOutput<TMetaSchema, MetaObject> // TMeta
-, TSS // TStateSchema
-, TActionMap, TActorMap, TGuardMap, DelayMapFromNames<TDelays, TDelayMap>, InferInternalEvents<TInternalEventSchemaMap>, TransitionMetaFromSchemas<TMetaSchema, TTransitionMetaSchema>> & {
+}), Cast<MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>, Record<string, AnyActorRef | undefined>>, StateValueFromStateSchema<TSS>, TTag & string, InferMachineInput<TInputSchema>, SchemaOrConfigOutput<TOutputSchema, TSS>, WithDefault<InferEvents<TEmittedSchemaMap>, AnyEventObject>, InferOutput<TMetaSchema, MetaObject>, // TMeta
+TSS, // TStateSchema
+TActionMap, TActorMap, TGuardMap, DelayMapFromNames<TDelays, TDelayMap>, InferInternalEvents<TInternalEventSchemaMap>, TransitionMetaFromSchemas<TMetaSchema, TTransitionMetaSchema>> & {
     states: TSS;
 } & MachineIdentity<TSS>;
 
@@ -1048,8 +1048,8 @@ export function createObservableLogic<TContext, TInput extends NonReducibleUnkno
 export function createObservableLogic<TContext, TInput extends NonReducibleUnknown, TEmitted extends EventObject = EventObject>(observableCreator: ObservableLogicFunction<TContext, TInput, TEmitted>): ObservableActorLogic<TContext, TInput, TEmitted>;
 
 // @public (undocumented)
-export function createStateConfig<TContextSchema extends StandardSchemaV1, TEventSchema extends StandardSchemaV1, TEmittedSchema extends StandardSchemaV1, _TInputSchema extends StandardSchemaV1, const TOutputSchema extends StandardSchemaV1, TMetaSchema extends StandardSchemaV1, TTransitionMetaSchema extends StandardSchemaV1, TTagSchema extends StandardSchemaV1, _TEvent extends StandardSchemaV1.InferOutput<TEventSchema> & EventObject // TODO: consider using a stricter `EventObject` here
-, _TActor extends ProvidedActor, TActionMap extends Sources['actions'], TActorMap extends Sources['actors'], TGuardMap extends Sources['guards'], TDelayMap extends Sources['delays'], TDelays extends string, _TTag extends StandardSchemaV1.InferOutput<TTagSchema> & string, _TInput, const TSS extends StateSchema>(config: TSS & StateNodeConfig<InferOutput<TContextSchema, MachineContext>, DoNotInfer<StandardSchemaV1.InferOutput<TEventSchema> & EventObject>, DoNotInfer<TDelays>, DoNotInfer<StandardSchemaV1.InferOutput<TTagSchema> & string>, DoNotInfer<StandardSchemaV1.InferOutput<TOutputSchema>>, DoNotInfer<StandardSchemaV1.InferOutput<TEmittedSchema> & EventObject>, DoNotInfer<InferOutput<TMetaSchema, MetaObject>>, DoNotInfer<Record<string, AnyActorRef | undefined>>, DoNotInfer<TActionMap>, DoNotInfer<TActorMap>, DoNotInfer<TGuardMap>, DoNotInfer<TDelayMap>, any, any, any, any, DoNotInfer<TransitionMetaFromSchemas<TMetaSchema, TTransitionMetaSchema>>>): typeof config;
+export function createStateConfig<TContextSchema extends StandardSchemaV1, TEventSchema extends StandardSchemaV1, TEmittedSchema extends StandardSchemaV1, _TInputSchema extends StandardSchemaV1, const TOutputSchema extends StandardSchemaV1, TMetaSchema extends StandardSchemaV1, TTransitionMetaSchema extends StandardSchemaV1, TTagSchema extends StandardSchemaV1, _TEvent extends StandardSchemaV1.InferOutput<TEventSchema> & EventObject, // TODO: consider using a stricter `EventObject` here
+_TActor extends ProvidedActor, TActionMap extends Sources['actions'], TActorMap extends Sources['actors'], TGuardMap extends Sources['guards'], TDelayMap extends Sources['delays'], TDelays extends string, _TTag extends StandardSchemaV1.InferOutput<TTagSchema> & string, _TInput, const TSS extends StateSchema>(config: TSS & StateNodeConfig<InferOutput<TContextSchema, MachineContext>, DoNotInfer<StandardSchemaV1.InferOutput<TEventSchema> & EventObject>, DoNotInfer<TDelays>, DoNotInfer<StandardSchemaV1.InferOutput<TTagSchema> & string>, DoNotInfer<StandardSchemaV1.InferOutput<TOutputSchema>>, DoNotInfer<StandardSchemaV1.InferOutput<TEmittedSchema> & EventObject>, DoNotInfer<InferOutput<TMetaSchema, MetaObject>>, DoNotInfer<Record<string, AnyActorRef | undefined>>, DoNotInfer<TActionMap>, DoNotInfer<TActorMap>, DoNotInfer<TGuardMap>, DoNotInfer<TDelayMap>, any, any, any, any, DoNotInfer<TransitionMetaFromSchemas<TMetaSchema, TTransitionMetaSchema>>>): typeof config;
 
 // @public
 export function createSubscriptionLogic<TSnapshot extends Snapshot<unknown> = Snapshot<unknown>, TOutput = unknown, TMappedEvent extends EventObject = EventObject>(): SubscriptionActorLogic<TSnapshot, TOutput, TMappedEvent>;
@@ -1874,9 +1874,9 @@ export type Mapper<TContext extends MachineContext, TExpressionEvent extends Eve
     context: _TCtx;
     event: TExpressionEvent;
     input?: Record<string, unknown>;
-    self: ActorSelf<MachineSnapshot<_TCtx & MachineContext, TEvent, Record<string, AnyActorRef> // TODO: this should be replaced with `TChildren`
-    , StateValue, string, unknown, TODO // TMeta
-    , TODO>, TEvent, AnyEventObject>;
+    self: ActorSelf<MachineSnapshot<_TCtx & MachineContext, TEvent, Record<string, AnyActorRef>, // TODO: this should be replaced with `TChildren`
+    StateValue, string, unknown, TODO, // TMeta
+    TODO>, TEvent, AnyEventObject>;
 } & OutputArg<TExpressionEvent>) => TResult;
 
 // Warning: (ae-forgotten-export) The symbol "StateSchemaMapper" needs to be exported by the entry point index.d.ts
@@ -2135,8 +2135,8 @@ export type RegistryKeyForLogic<TLogic extends AnyActorLogic, TSystemRegistry ex
 export interface RegularStateNodeConfig<TContext extends MachineContext, TEvent extends EventObject, TDelays extends string, TTag extends string, TOutput, TEmitted extends EventObject, TStateMeta extends MetaObject, TTransitionMeta extends MetaObject, TChildren extends Record<string, AnyActorRef | undefined>, TActionMap extends Sources['actions'], TActorMap extends Sources['actors'], TGuardMap extends Sources['guards'], TDelayMap extends Sources['delays'], TInput = Record<string, unknown> | undefined, TInputMap extends Record<string, unknown> = Record<string, unknown>, TSystemRegistry extends SystemRegistry = SystemRegistry, TChildOutput = unknown> {
     // Warning: (ae-forgotten-export) The symbol "DelayDurationKey" needs to be exported by the entry point index.d.ts
     // Warning: (ae-forgotten-export) The symbol "Next_StaticTransitionConfig" needs to be exported by the entry point index.d.ts
-    after?: { [K in NoInfer<TDelays> | number | DelayDurationKey]?: Next_StaticTransitionConfig<TContext, AfterEvent, TEvent, TActionMap, TActorMap, TGuardMap, TDelayMap, TTransitionMeta> | TransitionConfigFunction<TContext, AfterEvent, TEvent, TODO // TEmitted
-        , TActionMap, TActorMap, TGuardMap, TDelayMap, TTransitionMeta, TInput, [TContext] extends [never] ? any : TContext, TChildren>; };
+    after?: { [K in NoInfer<TDelays> | number | DelayDurationKey]?: Next_StaticTransitionConfig<TContext, AfterEvent, TEvent, TActionMap, TActorMap, TGuardMap, TDelayMap, TTransitionMeta> | TransitionConfigFunction<TContext, AfterEvent, TEvent, TODO, // TEmitted
+        TActionMap, TActorMap, TGuardMap, TDelayMap, TTransitionMeta, TInput, [TContext] extends [never] ? any : TContext, TChildren>; };
     always?: TransitionConfigOrTarget<TContext, TEvent, TEvent, TEmitted, TActionMap, TActorMap, TGuardMap, TDelayMap, TTransitionMeta, undefined, TChildren>;
     // (undocumented)
     choice?: never;
@@ -2175,8 +2175,8 @@ export interface RegularStateNodeConfig<TContext extends MachineContext, TEvent 
     // (undocumented)
     schemas?: SetupStateSchemas;
     // Warning: (ae-forgotten-export) The symbol "LookupInput" needs to be exported by the entry point index.d.ts
-    states?: { [K in string]: StateNodeConfig<TContext, TEvent, TDelays, TTag, any // TOutput,
-        , TEmitted, TStateMeta, TChildren, TActionMap, TActorMap, TGuardMap, TDelayMap, LookupInput<TInputMap, K>, TInputMap, TSystemRegistry, TChildOutput, TTransitionMeta>; };
+    states?: { [K in string]: StateNodeConfig<TContext, TEvent, TDelays, TTag, any, // TOutput,
+        TEmitted, TStateMeta, TChildren, TActionMap, TActorMap, TGuardMap, TDelayMap, LookupInput<TInputMap, K>, TInputMap, TSystemRegistry, TChildOutput, TTransitionMeta>; };
     tags?: TTag[];
     target?: string | string[] | undefined;
     timeout?: number | NoInfer<TDelays> | ((args: {
@@ -3425,17 +3425,17 @@ export interface TypeSchema<T> extends StandardSchemaV1<T, T> {
 export type UnifiedArg<TContext extends MachineContext, TExpressionEvent extends EventObject, TEvent extends EventObject> = {
     context: TContext;
     event: TExpressionEvent;
-    self: ActorSelf<MachineSnapshot<TContext, TEvent, Record<string, AnyActorRef | undefined> // TODO: this should be replaced with `TChildren`
-    , StateValue, string, unknown, TODO // TMeta
-    , TODO>, TEvent, AnyEventObject>;
+    self: ActorSelf<MachineSnapshot<TContext, TEvent, Record<string, AnyActorRef | undefined>, // TODO: this should be replaced with `TChildren`
+    StateValue, string, unknown, TODO, // TMeta
+    TODO>, TEvent, AnyEventObject>;
     system: AnyActorSystem;
 } & OutputArg<TExpressionEvent>;
 
 // @public (undocumented)
-export type UnknownActorLogic = ActorLogic<any // snapshot
-, any // event
-, any // input
-, AnyActorSystem, any>;
+export type UnknownActorLogic = ActorLogic<any, // snapshot
+any, // event
+any, // input
+AnyActorSystem, any>;
 
 // @public (undocumented)
 export type UnknownActorRef = ActorRef<Snapshot<unknown>, EventObject>;
@@ -3462,34 +3462,34 @@ export type WithRootSetupStateSchemas<TStateSchemas extends Record<string, Setup
 
 // Warnings were encountered during analysis:
 //
-// dist/base.types-3VgiVUy_.d.ts:199:3 - (ae-forgotten-export) The symbol "EventTypeFromSchemaKey" needs to be exported by the entry point index.d.ts
-// dist/index-DpYRYoBT.d.ts:71:3 - (ae-forgotten-export) The symbol "LogicTransition" needs to be exported by the entry point index.d.ts
-// dist/index-DpYRYoBT.d.ts:171:3 - (ae-forgotten-export) The symbol "Receiver" needs to be exported by the entry point index.d.ts
-// dist/index-DpYRYoBT.d.ts:362:3 - (ae-forgotten-export) The symbol "ObservableActor" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:229:5 - (ae-forgotten-export) The symbol "ConditionJSON" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:277:3 - (ae-forgotten-export) The symbol "PersistedSnapshotFromEntry" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:284:3 - (ae-forgotten-export) The symbol "SnapshotSourceVersion" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:334:3 - (ae-forgotten-export) The symbol "MachineForVersion" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:439:3 - (ae-forgotten-export) The symbol "SetupGuardSources" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:440:3 - (ae-forgotten-export) The symbol "SetupDelaySources" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1277:3 - (ae-forgotten-export) The symbol "StateTransitionConfigOrTarget" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1277:3 - (ae-forgotten-export) The symbol "SetupStateTarget" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1277:3 - (ae-forgotten-export) The symbol "KnownSetupStateTarget" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1405:5 - (ae-forgotten-export) The symbol "ValidateSetupSchemas" needs to be exported by the entry point index.d.ts
-// dist/index-DrUZzeoS.d.ts:1405:5 - (ae-forgotten-export) The symbol "InlineMachineSchemas" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:221:3 - (ae-forgotten-export) The symbol "RemovedTypesKey" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:222:3 - (ae-forgotten-export) The symbol "MachineSchemas" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:224:3 - (ae-forgotten-export) The symbol "GuardSourceMap" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:242:3 - (ae-forgotten-export) The symbol "MachineOptions" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:330:3 - (ae-forgotten-export) The symbol "InvokeSrcArgs" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:333:3 - (ae-forgotten-export) The symbol "ChildIdForLogic" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:1167:5 - (ae-forgotten-export) The symbol "ScheduledTimer" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:1921:5 - (ae-forgotten-export) The symbol "ProvidedActors" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:1923:5 - (ae-forgotten-export) The symbol "DelaySourceMap" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:2056:3 - (ae-forgotten-export) The symbol "DoneEventType" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:2610:3 - (ae-forgotten-export) The symbol "PersistedSnapshotLogicIdentity" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:3484:3 - (ae-forgotten-export) The symbol "EnqueueSpawner" needs to be exported by the entry point index.d.ts
-// dist/types-Dlyzn8C_.d.ts:3488:3 - (ae-forgotten-export) The symbol "SendableEventFromActorRef" needs to be exported by the entry point index.d.ts
+// dist/base.types-DF8ZPiXj.d.ts:196:3 - (ae-forgotten-export) The symbol "EventTypeFromSchemaKey" needs to be exported by the entry point index.d.ts
+// dist/index-D3aZ1VfR.d.ts:70:3 - (ae-forgotten-export) The symbol "LogicTransition" needs to be exported by the entry point index.d.ts
+// dist/index-D3aZ1VfR.d.ts:168:3 - (ae-forgotten-export) The symbol "Receiver" needs to be exported by the entry point index.d.ts
+// dist/index-D3aZ1VfR.d.ts:355:3 - (ae-forgotten-export) The symbol "ObservableActor" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:224:5 - (ae-forgotten-export) The symbol "ConditionJSON" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:270:3 - (ae-forgotten-export) The symbol "PersistedSnapshotFromEntry" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:277:3 - (ae-forgotten-export) The symbol "SnapshotSourceVersion" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:327:3 - (ae-forgotten-export) The symbol "MachineForVersion" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:424:3 - (ae-forgotten-export) The symbol "SetupGuardSources" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:425:3 - (ae-forgotten-export) The symbol "SetupDelaySources" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:1262:3 - (ae-forgotten-export) The symbol "StateTransitionConfigOrTarget" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:1262:3 - (ae-forgotten-export) The symbol "SetupStateTarget" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:1262:3 - (ae-forgotten-export) The symbol "KnownSetupStateTarget" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:1390:5 - (ae-forgotten-export) The symbol "ValidateSetupSchemas" needs to be exported by the entry point index.d.ts
+// dist/index-DsHGsqcA.d.ts:1390:5 - (ae-forgotten-export) The symbol "InlineMachineSchemas" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:218:3 - (ae-forgotten-export) The symbol "RemovedTypesKey" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:219:3 - (ae-forgotten-export) The symbol "MachineSchemas" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:221:3 - (ae-forgotten-export) The symbol "GuardSourceMap" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:239:3 - (ae-forgotten-export) The symbol "MachineOptions" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:327:3 - (ae-forgotten-export) The symbol "InvokeSrcArgs" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:330:3 - (ae-forgotten-export) The symbol "ChildIdForLogic" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:1156:5 - (ae-forgotten-export) The symbol "ScheduledTimer" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:1896:5 - (ae-forgotten-export) The symbol "ProvidedActors" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:1898:5 - (ae-forgotten-export) The symbol "DelaySourceMap" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:2027:3 - (ae-forgotten-export) The symbol "DoneEventType" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:2581:3 - (ae-forgotten-export) The symbol "PersistedSnapshotLogicIdentity" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:3455:3 - (ae-forgotten-export) The symbol "EnqueueSpawner" needs to be exported by the entry point index.d.ts
+// dist/types-DIP-D5GY.d.ts:3459:3 - (ae-forgotten-export) The symbol "SendableEventFromActorRef" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 
