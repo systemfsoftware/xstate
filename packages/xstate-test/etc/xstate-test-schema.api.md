@@ -37,8 +37,8 @@ export type SchemaConverter = (schema: unknown, path: string) => fc.Arbitrary<un
 
 // Warnings were encountered during analysis:
 //
-// dist/schema.d.ts:48:3 - (ae-forgotten-export) The symbol "TestEventGenerators" needs to be exported by the entry point schema.d.ts
-// dist/schema.d.ts:48:3 - (ae-forgotten-export) The symbol "FastCheckGeneratorKind" needs to be exported by the entry point schema.d.ts
+// dist/schema.d.ts:47:3 - (ae-forgotten-export) The symbol "TestEventGenerators" needs to be exported by the entry point schema.d.ts
+// dist/schema.d.ts:47:3 - (ae-forgotten-export) The symbol "FastCheckGeneratorKind" needs to be exported by the entry point schema.d.ts
 
 // (No @packageDocumentation comment for this package)
 

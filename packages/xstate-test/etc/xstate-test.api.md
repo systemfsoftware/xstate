@@ -1059,11 +1059,11 @@ export function withScheduledSut<TSnapshot extends Snapshot<unknown>, TEvent ext
 
 // Warnings were encountered during analysis:
 //
-// dist/index-BRk7kEu4.d.ts:914:3 - (ae-forgotten-export) The symbol "TestTemporalPredicate" needs to be exported by the entry point index.d.ts
-// dist/index-BRk7kEu4.d.ts:1561:3 - (ae-forgotten-export) The symbol "LegacyPortablePropertyReplayFixture" needs to be exported by the entry point index.d.ts
-// dist/propertyTest-BKAwyWQX.d.ts:114:3 - (ae-forgotten-export) The symbol "SnapshotFromSource" needs to be exported by the entry point index.d.ts
-// dist/propertyTest-BKAwyWQX.d.ts:114:3 - (ae-forgotten-export) The symbol "EventFromSource" needs to be exported by the entry point index.d.ts
-// dist/propertyTest-BKAwyWQX.d.ts:114:3 - (ae-forgotten-export) The symbol "InputFromSource" needs to be exported by the entry point index.d.ts
+// dist/index-CSbyUxJr.d.ts:905:3 - (ae-forgotten-export) The symbol "TestTemporalPredicate" needs to be exported by the entry point index.d.ts
+// dist/index-CSbyUxJr.d.ts:1552:3 - (ae-forgotten-export) The symbol "LegacyPortablePropertyReplayFixture" needs to be exported by the entry point index.d.ts
+// dist/propertyTest-BHnBV8ax.d.ts:111:3 - (ae-forgotten-export) The symbol "SnapshotFromSource" needs to be exported by the entry point index.d.ts
+// dist/propertyTest-BHnBV8ax.d.ts:111:3 - (ae-forgotten-export) The symbol "EventFromSource" needs to be exported by the entry point index.d.ts
+// dist/propertyTest-BHnBV8ax.d.ts:111:3 - (ae-forgotten-export) The symbol "InputFromSource" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 
