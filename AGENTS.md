@@ -19,7 +19,7 @@ The `@systemfsoftware/xstate*` packages: systemfsoftware's owned fork of XState 
 | `START-1` | Formatting passes dprint with no diffs              | `pnpm format:check` |
 | `START-2` | Typechecking succeeds workspace-wide with no errors | `pnpm typecheck`    |
 | `START-3` | All test suites pass                                | `pnpm test`         |
-| `START-4` | Full CI validation passes before completion         | `pnpm check:ci`     |
+| `START-4` | CI passes on the pushed head; never run the full gate locally | CI (`pnpm check:ci`) |
 
 Turbo declares `dist/**` as each package's build output; `pnpm gate:dist` runs
 that build. `nix build .#workspace-tarballs` packs every public workspace package
@@ -38,4 +38,4 @@ through pnpm-release-management's `mkPnpmWorkspacePackages`.
 
 ## End of Session
 
-Commit changes using conventional commits (`<type>(<scope>): <subject>`). Ensure the working tree is clean and `pnpm check:ci` passes.
+Commit changes using conventional commits (`<type>(<scope>): <subject>`). Ensure the working tree is clean and pushed; CI runs `pnpm check:ci`, never run it locally.
