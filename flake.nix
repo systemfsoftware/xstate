@@ -45,7 +45,7 @@
     release-tools.url = "github:systemfsoftware/pnpm-release-management/1bd7289bd788e62961016bab46257877d25cef56";
     # Producers: each is pinned to its default-branch commit that pushes
     # `workspace-tarballs`. A producer input carries no `follows`.
-    systemfsoftware.url = "github:systemfsoftware/systemfsoftware/e1c7a5f4655d1705de502ebe0de3c1fa87e35591";
+    systemfsoftware.url = "github:systemfsoftware/systemfsoftware/3ef6c21c36f19a539078b6817b495df3039cc163";
     stryker-js-effect.url = "github:systemfsoftware/stryker-js-effect/bc8680e836d3df9f80dc69770a9a91390447f8f1";
     are-the-types-wrong-effect.url = "github:systemfsoftware/are-the-types-wrong-effect/2650b6a0c6cd3b2abdb7f429a5a55dd5221588ca";
   };

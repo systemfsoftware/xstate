@@ -69,7 +69,7 @@ catalogs:
     react: ^19.3.0
     vitest: ^5
 ignoreScripts: true
-minimumReleaseAge: 1440
+minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
   - effect
   - "@effect/*"
@@ -131,8 +131,6 @@ overrides:
   "@systemfsoftware/stryker-js-vm-runner@npm:@systemfsoftware/stryker-js-vitest-runner@^10.0.0": file:.deps/stryker-js-vitest-runner.tgz
 packages:
   - packages/*
-patchedDependencies:
-  rolldown-plugin-dts@0.28.6: patches/rolldown-plugin-dts@0.28.6.patch
 supportedArchitectures:
   os: [linux, darwin]
   cpu: [x64, arm64]
