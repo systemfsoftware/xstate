@@ -1,7 +1,7 @@
 {
   "name": "@systemfsoftware/xstate-effect",
   "license": "MIT",
-  "version": "0.1.0-alpha.7",
+  "version": "0.1.0",
   "author": "Ryan Lee <drdgvhbh@gmail.com>",
   "repository": {
     "type": "git",
