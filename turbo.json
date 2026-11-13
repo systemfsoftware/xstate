@@ -1,5 +1,8 @@
 {
   "$schema": "https://v2-11-7.turborepo.dev/schema.json",
+  "futureFlags": {
+    "affectedUsingTaskInputs": true
+  },
   "agentGuidance": false,
   "globalPassThroughEnv": [
     "XDG_CACHE_HOME",
