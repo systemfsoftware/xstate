@@ -101,10 +101,10 @@ export interface StandardSchemaValidatorOptions {
 
 // Warnings were encountered during analysis:
 //
-// dist/types-DIP-D5GY.d.ts:866:3 - (ae-forgotten-export) The symbol "AnyActorLogic" needs to be exported by the entry point validation.d.ts
-// dist/types-DIP-D5GY.d.ts:871:3 - (ae-forgotten-export) The symbol "AnyEventObject" needs to be exported by the entry point validation.d.ts
-// dist/types-DIP-D5GY.d.ts:876:3 - (ae-forgotten-export) The symbol "Snapshot" needs to be exported by the entry point validation.d.ts
-// dist/types-DIP-D5GY.d.ts:877:3 - (ae-forgotten-export) The symbol "ExecutableActionObject" needs to be exported by the entry point validation.d.ts
+// dist/types-B2EAwOk-.d.ts:866:3 - (ae-forgotten-export) The symbol "AnyActorLogic" needs to be exported by the entry point validation.d.ts
+// dist/types-B2EAwOk-.d.ts:871:3 - (ae-forgotten-export) The symbol "AnyEventObject" needs to be exported by the entry point validation.d.ts
+// dist/types-B2EAwOk-.d.ts:876:3 - (ae-forgotten-export) The symbol "Snapshot" needs to be exported by the entry point validation.d.ts
+// dist/types-B2EAwOk-.d.ts:877:3 - (ae-forgotten-export) The symbol "ExecutableActionObject" needs to be exported by the entry point validation.d.ts
 
 // (No @packageDocumentation comment for this package)
 
