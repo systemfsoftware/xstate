@@ -23,5 +23,5 @@ jobs:
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
         mkdir -p .cache
         pnpm bootstrap
-      fast: pnpm format:check && sandbox --allow-host jsr.io --allow-host registry.npmjs.org -- pnpm exec turbo run lint lint:tsgo typecheck typecheck:node build attw --filter="...[${BASE}...${HEAD}]"
+      fast: pnpm format:check && sandbox --allow-host jsr.io --allow-host registry.npmjs.org -- env TURBO_SCM_BASE="$BASE" TURBO_SCM_HEAD="$HEAD" pnpm exec turbo run lint lint:tsgo typecheck typecheck:node build attw --affected
       full: pnpm check:ci
