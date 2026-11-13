@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   checks:
-    uses: systemfsoftware/systemfsoftware/.github/workflows/reusable-ci.yml@f271b208fd10c56d27380de6bc43f54b9c7ee2a5
+    uses: systemfsoftware/systemfsoftware/.github/workflows/reusable-ci.yml@ff4d150fc8930510099b285444e96d18d2674786
     with:
       commitlint: true
       changeset: true
@@ -23,5 +23,5 @@ jobs:
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
         mkdir -p .cache
         pnpm bootstrap
-      fast: pnpm format:check && sandbox --allow-host jsr.io --allow-host registry.npmjs.org -- turbo run lint lint:tsgo typecheck typecheck:node build attw --filter="...[${BASE}...${HEAD}]"
+      fast: pnpm format:check && sandbox --allow-host jsr.io --allow-host registry.npmjs.org -- pnpm exec turbo run lint lint:tsgo typecheck typecheck:node build attw --filter="...[${BASE}...${HEAD}]"
       full: pnpm check:ci
