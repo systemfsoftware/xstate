@@ -1,5 +1,9 @@
 name: CI
 
+# One job per pull request. A pull request runs format, lint, typecheck and build on the affected packages. A Mergify queue draft (head ref
+# `mergify/merge-queue/*`) and a push to main run the full command. Mergify builds its drafts as pull requests, so
+# there is no merge_group trigger. The squash-message lint and the change-intent check are steps of the same job.
+# A newer push to a pull request cancels its older run.
 on:
   push:
     branches: [main]
@@ -9,53 +13,15 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  check:
-    name: check (${{ matrix.leg }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - leg: format
-            runs-on: ubuntu-latest
-            gate: pnpm format:check
-          - leg: lint
-            runs-on: ubuntu-latest
-            gate: pnpm lint
-          - leg: typecheck
-            runs-on: ubuntu-latest
-            gate: pnpm typecheck
-          - leg: test
-            runs-on: ubuntu-latest
-            gate: pnpm test
-          - leg: dist
-            runs-on: ubuntu-latest
-            gate: pnpm gate:dist
-    runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 45
-    env:
-      CI: "true"
-      OXLINT_FORMAT: github
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-      - uses: ./.github/actions/dev-shell
-      - name: Turbo cache
-        uses: actions/cache@v6
-        with:
-          path: .turbo/cache
-          key: turbo-${{ runner.os }}-dist-${{ github.sha }}
-          restore-keys: |
-            turbo-${{ runner.os }}-dist-
-            turbo-${{ runner.os }}-
-      - name: Gate
-        run: nix develop --command ${{ matrix.gate }}
-      - name: Workspace tarballs
-        if: matrix.leg == 'dist'
-        run: nix build --no-link --print-build-logs .#workspace-tarballs
+  checks:
+    uses: systemfsoftware/systemfsoftware/.github/workflows/reusable-ci.yml@f271b208fd10c56d27380de6bc43f54b9c7ee2a5
+    with:
+      commitlint: true
+      changeset: true
+      install: |
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        mkdir -p .cache
+        pnpm bootstrap
+      fast: pnpm format:check && sandbox --allow-host jsr.io --allow-host registry.npmjs.org -- turbo run lint lint:tsgo typecheck typecheck:node build attw --filter="...[${BASE}...${HEAD}]"
+      full: pnpm check:ci

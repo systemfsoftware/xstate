@@ -12,6 +12,8 @@ env:
   NIX_CACHE_PUBLIC_KEY: nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=
   EXTRA_OUTPUTS: >-
     sandbox-proofs
+    pnpm-store
+    producer-tarballs
 
 jobs:
   push:

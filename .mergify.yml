@@ -9,24 +9,13 @@ queue_rules:
       # lines must be present. Same checks as default.
       - "commits[*].commit_message ~= (?m)^git-subtree-dir: \\S+$"
       - "commits[*].commit_message ~= (?m)^git-subtree-split: [0-9a-f]{40}$"
-      - check-success = check (dist)
-      - check-success = check (format)
-      - check-success = check (lint)
-      - check-success = check (test)
-      - check-success = check (typecheck)
+      - check-success = checks / check
       - or:
           - check-success = lint PR commits
           - check-skipped = lint PR commits
-      - or:
-          - check-success = a publishable-package change needs an intent
-          - check-skipped = a publishable-package change needs an intent
     # Checked on Mergify's queue draft PR (mergify/merge-queue/*), i.e. CI on the PR rebased with main and any batch.
     merge_conditions:
-      - check-success = check (dist)
-      - check-success = check (format)
-      - check-success = check (lint)
-      - check-success = check (test)
-      - check-success = check (typecheck)
+      - check-success = checks / check
 
   - name: default
     # Checked on the PR itself before it enters the queue.
@@ -44,21 +33,10 @@ queue_rules:
           or:
             - "added-files ~= ^(repos/constitution|repos/worktrunk-scripts|repos/xstate-upstream)/"
             - "modified-files ~= ^(repos/constitution|repos/worktrunk-scripts|repos/xstate-upstream)/"
-      - check-success = check (dist)
-      - check-success = check (format)
-      - check-success = check (lint)
-      - check-success = check (test)
-      - check-success = check (typecheck)
+      - check-success = checks / check
       - or:
           - check-success = lint PR commits
           - check-skipped = lint PR commits
-      - or:
-          - check-success = a publishable-package change needs an intent
-          - check-skipped = a publishable-package change needs an intent
     # Checked on Mergify's queue draft PR (mergify/merge-queue/*), i.e. CI on the PR rebased with main and any batch.
     merge_conditions:
-      - check-success = check (dist)
-      - check-success = check (format)
-      - check-success = check (lint)
-      - check-success = check (test)
-      - check-success = check (typecheck)
+      - check-success = checks / check
