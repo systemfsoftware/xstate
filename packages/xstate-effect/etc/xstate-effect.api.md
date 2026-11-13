@@ -397,16 +397,16 @@ export function withActorScope<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:53:3 - (ae-forgotten-export) The symbol "SnapshotPredicate" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:151:3 - (ae-forgotten-export) The symbol "AnyEffectAction" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:151:3 - (ae-forgotten-export) The symbol "InheritedEffectValidator" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:151:3 - (ae-forgotten-export) The symbol "EffectSetupExtensionConfig" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:151:3 - (ae-forgotten-export) The symbol "MergeRecord" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:151:3 - (ae-forgotten-export) The symbol "ToStandardSetupStates" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:151:3 - (ae-forgotten-export) The symbol "MergeSetupSchemas" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:151:3 - (ae-forgotten-export) The symbol "ToStandardSetupSchemas" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:151:3 - (ae-forgotten-export) The symbol "CoreEffectActionMap" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:151:3 - (ae-forgotten-export) The symbol "ResolveExtendedValidator" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:52:3 - (ae-forgotten-export) The symbol "SnapshotPredicate" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:148:3 - (ae-forgotten-export) The symbol "AnyEffectAction" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:148:3 - (ae-forgotten-export) The symbol "InheritedEffectValidator" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:148:3 - (ae-forgotten-export) The symbol "EffectSetupExtensionConfig" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:148:3 - (ae-forgotten-export) The symbol "MergeRecord" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:148:3 - (ae-forgotten-export) The symbol "ToStandardSetupStates" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:148:3 - (ae-forgotten-export) The symbol "MergeSetupSchemas" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:148:3 - (ae-forgotten-export) The symbol "ToStandardSetupSchemas" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:148:3 - (ae-forgotten-export) The symbol "CoreEffectActionMap" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:148:3 - (ae-forgotten-export) The symbol "ResolveExtendedValidator" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

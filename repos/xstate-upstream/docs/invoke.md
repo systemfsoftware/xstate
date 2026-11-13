@@ -28,13 +28,30 @@ const machine = createMachine({
 
 Use an actor instead of an action when work is async, can be canceled, sends snapshots or affects the next state. Common examples are payment authorization and file uploads.
 
+## Invoke or spawn
+
+Invoking and [spawning](spawn.md) both create a child actor. They differ in who controls the child's lifetime.
+
+- **Invoke** ties the child to a state. Entering the state starts the child, exiting the state stops it, and `onDone` and `onError` transitions handle its completion.
+- **Spawn** creates a child whose lifetime you manage. `enq.spawn(...)` in a transition function, or `spawn` in a context initializer, starts the child. It runs until it completes, until `enq.stop(ref)` stops it, or until the parent stops. Exiting the state that spawned it does not stop it.
+
+| | Invoke | Spawn |
+| --- | --- | --- |
+| Lifetime | The invoking state: started on entry, stopped on exit | Until it completes, `enq.stop(ref)`, or the parent stops |
+| Declared in | `invoke` on a state node or the machine root | `enq.spawn(...)` in a transition function, or `spawn` in a context initializer |
+| How many | Fixed by the config | Any number, decided at runtime |
+| Completion handling | `onDone`, `onError`, `onSnapshot` transitions | `enq.subscribeTo(...)`, `enq.listen(...)` |
+| Persistence | Restored with the parent, including inline logic | Restored with the parent when the source is registered in `actors`; inline logic cannot be persisted |
+
+Invoke a payment actor for the `authorizing` state. Spawn one upload actor per selected file, one participant actor per person in a call, or one track actor per queued item in a media player.
+
 ## Invoke properties
 
 | Property | Description |
 | --- | --- |
 | `src` | Required. The [actor logic](actor-logic.md) to run: a logic value, the name of logic registered in `actors`, or a function that returns either. |
-| `id` | Identifier for the child. Defaults to a generated id based on the state node. |
-| `input` | [Input](input-output.md) for the child: a value, or a function of `{ context, event, self }`. |
+| `id` | Identifier for the child. Defaults to `<stateId>:<index>`, such as `loading:0` for the first invoke of state `loading`. |
+| `input` | [Input](input-output.md) for the child: a value, or a function of `{ context, event, self }`. Required when the logic's input type excludes `undefined`, for example when it declares `schemas.input`. |
 | `registryKey` | Registers the child in the [actor registry](systems.md) under that key. |
 | `timeout` | Milliseconds, or a function of `{ context, event }` returning milliseconds. |
 | `onTimeout` | Transition taken when `timeout` elapses. Required when `timeout` is set. |
@@ -50,6 +67,8 @@ invoke: [
   { src: syncLogic, id: 'sync', onError: { target: 'offline' } }
 ]
 ```
+
+An input mapper receives the parent machine's typed `context` and `event`, including when a registered actor accepts `unknown` or `any` input. Actors with a specific input type still check both static inputs and mapper return values.
 
 ## Typed inline invokes
 
@@ -93,7 +112,7 @@ const machine = s.createMachine({
 
 Keep the helper call inline: its enclosing state supplies narrowed context, ancestor context, state input and transition targets. In this example, `context.userId` is `string` and `event.output` is `{ name: string }`.
 
-For an async `src`, `schemas.input` types the actor input, `schemas.output` checks the function's resolved value and types `onDone.event.output`, and `schemas.error` types `onError.event.error`. Omit the output schema to infer output from the async return value. The function receives `{ input, signal, self, system }` and the async enqueue object, including `emit` and `step`, just like `createAsyncLogic`. Its input comes from the invoke's static value or input mapper; parent context stays in the mapper and transition handlers.
+For an async `src`, `schemas.input` types the actor input, `schemas.output` checks the function's resolved value and types `onDone.event.output`, and `schemas.error` types `onError.event.error`. Omit the output schema to infer output from the async return value. The function receives `{ input, signal, self, system }` and the async enqueue object, including `emit` and `step`, as `createAsyncLogic` does. Its input comes from the invoke's static value or input mapper; parent context stays in the mapper and transition handlers.
 
 You can also pass an existing actor logic value, including machine and callback logic:
 
@@ -105,19 +124,27 @@ invoke: s.createInvoke({
 })
 ```
 
+A bare inline invoke such as `{ src: loadUserLogic, onDone }` cannot correlate
+that specific logic with its completion output. With no registered actor
+sources, its `onDone.event.output` is `unknown`, so TypeScript requires
+narrowing before it can be used. For a typed output, use
+`s.createInvoke({ src: loadUserLogic, onDone })` as above, or register the logic
+in `setup({ actors: { loadUserLogic } })` and invoke it with
+`src: 'loadUserLogic'`. Prefer one of these typed forms when generating code.
+
 For a logic value, its own schemas determine input, output, error and snapshot types. Declare schemas on that logic rather than repeating them on the invoke.
 
 The helper requires `input` when the source's input type excludes `undefined`. Pass a static value or a mapper returning that input type. Logic that accepts `undefined` can omit `input`.
 
 Child contracts from `schemas.children` apply whether declared in `setup(...)` or `s.createMachine(...)`: supply a declared `id` and compatible `src`. This check also applies to hoisted configs when used in the machine.
 
-The helper supports the usual invoke options, including invoke arrays and setups with other registered actors. Async functions are wrapped in async actor logic without starting work; logic-value configs are returned unchanged. Child startup, cancellation, timeouts and persistence follow the normal invoke lifecycle.
+The helper supports the usual invoke options, including invoke arrays and setups with other registered actors. Child startup, cancellation, timeouts and persistence follow the normal invoke lifecycle.
 
-Inference follows the declared source types. A source typed as `AnyActorLogic` retains its erased types, and errors without a schema remain `unknown`.
+Keep the source's specific actor logic type to infer its input and output; an `AnyActorLogic` annotation loses that information. Declare an error schema to type errors; otherwise they are `unknown`.
 
 A helper call made outside a machine has only setup-level context. To extract a config while keeping a specific state's scope, put the inline helper inside `s.createStateConfig('loading', { invoke: s.createInvoke(...) })`.
 
-For a hoisted helper, a targetless object-form `onDone.context` mapper currently needs an explicit argument annotation. Prefer function-form `onDone: ({ event }) => ({ context: ... })` to retain completion-output inference without an annotation.
+For a helper extracted outside the machine, use function-form `onDone: ({ event }) => ({ context: ... })` to infer completion output. A targetless object-form `onDone.context` mapper needs an explicit argument annotation.
 
 ## Actor lifecycle
 
@@ -208,7 +235,7 @@ See [transitions](transitions.md) for `matches` and the full list of lifecycle e
 
 ## Timing out an invocation
 
-`timeout` bounds how long the invocation may run. When it elapses, `onTimeout` is taken and the child is stopped by exiting the state. When the child finishes first, the timeout is canceled.
+`timeout` bounds how long the invocation may run. When it elapses, `onTimeout` is taken. A handler that exits the owning state stops the child; a targetless handler leaves it running unless it calls `enq.stop(...)`. When the child finishes first, the timeout is canceled.
 
 ```ts
 authorizing: {
@@ -221,7 +248,7 @@ authorizing: {
 }
 ```
 
-Setting `timeout` without `onTimeout` throws when the machine is created. Use `createAsyncLogic({ timeout })` instead when the timeout belongs to the logic rather than to this particular invocation. See [timeouts](timeouts.md).
+Setting `timeout` without `onTimeout` throws when the machine is created in development builds. Use `createAsyncLogic({ timeout })` instead when the timeout belongs to the logic rather than to this particular invocation. See [timeouts](timeouts.md).
 
 ## Referencing the child
 
@@ -249,7 +276,7 @@ const paymentMachine = createMachine({
 
 ## Persistence
 
-Invoked children are persisted with the parent snapshot and restored by `createActor(machine, { snapshot })`. A child restored this way keeps its context but gets a new session.
+Invoked children are persisted with the parent snapshot and restored by `restoreActor(machine, persisted)` from `xstate/persist`. A child restored this way keeps its context but gets a new session.
 
 Register logic in `actors` and reference it by name when the persisted snapshot should stay readable and stable across refactors:
 
@@ -287,13 +314,37 @@ Invoke also is not the right tool when the child must outlive the state, or when
 
 Provide named actor logic through `setup({ actors })` or `createMachine({ actors })`. XState correlates `src` with `input`, so a static or mapped input is checked against that logic's input type, and `onDone` sees the output type of that logic.
 
-Declare child ids with `schemas.children` to type `children` and to check that each `id` receives compatible logic:
+For a literal invoke `id` and a named or inline actor source, XState infers the
+child reference in `snapshot.children`. The child may be absent when the invoke
+state is inactive, so check for `undefined` before sending an event:
+
+```ts
+import { createActor, setup, types } from 'xstate';
+
+const paymentMachine = setup({
+  schemas: { events: { retry: types<{}>() } }
+}).createMachine({ initial: 'idle', states: { idle: {} } });
+
+const parent = setup({ actors: { paymentMachine } }).createMachine({
+  invoke: { id: 'payment', src: 'paymentMachine' }
+});
+
+const payment = createActor(parent).getSnapshot().children.payment;
+payment?.send({ type: 'retry' });
+```
+
+Declare child ids with `schemas.children` when the child contract must also be
+available inside machine callbacks. This also checks that each declared `id`
+receives compatible logic. For dynamic IDs, keep the returned child reference
+from `enq.spawn(...)` in context instead of indexing `snapshot.children` with
+an arbitrary string. Spawned children have a separately managed lifetime; see
+[Spawn](spawn.md):
 
 ```ts
 setup({}).createMachine({
   schemas: {
     children: {
-      payment: z.custom<ActorRefFromLogic<typeof paymentMachine>>()
+      payment: z.custom<ActorRefFrom<typeof paymentMachine>>()
     }
   },
   invoke: { id: 'payment', src: paymentMachine }
@@ -320,7 +371,7 @@ setup({
   schemas: {
     events: { retry: z.object({}) },
     children: {
-      fetch: z.custom<ActorRefFromLogic<typeof fetchUser>>()
+      fetch: z.custom<ActorRefFrom<typeof fetchUser>>()
     }
   }
 }).createMachine({

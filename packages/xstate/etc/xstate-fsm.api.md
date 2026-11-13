@@ -93,12 +93,12 @@ export function types<T>(): TypeSchema<T>;
 
 // Warnings were encountered during analysis:
 //
-// dist/fsm.d.ts:27:3 - (ae-forgotten-export) The symbol "FSMOn" needs to be exported by the entry point fsm.d.ts
-// dist/fsm.d.ts:134:3 - (ae-forgotten-export) The symbol "FSMSetupMachineConfig" needs to be exported by the entry point fsm.d.ts
-// dist/fsm.d.ts:134:3 - (ae-forgotten-export) The symbol "FSMContextFromStates" needs to be exported by the entry point fsm.d.ts
-// dist/fsm.d.ts:134:3 - (ae-forgotten-export) The symbol "FSMSetupContext" needs to be exported by the entry point fsm.d.ts
-// dist/fsm.d.ts:134:3 - (ae-forgotten-export) The symbol "FSMSetupEvents" needs to be exported by the entry point fsm.d.ts
-// dist/fsm.d.ts:134:3 - (ae-forgotten-export) The symbol "FSMSetupSnapshot" needs to be exported by the entry point fsm.d.ts
+// dist/fsm.d.ts:26:3 - (ae-forgotten-export) The symbol "FSMOn" needs to be exported by the entry point fsm.d.ts
+// dist/fsm.d.ts:133:3 - (ae-forgotten-export) The symbol "FSMSetupMachineConfig" needs to be exported by the entry point fsm.d.ts
+// dist/fsm.d.ts:133:3 - (ae-forgotten-export) The symbol "FSMContextFromStates" needs to be exported by the entry point fsm.d.ts
+// dist/fsm.d.ts:133:3 - (ae-forgotten-export) The symbol "FSMSetupContext" needs to be exported by the entry point fsm.d.ts
+// dist/fsm.d.ts:133:3 - (ae-forgotten-export) The symbol "FSMSetupEvents" needs to be exported by the entry point fsm.d.ts
+// dist/fsm.d.ts:133:3 - (ae-forgotten-export) The symbol "FSMSetupSnapshot" needs to be exported by the entry point fsm.d.ts
 
 // (No @packageDocumentation comment for this package)
 

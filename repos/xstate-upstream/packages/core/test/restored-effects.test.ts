@@ -1,10 +1,11 @@
 import {
   createActor,
   createCallbackLogic,
-  createLogic,
+  createStepLogic,
   createAsyncLogic,
   waitFor
 } from '../src/index.ts';
+import { restoreActor } from '../src/persist/index.ts';
 
 it('reattaches a JSON-restored callback and cleans up each incarnation', () => {
   const receive = vi.fn();
@@ -18,7 +19,7 @@ it('reattaches a JSON-restored callback and cleans up each incarnation', () => {
   const first = createActor(logic).start();
   const snapshot = JSON.parse(JSON.stringify(first.getPersistedSnapshot()));
   first.stop();
-  const restored = createActor(logic, { snapshot }).start();
+  const restored = restoreActor(logic, snapshot).start();
   restored.send({ type: 'PING' });
   expect(start).toHaveBeenCalledTimes(2);
   expect(receive).toHaveBeenCalledExactlyOnceWith({ type: 'PING' });
@@ -29,7 +30,7 @@ it('reattaches a JSON-restored callback and cleans up each incarnation', () => {
 it('reattaches active keyed effects without replaying completed effects', () => {
   const active = vi.fn();
   const completed = vi.fn();
-  const logic = createLogic({
+  const logic = createStepLogic({
     context: undefined,
     run: (_, enq) => {
       enq.effect('active', active);
@@ -40,7 +41,7 @@ it('reattaches active keyed effects without replaying completed effects', () => 
   const snapshot = JSON.parse(JSON.stringify(first.getPersistedSnapshot()));
   snapshot.effects.completed = { status: 'done', output: 42 };
   first.stop();
-  const restored = createActor(logic, { snapshot }).start();
+  const restored = restoreActor(logic, snapshot).start();
   restored.send({ type: 'PING' });
   expect(active).toHaveBeenCalledTimes(2);
   expect(completed).toHaveBeenCalledTimes(1);
@@ -72,7 +73,7 @@ it.each(['constructor', 'toString', '__proto__'])(
   'journals and restores an effect keyed %s',
   (key) => {
     const run = vi.fn();
-    const logic = createLogic({
+    const logic = createStepLogic({
       context: undefined,
       run: (_, enq) => enq.effect(key, run)
     });
@@ -82,7 +83,7 @@ it.each(['constructor', 'toString', '__proto__'])(
     expect(Object.hasOwn(snapshot.effects, key)).toBe(true);
     expect(snapshot.effects[key]).toEqual({ status: 'active' });
     first.stop();
-    const restored = createActor(logic, { snapshot }).start();
+    const restored = restoreActor(logic, snapshot).start();
     expect(run).toHaveBeenCalledTimes(2);
     restored.stop();
   }
@@ -104,7 +105,7 @@ it.each(['constructor', 'toString', '__proto__'])(
     const snapshot = JSON.parse(JSON.stringify(first.getPersistedSnapshot()));
     expect(Object.hasOwn(snapshot.effects, key)).toBe(true);
     first.stop();
-    const restored = createActor(logic, { snapshot }).start();
+    const restored = restoreActor(logic, snapshot).start();
     expect(await result).toBe(42);
     expect(work).toHaveBeenCalledTimes(1);
     restored.stop();
@@ -116,7 +117,7 @@ it.each(['constructor', 'toString'])(
   (key) => {
     const run = vi.fn();
     const actor = createActor(
-      createLogic({
+      createStepLogic({
         context: undefined,
         run: ({ event }, enq) => {
           if (event.type === 'RUN') enq.effect(key, run);
@@ -138,7 +139,7 @@ it('drains all attachment cleanups once when the first throws', () => {
   const later = vi.fn();
   const observed = vi.fn();
   const actor = createActor(
-    createLogic({
+    createStepLogic({
       context: undefined,
       run: (_, enq) => {
         enq.effect('first', () => failed);

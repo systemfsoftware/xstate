@@ -3,12 +3,14 @@ import {
   EventObject,
   Snapshot,
   StateNode,
-  createLogic,
+  createAsyncLogic,
+  createStepLogic,
   createMachine,
   isMachineSnapshot
 } from '../../index.ts';
 import { createMockActorScope } from '../actorScope.ts';
 import {
+  type DirectedGraphNode,
   StatePath,
   getPathsFromEvents,
   getShortestPaths,
@@ -17,7 +19,6 @@ import {
   joinPaths,
   toDirectedGraph
 } from '../index.ts';
-import { createStateConfig } from '../../createMachine.ts';
 
 function getPathsSnapshot(
   paths: Array<StatePath<Snapshot<unknown>, EventObject>>
@@ -47,32 +48,6 @@ function getPathSnapshot(path: StatePath<Snapshot<unknown>, any>): {
 }
 
 describe('@xstate/graph', () => {
-  const pedestrianStates = createStateConfig({
-    initial: 'walk',
-    states: {
-      walk: {
-        on: {
-          // PED_COUNTDOWN: {
-          //   target: 'wait',
-          //   actions: ['startCountdown']
-          // }
-          PED_COUNTDOWN: (_, enq) => {
-            enq(function startCountdown() {});
-
-            return { target: 'wait' };
-          }
-        }
-      },
-      wait: {
-        on: {
-          PED_COUNTDOWN: { target: 'stop' }
-        }
-      },
-      stop: {},
-      flashing: {}
-    }
-  });
-
   const lightMachine = createMachine({
     id: 'light',
     initial: 'green',
@@ -110,8 +85,27 @@ describe('@xstate/graph', () => {
           TIMER: { target: 'green' },
           POWER_OUTAGE: { target: 'red.flashing' }
         },
-        ...pedestrianStates
-      } as any
+
+        initial: 'walk',
+        states: {
+          walk: {
+            on: {
+              PED_COUNTDOWN: (_, enq) => {
+                enq(function startCountdown() {});
+
+                return { target: 'wait' };
+              }
+            }
+          },
+          wait: {
+            on: {
+              PED_COUNTDOWN: { target: 'stop' }
+            }
+          },
+          stop: {},
+          flashing: {}
+        }
+      }
     }
   });
 
@@ -243,7 +237,9 @@ describe('@xstate/graph', () => {
     });
 
     it.skip('should not throw when a condition is present', () => {
-      expect(() => getShortestPaths(condMachine)).not.toThrow();
+      expect(() =>
+        getShortestPaths(condMachine, { events: { EVENT: [{ id: 'foo' }] } })
+      ).not.toThrow();
     });
 
     it.skip('should represent conditional paths based on context', () => {
@@ -541,7 +537,7 @@ describe('@xstate/graph', () => {
         .toMatchInlineSnapshot(`
         [
           [
-            "@xstate.init",
+            "xstate.init",
             "NEXT",
             "ALLOW",
             "PROCEED",
@@ -589,7 +585,7 @@ describe('@xstate/graph', () => {
 
     it('does not treat custom logic with a getStateNodeById property as a machine', () => {
       const logic = Object.assign(
-        createLogic({
+        createStepLogic({
           context: 0,
           run: ({ context, event }) => {
             if (event.type === 'INC') {
@@ -654,11 +650,65 @@ describe('@xstate/graph', () => {
         'light'
       );
     });
+
+    const edgesOf = (node: DirectedGraphNode): string[] => [
+      ...node.edges.map(
+        (edge) => `${edge.source.key} -${edge.label.text}-> ${edge.target.key}`
+      ),
+      ...node.children.flatMap(edgesOf)
+    ];
+
+    it('does not draw a transition function as a self-loop', () => {
+      const machine = createMachine({
+        id: 'light',
+        context: { queue: 2 },
+        initial: 'green',
+        states: {
+          green: { on: { TIMER: { target: 'yellow' }, NOOP: {} } },
+          yellow: {
+            on: {
+              TIMER: ({ context }) =>
+                context.queue > 0 ? { target: 'red' } : { target: 'green' }
+            }
+          },
+          red: {}
+        }
+      });
+
+      expect(edgesOf(toDirectedGraph(machine))).toEqual([
+        'green -TIMER-> yellow',
+        'green -NOOP-> green'
+      ]);
+    });
+
+    it('does not draw the transitions of an invoke with a timeout as self-loops', () => {
+      const machine = createMachine({
+        id: 'upload',
+        initial: 'saving',
+        states: {
+          saving: {
+            invoke: {
+              src: createAsyncLogic({ run: async () => 'ok' }),
+              timeout: 5000,
+              onDone: { target: 'done' },
+              onError: { target: 'failed' },
+              onTimeout: { target: 'failed' }
+            }
+          },
+          done: { type: 'final' },
+          failed: { type: 'final' }
+        }
+      });
+
+      expect(edgesOf(toDirectedGraph(machine))).toEqual([
+        'saving -xstate.timeout.actor-> failed'
+      ]);
+    });
   });
 });
 
 it('simple paths for transition functions', () => {
-  const transition = createLogic({
+  const transition = createStepLogic({
     context: 0,
     run: ({ context, event }) => {
       if (event.type === 'a') {
@@ -682,7 +732,7 @@ it('simple paths for transition functions', () => {
 });
 
 it('shortest paths for transition functions', () => {
-  const transition = createLogic({
+  const transition = createStepLogic({
     context: 0,
     run: ({ context, event }) => {
       if (event.type === 'a') {
@@ -857,7 +907,7 @@ describe('joinPaths()', () => {
     expect(pathToBAndC.steps.map((step) => step.event.type))
       .toMatchInlineSnapshot(`
         [
-          "@xstate.init",
+          "xstate.init",
           "NEXT",
           "TO_C",
         ]

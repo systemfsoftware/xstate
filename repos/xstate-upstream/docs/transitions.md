@@ -15,7 +15,7 @@ idle: { on: { start: { target: 'active' } } }
 
 | Property | Description |
 | --- | --- |
-| `target` | Target state or states. |
+| `target` | Target state or states: a sibling key, a `.`-separated path, a `.child` descendant, or a `#id` (a state's whole explicit or implicit id; see [target by id](#target-by-id)). Escape a literal dot in a key as `\\.`. |
 | `matches` | Event payload that must match. |
 | `context` | Context patch or mapper. |
 | `input` | Input for the target state. |
@@ -24,8 +24,7 @@ idle: { on: { start: { target: 'active' } } }
 | `description` | Human-readable description. |
 
 Use `schemas.transitionMeta` to type transition metadata separately from state
-metadata. If omitted, transition metadata uses `schemas.meta` for backwards
-compatibility.
+metadata. If omitted, transition metadata uses `schemas.meta`.
 
 ```ts
 schemas: {
@@ -34,7 +33,7 @@ schemas: {
 }
 ```
 
-There is no `guard` property. Conditions live inside the transition function, which returns `undefined` to reject the event. See [guards](guards.md).
+There is no `guard` property. Conditions live inside the transition function, which returns `undefined` to reject the event. Check the condition before calling `enq`: a function that calls `enq` is taken even if it returns `undefined`. See [guards](guards.md).
 
 A targetless transition can update context and run effects without leaving the current state. Set `reenter: true` when a self-transition should run exit and entry behavior again.
 
@@ -47,7 +46,41 @@ on: {
 }
 ```
 
+## Target by id
+
+A `#` target names one state by its id. The text after `#` is matched exactly against the state ids and is never split into a path. A state's id is its explicit `id`, or else its implicit id: the path from the root joined by `.`, prefixed by the machine `id` when there is one.
+
+```ts
+const machine = createMachine({
+  id: 'shop',
+  initial: 'browsing',
+  states: {
+    browsing: {
+      on: {
+        edit: { target: '#flow' },
+        review: { target: '#shop.wizard.review' }
+      }
+    },
+    wizard: {
+      id: 'flow',
+      initial: 'details',
+      states: { details: {}, review: {} }
+    }
+  }
+});
+```
+
+`#flow` targets `wizard` by its explicit id. `#shop.wizard.review` targets `review` by its implicit id. `#flow.review` is not a valid target: no state has the id `flow.review`, and an id is not combined with a relative path. Creating the machine with it throws:
+
+```
+No state has id "flow.review". Use "#shop.wizard.review", or give that state an id.
+```
+
+Only an id followed by a path fails. Any whole id is a valid target, including an explicit id that contains dots: `id: 'checkout.v2'` is targeted as `#checkout.v2`, without escaping. Key segments in implicit ids keep their `\\.` escapes (`#shop.foo\\.bar`).
+
 ## Transition functions
+
+See [transition functions and graph analysis](transition-functions.md) for why functions preserve type narrowing, how to keep destinations visible and the limits of static extraction.
 
 ```ts
 submit: ({ context, event }, enq) => {
@@ -55,12 +88,14 @@ submit: ({ context, event }, enq) => {
   enq(() => console.log('Submitted', event));
   return {
     target: 'submitting',
-    context: { ...context, submittedAt: Date.now() }
+    context: { ...context, submittedAt: event.submittedAt }
   };
 }
 ```
 
-Returning `undefined` prevents the transition.
+Pass `submittedAt` in the event from the caller. Reading wall time or randomness inside a transition makes replay nondeterministic; see [durable execution](durable-execution.md#determinism-constraints).
+
+Returning `undefined` prevents the transition, unless the function already called `enq`: any `enq` call selects the transition, which then runs as a targetless transition with the queued effects. That is why the example returns before enqueuing.
 
 Transition functions must be synchronous. A transition function that returns a promise throws an execution error, which a state `onError` can recover. Move async work into an invoked or spawned actor, or into an effect enqueued with `enq(...)`. The `enq` handle is only valid while the function runs: calling `enq.*` after the function returned throws in development and does nothing in production.
 
@@ -88,7 +123,7 @@ Internal lifecycle events use stable category types and carry the identity of wh
 | `xstate.timeout.actor` | `actorId`, `sessionId` |
 | `xstate.done.state` | `stateId` |
 | `xstate.after` | `stateId`, `delay` |
-| `xstate.timeout` | `stateId` |
+| `xstate.timeout.state` | `stateId` |
 
 Use `matches` to select one payload of an event type:
 
@@ -105,7 +140,7 @@ on: {
 
 ## One transition per event
 
-Transition arrays are not accepted by the authoring APIs. An event maps to a single transition. Return a target from a transition function to choose among several, and use `matches` to select a payload. Serialized transition arrays are still accepted by `createMachineFromConfig(...)`.
+Transition arrays are not accepted by the authoring APIs. An event maps to a single transition. Return a target from a transition function to choose among several, and use `matches` to select a payload. Serialized transition arrays are still accepted by `machineFromJSON(...)`.
 
 ```ts
 on: {
@@ -131,7 +166,7 @@ if (isUnhandled(snapshot, result)) {
 }
 ```
 
-A running actor reports an unhandled event through the `onUnhandledEvent` option of `createActor(...)`. In the [inspection](inspection.md) stream, the `@xstate.transition` event for an unhandled event carries the unchanged snapshot reference. Development builds also log a warning once per event type per actor. Internal `xstate.*` events are not reported.
+A running actor reports an unhandled event through the `onUnhandledEvent` option of `createActor(...)`. In the [inspection](inspection.md) stream, the `@xstate.transition` event for an unhandled event carries the unchanged snapshot reference. Development builds also log a warning once per event type per actor. Reserved lifecycle and timer events delivered by actors, and actor stop events, are not reported. Unhandled events sent through `actor.send(...)` or between actors are reported even when their names start with `xstate.`, including obsolete names such as `xstate.done.actor.save`.
 
 ## TypeScript
 
@@ -148,4 +183,5 @@ after: { 1000: { target: 'idle' } }
 on: { 'xstate.done.actor': { matches: { actorId: 'job' }, target: 'done' } }
 onDone: { target: 'success' }
 onError: { target: 'failure' }
+on: { edit: { target: '#flow' } } // whole explicit or implicit id
 ```

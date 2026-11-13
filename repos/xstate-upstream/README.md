@@ -25,7 +25,7 @@ It uses event-driven programming, state machines, statecharts, and the actor mod
 
 <!-- documentation sections from docs/meta.json -->
 
-[Start](docs/quick-start.md) · [Learn](docs/why-state-machines.md) · [Build](docs/async-requests.md) · [Reference](docs/configuration.md) · [Migrate](docs/xstate-v5-to-v6.md)
+[Start](docs/quick-start.md) · [Learn](docs/why-state-machines.md) · [Build](docs/async-requests.md) · [Reference](docs/configuration.md) · [Transition functions](docs/transition-functions.md) · [Typestates](docs/typestates.md) · [Migrate](docs/xstate-v5-to-v6.md)
 
 ➡️ [Create state machines with the Stately Editor](https://stately.ai/editor)
 
@@ -43,7 +43,7 @@ Pick based on what you need:
 
 <!-- package choices from packages/core/src/index.ts, packages/core/src/fsm/index.ts, packages/xstate-store/src/index.ts, and packages/xstate-effect/src/index.ts -->
 
-- **[`@xstate/store`](#xstate-store)**: simple event-based state management. <1kb, great TypeScript inference, similar in spirit to Redux/Zustand. Start here if you just need a store.
+- **[`@xstate/store`](#xstate-store)**: simple event-based state management and reactive atoms, with great TypeScript inference, similar in spirit to Redux/Zustand. Start here if you just need a store.
 - **[`@xstate/effect`](https://github.com/statelyai/xstate/tree/main/packages/xstate-effect)**: Effect 4 integration for XState v6 actors, schemas, typed requirements/errors, streams, and Effect actions.
 - **[`xstate/fsm`](docs/fsm.md)**: tiny pure flat finite state machines with context and TypeScript support.
 - **[`xstate`](#super-quick-start)**: state machines, statecharts, actors, effects, and orchestration for complex app logic.
@@ -84,7 +84,7 @@ Get started by forking one of these templates on CodeSandbox:
 </td>
 <td>
 
-- XState v6 alpha
+- XState v6 beta
 - TypeScript
 - _No framework_
 
@@ -102,7 +102,7 @@ Get started by forking one of these templates on CodeSandbox:
 <td>
 
 - [React](https://react.dev/)
-- XState v6 alpha
+- XState v6 beta
 - TypeScript
 
 </td>
@@ -119,7 +119,7 @@ Get started by forking one of these templates on CodeSandbox:
 <td>
 
 - [Vue](https://vuejs.org/)
-- XState v6 alpha
+- XState v6 beta
 - TypeScript
 
 </td>
@@ -136,7 +136,7 @@ Get started by forking one of these templates on CodeSandbox:
 <td>
 
 - [Svelte 5](https://svelte.dev/)
-- XState v6 alpha
+- XState v6 beta
 - TypeScript
 
 </td>
@@ -150,7 +150,7 @@ Get started by forking one of these templates on CodeSandbox:
 <!-- install command matching packages/core/package.json#version and example matching the XState v6 API -->
 
 ```bash
-npm install xstate@alpha
+npm install xstate@beta
 ```
 
 ```ts
@@ -258,10 +258,12 @@ Read [📽 the slides](http://slides.com/davidkpiano/finite-state-machines) ([�
 
 ## Packages
 
+<!-- @xstate/store description from packages/xstate-store/src/index.ts and package.json -->
+
 | Package                                                                                     | Description                                                                                                                  |
 | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | 🤖 `xstate`                                                                                 | Core finite state machine and statecharts library + interpreter, including graph traversal and model-based testing utilities |
-| [🏪 `@xstate/store`](https://github.com/statelyai/xstate/tree/main/packages/xstate-store)   | Simple event-based state management (<1kb) — standalone, works with or without `xstate`                                      |
+| [🏪 `@xstate/store`](https://github.com/statelyai/xstate/tree/main/packages/xstate-store)   | Simple event-based state management and reactive atoms — standalone, works with or without `xstate`                                      |
 | [✨ `@xstate/effect`](https://github.com/statelyai/xstate/tree/main/packages/xstate-effect)  | Effect 4 integration for XState v6 actors, schemas, typed requirements/errors, streams, and Effect actions                   |
 | [⚛️ `@xstate/react`](https://github.com/statelyai/xstate/tree/main/packages/xstate-react)   | React hooks and utilities for using XState in React applications                                                             |
 | [💚 `@xstate/vue`](https://github.com/statelyai/xstate/tree/main/packages/xstate-vue)       | Vue composition functions and utilities for using XState in Vue applications                                                 |
@@ -286,17 +288,17 @@ const lightMachine = createMachine({
   states: {
     green: {
       on: {
-        TIMER: 'yellow'
+        TIMER: { target: 'yellow' }
       }
     },
     yellow: {
       on: {
-        TIMER: 'red'
+        TIMER: { target: 'red' }
       }
     },
     red: {
       on: {
-        TIMER: 'green'
+        TIMER: { target: 'green' }
       }
     }
   }
@@ -345,12 +347,12 @@ const pedestrianStates = {
   states: {
     walk: {
       on: {
-        PED_TIMER: 'wait'
+        PED_TIMER: { target: 'wait' }
       }
     },
     wait: {
       on: {
-        PED_TIMER: 'stop'
+        PED_TIMER: { target: 'stop' }
       }
     },
     stop: {}
@@ -363,17 +365,17 @@ const lightMachine = createMachine({
   states: {
     green: {
       on: {
-        TIMER: 'yellow'
+        TIMER: { target: 'yellow' }
       }
     },
     yellow: {
       on: {
-        TIMER: 'red'
+        TIMER: { target: 'red' }
       }
     },
     red: {
       on: {
-        TIMER: 'green'
+        TIMER: { target: 'green' }
       },
       ...pedestrianStates
     }
@@ -431,10 +433,10 @@ const wordMachine = createMachine({
       initial: 'off',
       states: {
         on: {
-          on: { TOGGLE_BOLD: 'off' }
+          on: { TOGGLE_BOLD: { target: 'off' } }
         },
         off: {
-          on: { TOGGLE_BOLD: 'on' }
+          on: { TOGGLE_BOLD: { target: 'on' } }
         }
       }
     },
@@ -442,10 +444,10 @@ const wordMachine = createMachine({
       initial: 'off',
       states: {
         on: {
-          on: { TOGGLE_UNDERLINE: 'off' }
+          on: { TOGGLE_UNDERLINE: { target: 'off' } }
         },
         off: {
-          on: { TOGGLE_UNDERLINE: 'on' }
+          on: { TOGGLE_UNDERLINE: { target: 'on' } }
         }
       }
     },
@@ -453,10 +455,10 @@ const wordMachine = createMachine({
       initial: 'off',
       states: {
         on: {
-          on: { TOGGLE_ITALICS: 'off' }
+          on: { TOGGLE_ITALICS: { target: 'off' } }
         },
         off: {
-          on: { TOGGLE_ITALICS: 'on' }
+          on: { TOGGLE_ITALICS: { target: 'on' } }
         }
       }
     },
@@ -465,20 +467,20 @@ const wordMachine = createMachine({
       states: {
         none: {
           on: {
-            BULLETS: 'bullets',
-            NUMBERS: 'numbers'
+            BULLETS: { target: 'bullets' },
+            NUMBERS: { target: 'numbers' }
           }
         },
         bullets: {
           on: {
-            NONE: 'none',
-            NUMBERS: 'numbers'
+            NONE: { target: 'none' },
+            NUMBERS: { target: 'numbers' }
           }
         },
         numbers: {
           on: {
-            BULLETS: 'bullets',
-            NONE: 'none'
+            BULLETS: { target: 'bullets' },
+            NONE: { target: 'none' }
           }
         }
       }
@@ -549,20 +551,20 @@ const paymentMachine = createMachine({
       states: {
         cash: {
           on: {
-            SWITCH_CHECK: 'check'
+            SWITCH_CHECK: { target: 'check' }
           }
         },
         check: {
           on: {
-            SWITCH_CASH: 'cash'
+            SWITCH_CASH: { target: 'cash' }
           }
         },
-        hist: { type: 'history' }
+        hist: { type: 'history', target: 'cash' }
       },
-      on: { NEXT: 'review' }
+      on: { NEXT: { target: 'review' } }
     },
     review: {
-      on: { PREVIOUS: 'method.hist' }
+      on: { PREVIOUS: { target: 'method.hist' } }
     }
   }
 });

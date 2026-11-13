@@ -5,6 +5,8 @@ description: Observe actor systems and transitions.
 
 Pass an inspector to the root actor with the `inspect` option.
 
+> **Experimental:** the inspection event types (`InspectionEvent`, `ActorInspectionEvent`, `TransitionInspectionEvent`) may change in a minor release.
+
 ```ts
 const actor = createActor(machine, {
   inspect: (inspectionEvent) => {
@@ -44,6 +46,8 @@ Both event types carry `rootId`, the session ID of the root actor, and `actorRef
 | `actions` | The executed actions, as `{ type, params }`. |
 | `sent` | Events relayed to other actors, as `{ targetRef, targetId, event, delay, id }`. |
 
+Each transition retains the source of its own event, including events queued before the actor starts or while another transition runs. Events sent through the public `actor.send(...)` method have an `undefined` source. Child initialization transitions identify the parent as their source.
+
 Events that could not be delivered (dead letters) are not inspection events. Observe them with the `onRejectedEvent` option on `createActor`, or subscribe later with `actor.system.onRejectedEvent(listener)`. See [dead letters](systems.md#dead-letters).
 
 An event that no transition handled is visible without a separate event type: the `@xstate.transition` event that follows it carries the same `snapshot` reference as the previous transition and an empty `actions` list. Compare references, or use `isUnhandled()` with the pure API.
@@ -51,6 +55,8 @@ An event that no transition handled is visible without a separate event type: th
 Actor stop is derivable from `snapshot.status` on the actor's final `@xstate.transition` event, so there is no separate stop event. The v5 `@xstate.event`, `@xstate.snapshot`, `@xstate.action` and `@xstate.microstep` events are gone; `@xstate.transition` carries all of them.
 
 Use inspection for developer tools, logs and visualizers. Do not change application state from an inspector.
+
+If an inspector throws, XState reports the error asynchronously, as it does for snapshot subscriber errors. The actor continues processing, and other inspectors still receive the event.
 
 Use inspection to build a statechart visualizer, or to attach actor and transition details to a failed request trace.
 
@@ -65,3 +71,5 @@ event.parentRef, event.id, event.src, event.snapshot; // '@xstate.actor'
 event.event, event.snapshot, event.sourceRef, event.targetRef; // '@xstate.transition'
 event.microsteps, event.actions, event.sent; // '@xstate.transition'
 ```
+
+Microstep transition records contain the targets selected by function transitions. Inspection and `getMicrosteps()` expose resolved copies with a `definition` reference to the shared transition; the machine's shared transition definitions remain reusable.

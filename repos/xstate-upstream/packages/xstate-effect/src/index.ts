@@ -1,7 +1,7 @@
 export {
-  fromEffect,
-  fromEffectEventStream,
-  fromEffectStream,
+  createEffectLogic,
+  createEffectEventStreamLogic,
+  createEffectStreamLogic,
   type EffectActorLogic,
   type EffectLogicBrand,
   type EffectSnapshot,
@@ -10,12 +10,13 @@ export {
   type EffectStreamSource,
   type EffectStreamActorLogic,
   type EffectStreamSnapshot
-} from './fromEffect.ts';
+} from './effectLogic.ts';
 export {
   createEffectActor,
   type EffectActorOptions
 } from './createEffectActor.ts';
 export { EffectActor } from './effectActor.ts';
+export { sendAndAwait } from './sendAndAwait.ts';
 export { ActorScope, withActorScope } from './actorScope.ts';
 export {
   deadLetters,
@@ -29,7 +30,12 @@ export {
   type SendableEventFrom,
   type WaitForOptions
 } from './actor.ts';
-export { ActorStoppedError, EffectInterruptedError } from './errors.ts';
+export {
+  ActorStoppedError,
+  EventRejectedError,
+  EffectFailure,
+  EffectInterruptedError
+} from './errors.ts';
 export {
   setupEffect,
   type EffectAction,
@@ -48,5 +54,9 @@ export {
   type EffectSchema,
   type EffectSchemaLike,
   type EffectSetupSchemas,
-  type EffectSetupStateSchema
+  type EffectSetupStateSchema,
+  type ToStandardSetupSchemas,
+  type ToStandardSetupStates
 } from './schema.ts';
+
+export { createSnapshotCodec, SnapshotCodecError } from './persistence.ts';

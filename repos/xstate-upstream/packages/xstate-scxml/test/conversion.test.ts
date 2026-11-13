@@ -392,7 +392,7 @@ describe('SCXML to XState conversion', () => {
             "params": {
               "stateId": "#b",
             },
-            "type": "xstate.stateIn",
+            "type": "@xstate.stateIn",
           },
           "reenter": true,
           "target": [
@@ -1097,5 +1097,64 @@ describe('SCXML to XState conversion', () => {
 
       expect(snapshot.context).toEqual({ count: 42 });
     });
+  });
+});
+
+describe('SCXML done event descriptors', () => {
+  it('compiles done.invoke.<id> and done.state.<id> to category types with matches', () => {
+    const json = compileSCXML(`
+      <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="a">
+        <state id="a">
+          <transition event="done.invoke.child done.state.a done.invoke" target="b"/>
+        </state>
+        <final id="b"/>
+      </scxml>
+    `);
+
+    expect(
+      toPortableJSON((json.states!.a.on!['*'] as any)._scxml.eventDescriptors)
+    ).toEqual([
+      { type: 'xstate.done.actor', matches: { actorId: 'child' } },
+      { type: 'xstate.done.state', matches: { stateId: 'a' } },
+      'xstate.done.actor'
+    ]);
+  });
+
+  it('matches done.state.<id> for dotted state ids', () => {
+    const machine = createMachineFromSCXML(`
+      <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="p.q">
+        <state id="p.q" initial="p1">
+          <state id="p1">
+            <transition event="go" target="p2"/>
+          </state>
+          <final id="p2"/>
+          <transition event="done.state.p.q" target="right"/>
+        </state>
+        <final id="right"/>
+      </scxml>
+    `);
+    const [initial] = initialTransition(machine);
+    const [next] = transition(machine, initial, { type: 'go' });
+    expect(next.value).toBe('right');
+  });
+
+  it('matches done.state.<id> by stateId', () => {
+    const machine = createMachineFromSCXML(`
+      <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="p">
+        <state id="p" initial="p1">
+          <state id="p1">
+            <transition event="go" target="p2"/>
+          </state>
+          <final id="p2"/>
+          <transition event="done.state.other" target="wrong"/>
+          <transition event="done.state.p" target="right"/>
+        </state>
+        <final id="wrong"/>
+        <final id="right"/>
+      </scxml>
+    `);
+    const [initial] = initialTransition(machine);
+    const [next] = transition(machine, initial, { type: 'go' });
+    expect(next.value).toBe('right');
   });
 });

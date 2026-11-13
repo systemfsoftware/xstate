@@ -1,7 +1,7 @@
 import { AnyActorSystem } from '../system.ts';
 import {
   ActorLogic,
-  ActorRefFromLogic,
+  ActorRefFrom,
   AnyActorRef,
   EventObject,
   Snapshot
@@ -58,7 +58,7 @@ export type SubscriptionActorRef<
   TSnapshot extends Snapshot<unknown> = Snapshot<unknown>,
   TOutput = unknown,
   TMappedEvent extends EventObject = EventObject
-> = ActorRefFromLogic<SubscriptionActorLogic<TSnapshot, TOutput, TMappedEvent>>;
+> = ActorRefFrom<SubscriptionActorLogic<TSnapshot, TOutput, TMappedEvent>>;
 
 /**
  * Creates actor logic for subscribing to lifecycle events (done/error/snapshot)
@@ -95,9 +95,8 @@ export function createSubscriptionLogic<
         // Actor completed without output (stopped); no action needed
       }
     });
-  }, 'xstate.subscription');
+  }, '@xstate.subscription');
 }
 
-// Singleton logic instance
-/** @public */
+/** @internal The logic of helper actors created by `enq.subscribeTo()`. */
 export const subscriptionLogic = /* #__PURE__ */ createSubscriptionLogic();

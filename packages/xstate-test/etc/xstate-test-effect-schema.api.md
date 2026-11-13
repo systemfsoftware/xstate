@@ -26,9 +26,9 @@ export function fromEffectSchemas<TSchemas extends Readonly<Record<string, Schem
 
 // Warnings were encountered during analysis:
 //
-// dist/effect-schema.d.ts:27:3 - (ae-forgotten-export) The symbol "EventsFromSchemasOptions" needs to be exported by the entry point effect-schema.d.ts
-// dist/effect-schema.d.ts:27:3 - (ae-forgotten-export) The symbol "TestEventGenerators" needs to be exported by the entry point effect-schema.d.ts
-// dist/effect-schema.d.ts:27:3 - (ae-forgotten-export) The symbol "FastCheckGeneratorKind" needs to be exported by the entry point effect-schema.d.ts
+// dist/effect-schema.d.ts:26:3 - (ae-forgotten-export) The symbol "EventsFromSchemasOptions" needs to be exported by the entry point effect-schema.d.ts
+// dist/effect-schema.d.ts:26:3 - (ae-forgotten-export) The symbol "TestEventGenerators" needs to be exported by the entry point effect-schema.d.ts
+// dist/effect-schema.d.ts:26:3 - (ae-forgotten-export) The symbol "FastCheckGeneratorKind" needs to be exported by the entry point effect-schema.d.ts
 
 // (No @packageDocumentation comment for this package)
 

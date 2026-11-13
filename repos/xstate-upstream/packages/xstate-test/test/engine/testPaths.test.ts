@@ -2,7 +2,7 @@ import { createAsyncLogic, createMachine, types } from 'xstate';
 import * as graph from '../../src/engine/index.ts';
 import {
   formatTestCoverage,
-  ModelTestFailure,
+  ModelTestFailureError,
   propertyTest,
   replayTest,
   testPaths,
@@ -31,12 +31,12 @@ async function captureFailure(run: () => Promise<unknown>) {
   try {
     await run();
   } catch (error) {
-    if (error instanceof ModelTestFailure) {
+    if (error instanceof ModelTestFailureError) {
       return error;
     }
     throw error;
   }
-  throw new Error('expected a ModelTestFailure');
+  throw new Error('expected a ModelTestFailureError');
 }
 
 describe('`states` keys with a plain machine', () => {
@@ -150,7 +150,7 @@ describe('testPaths() follows the planned path', () => {
             steps: [
               {
                 state: lightMachine.resolveState({ value: 'green' }) as never,
-                event: { type: '@xstate.init' } as never
+                event: { type: 'xstate.init' } as never
               },
               {
                 state: lightMachine.resolveState({ value: 'yellow' }) as never,
@@ -272,7 +272,7 @@ describe('testPaths() with invoke sources', () => {
     const fixture = JSON.parse(JSON.stringify(failure.fixture)) as TestFixture;
     await expect(
       replayTest(machine, fixture, { sut: createSut() })
-    ).rejects.toBeInstanceOf(ModelTestFailure);
+    ).rejects.toBeInstanceOf(ModelTestFailureError);
   });
 
   it('records synthesized errors as portable data', async () => {
@@ -292,8 +292,7 @@ describe('testPaths() with invoke sources', () => {
     )!.command as unknown as { event: { error: unknown } };
 
     expect(errorEvent.event.error).toEqual({
-      xstate$$error: true,
-      name: 'Error',
+      '@error': 'Error',
       message: 'generated failure'
     });
     const fixture = JSON.parse(JSON.stringify(failure.fixture)) as TestFixture;
@@ -314,6 +313,26 @@ describe('testPaths() with invoke sources', () => {
     };
     expect(replayed.error).toBeInstanceOf(Error);
     expect((replayed.error as Error).message).toBe('generated failure');
+
+    // TODO(v7): remove. 6.0.0-beta.1 fixtures wrote `$error`.
+    const legacy = JSON.parse(
+      JSON.stringify(fixture).replaceAll('"@error"', '"$error"')
+    ) as TestFixture;
+    const legacyFailure = await captureFailure(() =>
+      replayTest(
+        fetchMachine(createAsyncLogic({ run: async () => 1 })),
+        legacy,
+        {
+          invariant: ({ snapshot }) => {
+            expect(snapshot.value).not.toBe('failure');
+          }
+        }
+      )
+    );
+    expect(
+      (legacyFailure.trace.steps.at(-1)!.event as unknown as { error: unknown })
+        .error
+    ).toBeInstanceOf(Error);
   });
 });
 
@@ -474,9 +493,9 @@ describe('failure messages', () => {
       start "idle"
       1. generator PAY -> "paying"
       2. outcome charge {"ok":true,"output":"ch_1"} -> "paid"
-         ↳ outcome xstate.done.actor {"output":"ch_1","actorId":"0.order.paying"} -> "paid"
+         ↳ outcome xstate.done.actor {"output":"ch_1","actorId":"order.paying:0"} -> "paid"
       3. timer advance 1000ms -> "archived"
-         ↳ timer xstate.after.1000.order.paid -> "archived""
+         ↳ timer xstate.after {"delay":1000,"stateId":"order.paid"} -> "archived""
     `);
   });
 });

@@ -1,5 +1,46 @@
 # @xstate/store
 
+## 5.0.0-alpha.8
+
+### Major Changes
+
+- d2c518b: The event in the initial `@xstate.transition` inspection record is `{ type: 'xstate.init' }` (previously `{ type: '@xstate.init' }`). Events use the `xstate.` prefix; `@xstate.` is reserved for inspection record and effect types.
+  
+  ```diff
+    store.inspect((inspectionEvent) => {
+  -   if (inspectionEvent.event.type === '@xstate.init') {
+  +   if (inspectionEvent.event.type === 'xstate.init') {
+        // initial snapshot
+      }
+    });
+  ```
+
+## 5.0.0-alpha.7
+
+### Patch Changes
+
+- 698f1c4: `flushStorage(store)` now also waits for writes queued by `onDone`. With `strategy: 'event'`, events sent after `clearStorage(store)` start a new history. Calling `store.can` or `store.transition` preserves the history reset, and changes made before hydration are included in the new checkpoint when rehydrating from empty storage.
+  
+  `useStore`'s `inspect` option only changes after a render commits; a suspended or discarded render no longer redirects inspection events.
+
+## 5.0.0-alpha.6
+
+### Minor Changes
+
+- 73cff29: Add `createSourceAtom` for read-only external snapshots. Direct and derived subscribers share one listener, released when the last consumer leaves. Plain reads do not subscribe; reconnecting refreshes the snapshot. The source adapter can return a cleanup function or a `{ unsubscribe() }` subscription. Public atom subscriptions always return `{ unsubscribe() }`, matching existing XState subscriptions.
+  
+  Failed activation remains eligible for a later atom operation. Errors delivering an async atom result are exposed through its `error` state.
+  
+  ```ts
+  const isDark = createSourceAtom({
+    getSnapshot: () => media.matches,
+    subscribe: (notify) => {
+      media.addEventListener('change', notify);
+      return () => media.removeEventListener('change', notify);
+    }
+  });
+  ```
+
 ## 5.0.0-alpha.5
 
 ### Major Changes

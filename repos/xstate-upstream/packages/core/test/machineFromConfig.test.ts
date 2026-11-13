@@ -1,10 +1,10 @@
 import { createActor, initialTransition, transition } from '../src';
-import { createMachineFromConfig } from '../src/createMachineFromConfig';
+import { machineFromJSON } from '../src/machineFromJSON';
 
-describe('createMachineFromConfig ', () => {
+describe('machineFromJSON ', () => {
   it('rejects history states without a non-empty default target', () => {
     expect(() =>
-      createMachineFromConfig({
+      machineFromJSON({
         initial: 'on',
         states: {
           on: {
@@ -21,7 +21,7 @@ describe('createMachineFromConfig ', () => {
     );
 
     expect(() =>
-      createMachineFromConfig({
+      machineFromJSON({
         initial: 'on',
         states: {
           on: {
@@ -44,7 +44,7 @@ describe('createMachineFromConfig ', () => {
 
   it('rejects SCXML-illegal multi-target transitions at construction', () => {
     expect(() =>
-      createMachineFromConfig({
+      machineFromJSON({
         initial: 'idle',
         states: {
           idle: {
@@ -62,12 +62,12 @@ describe('createMachineFromConfig ', () => {
         }
       })
     ).toThrow(
-      "Invalid transition definition for state node '(machine).idle': target set is not a legal SCXML configuration."
+      "Invalid transition definition for state node 'idle': target set is not a legal SCXML configuration."
     );
   });
 
   it('should create a machine from a config', () => {
-    const machine = createMachineFromConfig({
+    const machine = machineFromJSON({
       initial: 'a',
       states: {
         a: {
@@ -92,7 +92,7 @@ describe('createMachineFromConfig ', () => {
   });
 
   it('does not merge actor input into native JSON machine context', () => {
-    const machine = createMachineFromConfig({
+    const machine = machineFromJSON({
       context: { count: 0 },
       initial: 'idle',
       states: { idle: {} }
@@ -105,7 +105,7 @@ describe('createMachineFromConfig ', () => {
   });
 
   it('should handle raise actions', () => {
-    const machine = createMachineFromConfig({
+    const machine = machineFromJSON({
       initial: 'a',
       states: {
         a: {
@@ -125,9 +125,34 @@ describe('createMachineFromConfig ', () => {
     expect(nextState.value).toEqual('b');
   });
 
+  it('should handle raise actions with a payload', () => {
+    const machine = machineFromJSON(
+      {
+        initial: 'a',
+        states: {
+          a: {
+            on: {
+              NEXT: {
+                actions: [
+                  { type: '@xstate.raise', event: { type: 'TO_B', step: 2 } }
+                ]
+              },
+              TO_B: { target: 'b', guard: { type: 'isStepTwo' } }
+            }
+          },
+          b: {}
+        }
+      },
+      { guards: { isStepTwo: ({ event }) => event.step === 2 } }
+    );
+    const [initialState] = initialTransition(machine);
+    const [nextState] = transition(machine, initialState, { type: 'NEXT' });
+    expect(nextState.value).toEqual('b');
+  });
+
   it('should handle emit actions', async () => {
     const { resolve, promise } = Promise.withResolvers<void>();
-    const machine = createMachineFromConfig({
+    const machine = machineFromJSON({
       initial: 'a',
       states: {
         a: {

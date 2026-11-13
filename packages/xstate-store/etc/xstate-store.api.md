@@ -437,7 +437,7 @@ export type ValueFromAtomConfig<TConfig extends AnyAtomConfig> = TConfig extends
 
 // Warnings were encountered during analysis:
 //
-// dist/types-BkeiRnGO.d.ts:123:3 - (ae-forgotten-export) The symbol "EmitterFunction" needs to be exported by the entry point index.d.ts
+// dist/types-0n0RpfhK.d.ts:120:3 - (ae-forgotten-export) The symbol "EmitterFunction" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

@@ -75,15 +75,14 @@ describe('spawnChild action', () => {
             });
           },
           on: {
-            'xstate.snapshot.int': ({
-              event
-            }: {
-              event: { snapshot: { context: number } };
-            }) => {
-              if (event.snapshot.context === 5) {
-                return {
-                  target: 'success'
-                };
+            'xstate.snapshot.actor': {
+              matches: { actorId: 'int' },
+              to: ({ event }: { event: { snapshot: { context: number } } }) => {
+                if (event.snapshot.context === 5) {
+                  return {
+                    target: 'success'
+                  };
+                }
               }
             }
           }
@@ -125,15 +124,8 @@ describe('spawnChild action', () => {
       context: {
         childId: 'myChild'
       },
-      entry: ({ context, self }, enq) => {
-        // TODO: This should all be abstracted in enq.spawn(…)
-        const child = createActor(childMachine, {
-          id: context.childId,
-          parent: self
-        });
-        enq(() => {
-          child.start();
-        });
+      entry: ({ context }, enq) => {
+        const child = enq.spawn(childMachine, { id: context.childId });
 
         enq.sendTo(child, {
           type: 'FOO'
@@ -204,5 +196,120 @@ describe('spawnChild action', () => {
     expect(started).not.toHaveBeenCalled();
     expect(actor.getSnapshot().value).toBe('b');
     expect(actor.getSnapshot().children.child).toBeUndefined();
+  });
+
+  it('keeps a child spawned on entry when a child state with an invoke is entered in the same microstep', () => {
+    const pinged = vi.fn();
+    const machine = createMachine({
+      initial: 'idle',
+      states: {
+        idle: {
+          on: { open: { target: 'editor' } }
+        },
+        editor: {
+          entry: (_, enq) => {
+            enq.spawn(
+              createMachine({
+                on: {
+                  ping: (_, enq) => {
+                    enq(pinged);
+                  }
+                }
+              }),
+              { id: 'autosave' }
+            );
+          },
+          initial: 'loading',
+          states: {
+            loading: {
+              invoke: { id: 'loader', src: createMachine({}) }
+            }
+          },
+          on: {
+            save: (_, enq) => {
+              enq.sendTo('autosave', { type: 'ping' });
+            }
+          }
+        }
+      }
+    });
+
+    const actor = createActor(machine).start();
+    actor.send({ type: 'open' });
+
+    expect(Object.keys(actor.getSnapshot().children)).toEqual([
+      'autosave',
+      'loader'
+    ]);
+    const autosave = actor.getSnapshot().children.autosave;
+
+    actor.send({ type: 'save' });
+    expect(pinged).toHaveBeenCalledTimes(1);
+
+    actor.stop();
+    expect(autosave?.getSnapshot().status).toBe('stopped');
+  });
+
+  it('does not bring back a child stopped on entry when a child state with an invoke is entered in the same microstep', () => {
+    const machine = createMachine({
+      context: ({ spawn }) => ({
+        autosave: spawn(createMachine({}), { id: 'autosave' })
+      }),
+      initial: 'editing',
+      states: {
+        editing: {
+          on: { close: { target: 'closed' } }
+        },
+        closed: {
+          entry: ({ children }, enq) => {
+            enq.stop(children.autosave);
+          },
+          initial: 'archiving',
+          states: {
+            archiving: {
+              invoke: { id: 'archiver', src: createMachine({}) }
+            }
+          }
+        }
+      }
+    });
+
+    const actor = createActor(machine).start();
+    const autosave = actor.getSnapshot().children.autosave;
+    actor.send({ type: 'close' });
+
+    expect(autosave?.getSnapshot().status).toBe('stopped');
+    expect(Object.keys(actor.getSnapshot().children)).toEqual(['archiver']);
+  });
+
+  it('passes a child spawned on entry to the entry functions of the states entered after it', () => {
+    const seen = vi.fn();
+    const machine = createMachine({
+      initial: 'idle',
+      states: {
+        idle: {
+          on: { open: { target: 'editor' } }
+        },
+        editor: {
+          entry: (_, enq) => {
+            enq.spawn(createMachine({}), { id: 'autosave' });
+          },
+          initial: 'loading',
+          states: {
+            loading: {
+              invoke: { id: 'loader', src: createMachine({}) },
+              entry: ({ children }, _enq) => {
+                seen(Object.keys(children));
+              }
+            }
+          }
+        }
+      }
+    });
+
+    createActor(machine).start().send({ type: 'open' });
+
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveBeenCalledWith(['autosave', 'loader']);
   });
 });

@@ -1,3 +1,4 @@
+import { eventSchema } from '../src/index.ts';
 import {
   createActor,
   createMachine,
@@ -102,13 +103,11 @@ describe('internalEvents', () => {
 
     expect(actor.getSnapshot().value).toBe('done');
     expect(
-      await machine.eventSchema['~standard'].validate({
+      await eventSchema(machine)['~standard'].validate({
         type: 'change.value',
         value: 'ready'
       })
-    ).toEqual({
-      value: { type: 'change.value', value: 'ready' }
-    });
+    ).toHaveProperty('issues');
     // the boundary check runs before any host runtime takes ownership of
     // delivery: the internal event is dead-lettered, not handed to the host
     actor.system.runtime = { sendEvent: () => {} };
@@ -197,6 +196,16 @@ describe('internalEvents', () => {
     expect(() =>
       createMachine({
         // @ts-expect-error removed; use `schemas.internalEvents`
+        internalEvents: ['tick']
+      })
+    ).toThrow('schemas.internalEvents');
+  });
+
+  it('throws in development for an internalEvents key passed to setup()', () => {
+    expect(() =>
+      setup({
+        schemas: { events: { start: z.object({}) } },
+        // @ts-expect-error not a setup option; use `schemas.internalEvents`
         internalEvents: ['tick']
       })
     ).toThrow('schemas.internalEvents');

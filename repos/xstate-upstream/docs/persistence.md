@@ -14,17 +14,28 @@ Do not persist or migrate `actor.getSnapshot()`. A live snapshot carries
 runtime-only state, including its producing machine; `getPersistedSnapshot()`
 removes those associations and writes the machine's serializable identity.
 
-Restore the actor with the `snapshot` option.
+Restore the actor with `restoreActor(logic, persistedSnapshot, options?)` from `xstate/persist`. It works for any actor logic and accepts the `createActor` options except `input`. Machine snapshots are validated, migrated (with `migrate` in the machine config) and their children restored.
 
 ```ts
-const restored = createActor(machine, {
-  snapshot: JSON.parse(localStorage.getItem('checkout')!)
-}).start();
+import { restoreActor } from 'xstate/persist';
+
+const restored = restoreActor(
+  machine,
+  JSON.parse(localStorage.getItem('checkout')!)
+).start();
 ```
+
+In Vue, keep a machine passed to `restoreActor` out of deep reactive state.
+Store it in `shallowRef(machine)` or create it with `markRaw(machine)`. XState
+also accepts a reactive Proxy around a machine, but a raw machine avoids
+wrapping its state nodes and is the recommended way to hold actor logic in Vue.
+See [Vue input and restored snapshots](vue/input-and-snapshots.md).
+
+Pass `system` (a `createSystem()` result) to restore the actor into that system.
 
 A restored snapshot is opaque: restoring runs no transitions and re-executes no actions. `always` transitions and choice states in the restored configuration are not re-evaluated until the next event, even if their guards would now pass. Development builds warn when the restored state has eventless transitions.
 
-Restoring a terminal snapshot keeps it terminal. A snapshot with `status: 'done'`, `'error'` or `'stopped'` restores to an actor with that status after `start()`; it runs no transitions and processes no events. For `'error'`, subscribers with an `error` observer receive the persisted error, whether they subscribe before or after `start()`. A snapshot that cannot be restored, such as one whose `value` names a state the machine does not have, produces an actor with an `'error'` snapshot whose `error` describes the failure; `createActor(...)` and `start()` do not throw.
+Restoring a terminal snapshot keeps it terminal. A snapshot with `status: 'done'`, `'error'` or `'stopped'` restores to an actor with that status after `start()`; it runs no transitions and processes no events. For `'error'`, subscribers with an `error` observer receive the persisted error, whether they subscribe before or after `start()`. A snapshot that cannot be restored, such as one that is not an object, has no valid `value`, whose `value` names a state the machine does not have, or whose children or timers are malformed, produces an actor with an `'error'` snapshot whose `error` describes the failure (an `InvalidSnapshotError` for these structural cases); `restoreActor(...)` and `start()` do not throw. A `value` that stops at a compound state, such as `{ active: {} }`, is completed with that state's initial descendants, and the restored snapshot's `value` reflects the completed configuration.
 
 Persisted snapshots may include child actor state. Keep the actor logic compatible with snapshots already stored by your application.
 
@@ -42,11 +53,11 @@ By default a persisted snapshot embeds each child's persisted state, producing a
 const persisted = actor.getPersistedSnapshot({ embedChildren: false });
 ```
 
-The option applies to the whole tree, not to a single placement boundary. Persisting by address requires each child to have a registered source key (a string `src`); `spawn(actors.worker)`, `enq.spawn(actors.worker)` and `enq.spawn('worker')` retain that key, while inline actor logic cannot be referenced by address. The string form makes the exact identity explicit when aliases share logic. Restoring an address-only child produces a location-transparent handle: sends to it route through the [system runtime](durable-execution.md), and its snapshot exposes lifecycle only, since a full snapshot is the last value an actor published and only co-located actors observe it. Install the system runtime before sending to a restored handle — without one, there is no route to the actor it references.
+The option applies to the whole tree, not to a single placement boundary. Persisting by address requires each child to have a registered source key (a string `src`); `spawn(actors.worker)`, `enq.spawn(actors.worker)` and `enq.spawn('worker')` retain that key, while inline actor logic cannot be referenced by address. The string form makes the exact identity explicit when aliases share logic. Restoring an address-only child produces a location-transparent handle: sends to it route through the [system runtime](durable-execution.md), and its snapshot exposes lifecycle only, since a full snapshot is the last value an actor published and only co-located actors observe it. Install the system runtime before sending to a restored handle. Without one, there is no route to the actor it references.
 
-Persisted children changed shape in v6: each entry carries an `address` field and either an embedded `snapshot` or a `remote: true` marker. A remote entry may also carry an opaque `incarnation` token, round-tripped verbatim: XState never stamps one, but a host that does gets stale-completion protection on the referencing side and the token on journaled `sendTo` descriptors. Snapshots persisted by earlier versions restore unchanged; migrate them with [`machineVersions`](#migrate-machine-versions) if you validate their shape.
+Persisted children changed shape in v6: each entry carries an `address` field and either an embedded `snapshot` or a `remote: true` marker. A remote entry may also carry an opaque `incarnation` token, round-tripped verbatim: XState never stamps one, but a host that does gets stale-completion protection on the referencing side and the token on journaled `sendTo` descriptors. Snapshots persisted by v5 or by v6 alphas use other shapes and are not read on restore; discard them or convert them before restoring. See the [migration guide](xstate-v5-to-v6.md#29-names-changed-during-the-v6-prereleases).
 
-A timer persisted from a running actor carries its wall-clock start (`startedAt`), and restoring the snapshot schedules the remaining time toward the original deadline — a timer past due fires immediately. Snapshots produced only by pure transitions carry no timestamp, so restoring one restarts each timer with its declared delay. A [durable execution](durable-execution.md) records timer starts when scheduling effects succeed; await `executeEffects()` before persisting its checkpoint to preserve deadlines. A custom adapter clock must use the same time origin when restoring.
+A timer persisted from a running actor carries its wall-clock start (`scheduledAt`), and restoring the snapshot schedules the remaining time toward the original deadline. A timer past due fires immediately. Snapshots produced only by pure transitions carry no timestamp, so restoring one restarts each timer with its declared delay. A [durable execution](durable-execution.md) records timer starts when scheduling effects succeed; await `executeEffects()` before persisting its checkpoint to preserve deadlines. A custom adapter clock must use the same time origin when restoring.
 
 For a host-driven durable loop, use `execution.restore(persistedSnapshot)` from
 `xstate/durable`, then `execution.executeEffects(effects)` to resume embedded
@@ -54,15 +65,26 @@ children and pending timers. Persist `execution.nextTransitionIndex` with the
 checkpoint and pass it to the next execution's adapter. See
 [durable checkpoint restoration](durable-execution.md).
 
-An actor's address is the `/`-joined path of actor ids from the root, such as `order/worker:0`. It is stable across persistence and restore, unlike `sessionId`, which identifies one incarnation. Generated child ids are recorded in each snapshot's `_nextActorIds`, so restored actors keep numbering where they left off.
+An actor's address is the `/`-joined path of actor ids from the root, such as `order/worker:0`. It is stable across persistence and restore, unlike `sessionId`, which identifies one incarnation. Generated child ids are recorded in each snapshot's `nextActorIds`, so restored actors keep numbering where they left off.
 
 ## Compatibility
 
 A persisted snapshot is a plain JSON-shaped object. Restoring one is lenient: XState reads the fields it knows and does not check a format marker.
 
-These envelope fields are stable across 6.x releases: `status`, `value`, `context`, `output`, `error`, `historyValue`, `stateInputs`, `children`, `timers`, `machine` and `version`. The [persisted snapshot JSON Schema](https://github.com/statelyai/xstate/blob/next/packages/core/src/persistedSnapshot.schema.json) (draft 2020-12) describes them. Nested machine children carry their own envelope in `children[id].snapshot`. Fields prefixed with `_`, such as `_nextActorIds`, are private. They round-trip verbatim; do not read or write them.
+These envelope fields are stable across 6.x releases: `status`, `value`, `context`, `output`, `error`, `historyValue`, `stateInputs`, `children`, `timers` and `machine`. The [persisted snapshot JSON Schema](https://github.com/statelyai/xstate/blob/next/packages/core/src/persistedSnapshot.schema.json) (draft 2020-12) describes them. Nested machine children carry their own envelope in `children[id].snapshot`. A child entry's `src` is the registered source key the child restores from. A child invoked with inline logic has no `src`; it restores through the invoke definition with its id among the restored active states, and restoring fails when no active state, or more than one, invokes that id. `nextTimerId` and `nextActorIds` are private. They round-trip verbatim; do not read or write them. No field name in the envelope starts with `$` or `_`, so it can be stored in document databases such as Convex and MongoDB that reserve those prefixes.
 
-Changes to your own machine are handled with `machine.version`: migrate stored snapshots with `migrate` or `machineVersions().migrateSnapshot()`. See [Migrate machine versions](#migrate-machine-versions).
+`timers` is a list of pending timers in scheduling order. A delayed `enq.raise(...)` or `enq.sendTo(...)` entry carries its `id`, or a `seq` number when scheduled without one. Built-in `after` and `timeout` timers have neither; their `event` (`xstate.after`, `xstate.timeout.state` or `xstate.timeout.actor`) identifies them.
+
+```json
+"timers": [
+  { "id": "retry", "delay": 500, "type": "@xstate.raise", "event": { "type": "RETRY" }, "target": "self", "scheduledAt": 1760000000000 },
+  { "delay": 1000, "type": "@xstate.raise", "event": { "type": "xstate.after", "stateId": "checkout.waiting", "delay": 1000 }, "target": "self", "scheduledAt": 1760000000000 }
+]
+```
+
+Later 6.x releases may add new optional fields to the envelope, to `children` entries and to `timers` entries. Code that reads or validates persisted snapshots must ignore fields it does not recognize. The JSON Schema allows unknown fields on these objects.
+
+Changes to your own machine are handled with `machine.version`: migrate stored snapshots with `migrate` or `machineVersions().migrateSnapshot()`. A machine that declares `version` must also declare `id`; persisted snapshots record both as `machine: { id, version }`. See [Migrate machine versions](#migrate-machine-versions).
 
 ### Payload values
 
@@ -79,7 +101,30 @@ In development builds, `getPersistedSnapshot()` warns once per call with the pat
 
 `Date` values are not reported. `JSON.stringify` writes them as ISO strings, and `JSON.parse` does not turn them back into `Date` objects. Convert them on restore if your context needs `Date` instances.
 
-Actor refs in `context` persist as `{ xstate$type: 'actorRef', id }` and are not reported.
+Actor refs in `context` persist as `{ '@actor': address }` and are not reported. A ref that names one of the snapshot's children restores to that child.
+
+`@actor` is a reserved key in persisted context. On restore, any object in `context` whose keys are exactly `@actor` (and optionally `incarnation`) is read as a serialized actor ref: without an `incarnation`, it becomes the live child at that address, if there is one. Objects with other keys alongside `@actor` stay plain data. Do not store application data as an object with only an `@actor` key.
+
+### Serialized actor refs
+
+An actor ref serializes with `JSON.stringify` as `{ '@actor': address }` (the `SerializedActorRef` type, which also allows an optional string `incarnation`). This shape appears when a ref travels in an event payload, such as a `replyTo` field, and the event is persisted or crosses a process boundary. A serialized ref in `context` keeps its address across persistence and restore.
+
+A serialized ref is a valid `enq.sendTo(...)` target. The event is delivered to the live actor at the ref's `@actor` address, including an actor restored after the ref was serialized. If no live actor has that address, the event becomes a dead letter with reason `'missingTarget'`.
+
+```ts
+const server = createMachine({
+  schemas: {
+    events: {
+      ping: types<{ replyTo: SerializedActorRef; requestId: string }>()
+    }
+  },
+  on: {
+    ping: ({ event }, enq) => {
+      enq.sendTo(event.replyTo, { type: 'pong', requestId: event.requestId });
+    }
+  }
+});
+```
 
 ### In-flight children
 
@@ -94,10 +139,11 @@ actual machine for each version that may be a target. Every entry must have the
 same stable `id` and its own `version`.
 
 Every lightweight entry satisfies `MachineVersionDescriptor`: `{ id, version }`
-plus at least one of `snapshotSchema` or `eventSchema`. Versioned machines expose
-both schemas themselves, so `machineVersions()` uses the same schema path for
-machines and historical descriptors. It only checks whether an entry is
-executable when resolving `to`.
+plus at least one of `snapshotSchema` or `eventSchema`. For a versioned machine,
+`snapshotSchema(machine)` from `xstate/persist` and `eventSchema(machine)` from
+`xstate` return both schemas. For event histories, `machineVersions()` uses actual
+machines' historical validation; their public input schema has a narrower
+contract. Only actual machines may be targets.
 
 ```ts
 const checkoutVersions = machineVersions([
@@ -113,9 +159,9 @@ const checkoutVersions = machineVersions([
       context: z.object({ count: z.number() }),
       children: z.object({}),
       historyValue: z.object({}),
-      timers: z.object({}),
-      _nextActorIds: z.record(z.string(), z.number()).optional(),
-      _nextTimerId: z.number(),
+      timers: z.tuple([]),
+      nextActorIds: z.record(z.string(), z.number()).optional(),
+      nextTimerId: z.number(),
       stateInputs: z.undefined().optional(),
       machine: z.object({
         id: z.literal('checkout'),
@@ -143,7 +189,7 @@ const snapshot = await checkoutVersions.migrateSnapshot(
   }
 );
 
-const actor = createActor(checkoutV2, { snapshot }).start();
+const actor = restoreActor(checkoutV2, snapshot).start();
 ```
 
 Exact version keys narrow the callback to that historical schema's output type.
@@ -154,9 +200,10 @@ A `snapshotSchema` describes the entire persisted contract, not only context:
 status/output/error, state value, context, children, history, timers, state
 inputs, counters and version metadata as applicable. Active state nodes are
 reconstructed from the state value, so `nodes` itself is not persisted. A
-versioned machine's generated `snapshotSchema` validates this durable shape,
-its state value and its configured context schema. It normalizes omitted
-`historyValue` and `timers` to empty records, matching restoration behavior.
+versioned machine's generated `snapshotSchema(machine)` validates this durable shape,
+its state value, child entries and local child sources, timer entries and its configured context schema. Local children must name a provided actor source or match an inline invoke in the active states. Child ids may be arbitrary when a provided source is recorded. Remote children require an address and a source key, which may belong to another runtime. Unknown extra fields remain allowed. It normalizes an omitted
+`historyValue` to an empty record and omitted `timers` to an empty list,
+matching restoration behavior.
 
 Use `'*'` to handle any snapshot that cannot use an exact retained version. The
 snapshot is `unknown`, so the migration can inspect its shape or load an old
@@ -240,14 +287,20 @@ Every result, including a same-version history, is validated against available
 target event schemas. If no applicable adapter exists, adaptation throws. An
 exact adapter's error propagates instead of falling through to `'*'`.
 
-An `eventSchema` validates each complete historical event object and infers the
-exact adapter's event union. A descriptor may provide `snapshotSchema`,
-`eventSchema` or both. If the relevant schema is absent, that operation may use
-its unknown `'*'` handler instead. Actual machines continue to work directly as
-entries. Their generated `eventSchema` turns the payload-oriented
-`schemas.events` map into a Standard Schema for complete event objects.
-Without that schema or a `'*'` adapter, adaptation reports the missing event
-schema rather than treating the registered version as unknown.
+A historical descriptor's `eventSchema` validates complete historical event
+objects and infers the exact adapter's event union. A descriptor may provide
+`snapshotSchema`, `eventSchema` or both. If the relevant schema is absent, that
+operation may use its unknown `'*'` handler instead.
+
+Actual machines work directly as entries. `adaptEvents()` uses their historical
+validation, including `schemas.internalEvents` and runtime notifications, and
+infers adapter inputs from the full machine event union. This preserves replay
+compatibility. A machine's public `eventSchema(machine)` instead validates public input
+(see [internal events](internal-events.md#validating-public-input)). Do not copy
+it into a historical descriptor whose histories include internal/runtime events;
+provide a schema describing that complete history instead.
+Without a historical event schema or a `'*'` adapter, adaptation reports the
+missing event schema rather than treating the registered version as unknown.
 
 Exact event and snapshot targets require actual machines. A schema descriptor
 describes historical data but cannot interpret restored state or receive events.
@@ -258,6 +311,8 @@ events and does not produce a snapshot.
 ## Persistence cheatsheet
 
 ```ts
+import { restoreActor } from 'xstate/persist';
+
 const persisted = actor.getPersistedSnapshot();
-const restored = createActor(logic, { snapshot: persisted }).start();
+const restored = restoreActor(logic, persisted).start();
 ```

@@ -1,14 +1,34 @@
+import isDevelopment from '#is-development';
+import { xstateError } from './xstateError.ts';
 import {
   XSTATE_LOGIC_EFFECT_REJECT,
   XSTATE_LOGIC_EFFECT_RESOLVE,
   XSTATE_LOGIC_EFFECT_START
 } from './constants.ts';
+import {
+  createMissingAddressError,
+  getAddressId,
+  isSerializedActorRef,
+  resolveSerializedActorRef
+} from './remoteActorRef.ts';
+import type { ActorSystemRuntime } from './system.ts';
 import type {
+  EventObject,
   ActorTermination,
   AnyActor,
   AnyEventObject,
   Subscription
 } from './types.ts';
+
+/** @internal */
+export function publishEmittedEvent(
+  source: AnyActor,
+  event: EventObject,
+  runtime: Partial<ActorSystemRuntime>
+): void | PromiseLike<void> {
+  source.system._notifyEmitted(source, event);
+  return runtime.emitEvent!(source, event);
+}
 
 type StepEffects = Record<
   string,
@@ -56,7 +76,11 @@ export async function runStep<TStepOutput>(
     return running as Promise<TStepOutput>;
   }
   if (actor.getSnapshot().status !== 'active') {
-    throw new Error(`Actor terminated before step "${key}" completed`);
+    throw new Error(
+      isDevelopment
+        ? `Actor terminated before step "${key}" completed`
+        : xstateError(72, key)
+    );
   }
 
   let resolve!: (value: TStepOutput | PromiseLike<TStepOutput>) => void;
@@ -84,7 +108,13 @@ export async function runStep<TStepOutput>(
   subscription = actor.subscribe({
     error: reject,
     complete: () =>
-      reject(new Error(`Actor terminated before step "${key}" completed`))
+      reject(
+        new Error(
+          isDevelopment
+            ? `Actor terminated before step "${key}" completed`
+            : xstateError(72, key)
+        )
+      )
   });
   void (async () => {
     try {
@@ -116,16 +146,31 @@ export function deliverEvent(
   target: AnyActor,
   event: AnyEventObject
 ): void {
+  if (isSerializedActorRef(target)) {
+    const serialized = target;
+    const system = source?.system;
+    const live = system && resolveSerializedActorRef(system, serialized);
+    if (!live) {
+      const error = createMissingAddressError(serialized);
+      if (!system) {
+        throw error;
+      }
+      void system.deadLetter(source, undefined, event, 'missingTarget', {
+        targetId: getAddressId(serialized['@actor']),
+        error
+      });
+      return;
+    }
+    target = live;
+  }
   if (rejectUndeliverableEvent(source, target, event)) {
     return;
   }
   const runtimeTarget = target as AnyActor & {
-    _lastSourceRef?: AnyActor;
-    _send(event: AnyEventObject): void;
+    _send(event: AnyEventObject, sourceRef?: AnyActor): void;
   };
 
-  runtimeTarget._lastSourceRef = source;
-  runtimeTarget._send(event);
+  runtimeTarget._send(event, source);
 }
 
 /**
@@ -146,7 +191,9 @@ function getEventBoundaryError(
     runtimeTarget.logic?.isInternalEventType?.(event.type)
   ) {
     return new Error(
-      `Internal event "${event.type}" cannot be sent to actor "${target.id}" from outside.`
+      isDevelopment
+        ? `Internal event "${event.type}" cannot be sent to actor "${target.id}" from outside.`
+        : xstateError(73, event.type, target.id)
     );
   }
   return undefined;

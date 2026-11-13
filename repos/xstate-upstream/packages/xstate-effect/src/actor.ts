@@ -16,14 +16,26 @@ import type {
   Subscription
 } from 'xstate';
 import type { EffectActor } from './effectActor.ts';
-import { ActorStoppedError } from './errors.ts';
+import {
+  ActorStoppedError,
+  causeFromError,
+  type UnwrapEffectFailure
+} from './errors.ts';
 
-/** The event type accepted by an actor's `send` method. */
+/**
+ * The event type accepted by an actor's `send` method.
+ *
+ * @experimental
+ */
 export type SendableEventFrom<TActor extends AnyActorRef> = Parameters<
   TActor['send']
 >[0];
 
-/** The event type an actor emits through `actor.on(...)`. */
+/**
+ * The event type an actor emits through `actor.on(...)`.
+ *
+ * @experimental
+ */
 export type EmittedEventFrom<TActor> =
   TActor extends EffectActor<infer TLogic>
     ? EmittedFrom<TLogic>
@@ -33,7 +45,11 @@ export type EmittedEventFrom<TActor> =
         ? TEmitted
         : AnyEventObject;
 
-/** Options for {@link waitFor}. */
+/**
+ * Options for {@link waitFor}.
+ *
+ * @experimental
+ */
 export interface WaitForOptions {
   /**
    * Fails with `Cause.TimeoutError` when no snapshot satisfies the predicate
@@ -77,6 +93,8 @@ function isActorRef(value: unknown): value is AnyActorRef {
  * is enqueued, like `actor.send(event)`, and processed on the actor's own
  * fiber. An event that cannot be delivered (for example to a stopped actor)
  * is reported as a dead letter, observable with {@link deadLetters}.
+ *
+ * @experimental
  */
 export const send: {
   <TActor extends AnyActorRef>(
@@ -102,6 +120,8 @@ export const send: {
  * when the actor completes or stops, and emits the error snapshot before
  * ending when the actor errors. Interrupting the stream unsubscribes from the
  * actor.
+ *
+ * @experimental
  */
 export function snapshots<TActor extends AnyActorRef>(
   actor: TActor
@@ -143,6 +163,8 @@ export function snapshots<TActor extends AnyActorRef>(
  * Streams every event an actor emits, as delivered to `actor.on('*', …)`. The
  * stream ends when the actor completes, errors or stops. Interrupting the
  * stream removes the listener.
+ *
+ * @experimental
  */
 export function emitted<TActor extends AnyActorRef>(
   actor: TActor
@@ -185,6 +207,8 @@ export function emitted<TActor extends AnyActorRef>(
  * `ActorStoppedError` if the actor stops or errors first, and with
  * `Cause.TimeoutError` when `options.timeout` elapses. Interrupting the Effect
  * unsubscribes from the actor.
+ *
+ * @experimental
  */
 export const waitFor: {
   <TActor extends AnyActorRef, TNarrowed extends SnapshotFrom<TActor>>(
@@ -302,23 +326,30 @@ export const waitFor: {
 
 /**
  * Joins an actor's final result, like `Fiber.join`: succeeds with its `output`
- * when it is done, fails with `snapshot.error` when it errors, and fails with
+ * when it is done, replays an Effect actor's original Cause when it errors, and fails with
  * `ActorStoppedError` when it stops without output. Waits for a still-active
- * actor to settle.
+ * actor to settle. Ordinary XState errors remain typed failures.
+ *
+ * @experimental
  */
 export function join<TActor extends AnyActorRef>(
   actor: TActor
-): Effect.Effect<OutputFrom<TActor>, ErrorFrom<TActor> | ActorStoppedError> {
+): Effect.Effect<
+  OutputFrom<TActor>,
+  UnwrapEffectFailure<ErrorFrom<TActor>> | ActorStoppedError
+> {
   return Effect.callback<
     OutputFrom<TActor>,
-    ErrorFrom<TActor> | ActorStoppedError
+    UnwrapEffectFailure<ErrorFrom<TActor>> | ActorStoppedError
   >((resume) => {
     const settle = () => {
       const snapshot = actor.getSnapshot();
       if (snapshot.status === 'done') {
         resume(Effect.succeed(snapshot.output as OutputFrom<TActor>));
       } else if (snapshot.status === 'error') {
-        resume(Effect.fail(snapshot.error as ErrorFrom<TActor>));
+        resume(
+          Effect.failCause(causeFromError(snapshot.error as ErrorFrom<TActor>))
+        );
       } else {
         resume(Effect.fail(stoppedError(actor)));
       }
@@ -362,6 +393,8 @@ export function join<TActor extends AnyActorRef>(
  * Streams the inspection events of the actor's system, as delivered to
  * `system.inspect(…)`. The stream runs until it is interrupted or its scope
  * closes.
+ *
+ * @experimental
  */
 export function inspect(actor: AnyActorRef): Stream.Stream<InspectionEvent> {
   return Stream.callback<InspectionEvent>((queue) =>
@@ -395,6 +428,8 @@ export function inspect(actor: AnyActorRef): Stream.Stream<InspectionEvent> {
  * events and internal events sent from outside their owner. A dead letter is
  * not an actor error. The stream runs until it is interrupted or its scope
  * closes.
+ *
+ * @experimental
  */
 export function deadLetters(actor: AnyActorRef): Stream.Stream<EventRejection> {
   return Stream.callback<EventRejection>((queue) =>

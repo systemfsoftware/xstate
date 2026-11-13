@@ -91,7 +91,7 @@ describe('clock', () => {
     actor.system._snapshot._scheduledTimers = {
       restored: {
         source: actor,
-        id: 'restored',
+        key: { id: 'restored' },
         delay: 100,
         scheduledAt: 950,
         dueAt: 1_050
@@ -127,11 +127,15 @@ describe('clock', () => {
       clock
     }).start();
 
-    expect(actor.getSnapshot().children.child.getSnapshot().value).toEqual('a');
+    expect(actor.getSnapshot().children.child!.getSnapshot().value).toEqual(
+      'a'
+    );
 
     clock.increment(10_000);
 
-    expect(actor.getSnapshot().children.child.getSnapshot().value).toEqual('b');
+    expect(actor.getSnapshot().children.child!.getSnapshot().value).toEqual(
+      'b'
+    );
   });
 });
 

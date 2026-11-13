@@ -1,22 +1,35 @@
-import { Context, Duration, Effect, Exit, Scope, Stream } from 'effect';
+import {
+  Cause,
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Scope,
+  Stream
+} from 'effect';
 import { TestClock } from 'effect/testing';
 import {
   createActor,
+  createCallbackLogic,
   createMachine,
   setup,
+  types,
   type AnyActorRef,
   type EventRejection
 } from 'xstate';
 import {
   EffectActor,
-  EffectInterruptedError,
+  EffectFailure,
   createEffectActor,
   deadLetters,
   emitted,
-  fromEffect,
-  fromEffectEventStream,
-  fromEffectStream,
+  createEffectLogic,
+  createEffectEventStreamLogic,
+  createEffectStreamLogic,
   setupEffect,
+  join,
   withActorScope
 } from './index.ts';
 
@@ -54,6 +67,48 @@ const runScoped = async <A, E>(
 };
 
 describe('@xstate/effect runtime', () => {
+  it.each([20, 1000])(
+    'receives %i asynchronous child events in send order',
+    async (count) => {
+      const child = createCallbackLogic(({ sendBack }) => {
+        void (async () => {
+          for (let n = 1; n <= count; n++) {
+            await Promise.resolve();
+            sendBack({ type: 'NUMBER', n });
+          }
+          sendBack({ type: 'DONE' });
+        })();
+      });
+      const machine = setup({
+        schemas: {
+          context: types<{ received: number[] }>(),
+          events: { NUMBER: types<{ n: number }>(), DONE: types<{}>() }
+        },
+        actors: { child }
+      }).createMachine({
+        context: { received: [] },
+        invoke: { src: 'child' },
+        initial: 'listening',
+        states: {
+          listening: {
+            on: {
+              NUMBER: ({ context, event }) => ({
+                context: { received: [...context.received, event.n] }
+              }),
+              DONE: { target: 'finished' }
+            }
+          },
+          finished: { type: 'final' }
+        }
+      });
+      const actor = await runScoped(createEffectActor(machine));
+      await until(() => actor.getSnapshot().matches('finished'));
+      expect(actor.getSnapshot().context.received).toEqual(
+        Array.from({ length: count }, (_, i) => i + 1)
+      );
+    }
+  );
+
   it('finishes task cleanup before releasing resources in the owning actor scope', async () => {
     const order: string[] = [];
     let started = false;
@@ -61,7 +116,7 @@ describe('@xstate/effect runtime', () => {
       Effect.scoped(
         Effect.gen(function* () {
           yield* createEffectActor(
-            fromEffect(
+            createEffectLogic(
               Effect.gen(function* () {
                 // Acquire after yielding, once the hosted fiber has been registered.
                 yield* Effect.sleep(1);
@@ -109,8 +164,8 @@ describe('@xstate/effect runtime', () => {
       );
       const work =
         kind === 'snapshot'
-          ? fromEffectStream(stream)
-          : fromEffectEventStream(stream);
+          ? createEffectStreamLogic(stream)
+          : createEffectEventStreamLogic(stream);
       const machine = setup({ actors: { work } }).createMachine({
         initial: 'working',
         states: {
@@ -136,7 +191,7 @@ describe('@xstate/effect runtime', () => {
       let started = false;
       let interrupted = false;
       let released = 0;
-      const work = fromEffect(
+      const work = createEffectLogic(
         Effect.gen(function* () {
           yield* Effect.acquireRelease(Effect.void, () =>
             Effect.sleep(5).pipe(
@@ -222,7 +277,7 @@ describe('@xstate/effect runtime', () => {
     async (outcome) => {
       let started = false;
       let released = 0;
-      const work = fromEffect(
+      const work = createEffectLogic(
         Effect.gen(function* () {
           yield* Effect.acquireRelease(Effect.void, () =>
             Effect.sync(() => {
@@ -276,7 +331,7 @@ describe('@xstate/effect runtime', () => {
       Effect.scoped(
         Effect.gen(function* () {
           yield* createEffectActor(
-            fromEffect(
+            createEffectLogic(
               Effect.gen(function* () {
                 yield* Effect.addFinalizer(() =>
                   Effect.sleep(10).pipe(
@@ -299,10 +354,46 @@ describe('@xstate/effect runtime', () => {
     expect(released).toBe(true);
   });
 
+  it('awaits invoked task finalizers when the owning fiber is interrupted', async () => {
+    const results = await Effect.runPromise(
+      Effect.forEach(Array.from({ length: 10 }), () =>
+        Effect.gen(function* () {
+          const started = yield* Deferred.make<void>();
+          let released = false;
+          const task = Effect.acquireRelease(
+            Deferred.succeed(started, undefined),
+            () =>
+              Effect.sync(() => {
+                released = true;
+              })
+          ).pipe(Effect.andThen(Effect.never));
+          const machine = setupEffect({
+            actors: {
+              task: createEffectLogic({ effect: () => Effect.scoped(task) })
+            }
+          }).createMachine({
+            initial: 'running',
+            states: { running: { invoke: { src: 'task' } } }
+          });
+
+          const owner = yield* Effect.forkChild(
+            Effect.scoped(
+              createEffectActor(machine).pipe(Effect.andThen(Effect.never))
+            )
+          );
+          yield* Deferred.await(started);
+          yield* Fiber.interrupt(owner);
+          return released;
+        })
+      )
+    );
+    expect(results.every(Boolean)).toBe(true);
+  });
+
   it('stops the actor and interrupts its Effect when the enclosing scope closes', async () => {
     let started = false;
     let interrupted = false;
-    const logic = fromEffect(
+    const logic = createEffectLogic(
       Effect.ensuring(
         Effect.sync(() => {
           started = true;
@@ -333,7 +424,7 @@ describe('@xstate/effect runtime', () => {
   it('releases actor-scoped finalizers when the actor is stopped', async () => {
     let started = false;
     let released = 0;
-    const logic = fromEffect(
+    const logic = createEffectLogic(
       Effect.gen(function* () {
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
@@ -363,7 +454,7 @@ describe('@xstate/effect runtime', () => {
       Effect.scoped(
         Effect.gen(function* () {
           yield* createEffectActor(
-            fromEffect(
+            createEffectLogic(
               Effect.gen(function* () {
                 yield* Effect.addFinalizer(() =>
                   Effect.sync(() => {
@@ -427,7 +518,7 @@ describe('@xstate/effect runtime', () => {
       Effect.scoped(
         Effect.gen(function* () {
           yield* createEffectActor(
-            fromEffect(
+            createEffectLogic(
               Effect.gen(function* () {
                 yield* Effect.addFinalizer(() =>
                   Effect.sync(() => {
@@ -450,7 +541,7 @@ describe('@xstate/effect runtime', () => {
 
   it('runs a hosted finalizer when the actor errors', async () => {
     let released = 0;
-    const logic = fromEffect(
+    const logic = createEffectLogic(
       Effect.gen(function* () {
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
@@ -479,7 +570,7 @@ describe('@xstate/effect runtime', () => {
         Effect.scoped(
           Effect.gen(function* () {
             const actor = yield* createEffectActor(
-              fromEffect(
+              createEffectLogic(
                 Effect.gen(function* () {
                   yield* Effect.addFinalizer(() =>
                     Effect.sync(() => {
@@ -564,45 +655,52 @@ describe('@xstate/effect runtime', () => {
     );
   });
 
-  it('reports self-interruption as an EffectInterruptedError', async () => {
+  it('reports self-interruption as an EffectFailure', async () => {
     const actor = await runScoped(
-      createEffectActor(fromEffect(Effect.interrupt))
+      createEffectActor(createEffectLogic(Effect.interrupt))
     );
     await until(() => actor.getSnapshot().status === 'error');
 
     const snapshot = actor.getSnapshot();
     const error: unknown = snapshot.error;
-    expect(error).toBeInstanceOf(EffectInterruptedError);
-    expect((error as EffectInterruptedError)._tag).toBe(
-      'EffectInterruptedError'
+    expect(error).toBeInstanceOf(EffectFailure);
+    expect(Cause.hasInterruptsOnly((error as EffectFailure<never>).cause)).toBe(
+      true
     );
   });
 
   it('reports an Effect.timeout as a TimeoutError failure', async () => {
-    const logic = fromEffect(Effect.timeout(Effect.never, Duration.millis(1)));
+    const logic = createEffectLogic(
+      Effect.timeout(Effect.never, Duration.millis(1))
+    );
     const actor = await runScoped(createEffectActor(logic));
     actor.subscribe({ error: () => {} });
     await until(() => actor.getSnapshot().status === 'error');
 
     const error: unknown = actor.getSnapshot().error;
-    expect((error as { _tag?: string })._tag).toBe('TimeoutError');
-    expect(error).not.toBeInstanceOf(EffectInterruptedError);
+    expect(error).toBeInstanceOf(EffectFailure);
+    expect(Cause.squash((error as EffectFailure<unknown>).cause)).toMatchObject(
+      { _tag: 'TimeoutError' }
+    );
   });
 
   it('reports a defect from Effect.die as the actor error', async () => {
     const defect = new Error('defect');
     const actor = await runScoped(
-      createEffectActor(fromEffect(Effect.die(defect)))
+      createEffectActor(createEffectLogic(Effect.die(defect)))
     );
     await until(() => actor.getSnapshot().status === 'error');
 
     expect(actor.getSnapshot().status).toBe('error');
-    expect(actor.getSnapshot().error).toBe(defect);
+    expect(actor.getSnapshot().error).toBeInstanceOf(EffectFailure);
+    expect(actor.getSnapshot().error?.cause.reasons).toMatchObject([
+      { _tag: 'Die', defect }
+    ]);
   });
 
   it('routes an interrupted invoked Effect to onError', async () => {
     let received: unknown;
-    const worker = fromEffect(Effect.interrupt);
+    const worker = createEffectLogic(Effect.interrupt);
     const machine = setup({ actors: { worker } }).createMachine({
       initial: 'pending',
       states: {
@@ -622,12 +720,12 @@ describe('@xstate/effect runtime', () => {
     const actor = await runScoped(createEffectActor(machine));
     await until(() => actor.getSnapshot().value === 'failed');
 
-    expect(received).toBeInstanceOf(EffectInterruptedError);
+    expect(received).toBeInstanceOf(EffectFailure);
   });
 
   it('does not report interruption when the invoking state exits', async () => {
     let interrupted = false;
-    const worker = fromEffect(
+    const worker = createEffectLogic(
       Effect.ensuring(
         Effect.never,
         Effect.sync(() => {
@@ -780,12 +878,12 @@ describe('@xstate/effect runtime', () => {
     expect(recorded).toEqual(['provided']);
   });
 
-  it('observes events emitted from the fromEffect source args', async () => {
+  it('observes events emitted from the createEffectLogic source args', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const logic = fromEffect(({ emit }) =>
+    const logic = createEffectLogic(({ emit }) =>
       Effect.gen(function* () {
         yield* Effect.promise(() => gate);
         emit({ type: 'progress', value: 1 });
@@ -828,16 +926,16 @@ describe('@xstate/effect runtime', () => {
   it('reports a failing Effect stream as an actor error', async () => {
     const failure = { code: 'STREAM_FAILED' as const };
     const actor = await runScoped(
-      createEffectActor(fromEffectStream(Stream.fail(failure)))
+      createEffectActor(createEffectStreamLogic(Stream.fail(failure)))
     );
     await until(() => actor.getSnapshot().status === 'error');
 
-    expect(actor.getSnapshot().error).toEqual(failure);
+    expect(Cause.squash(actor.getSnapshot().error!.cause)).toEqual(failure);
   });
 
   it('interrupts an Effect stream when the invoking state exits', async () => {
     let interrupted = false;
-    const worker = fromEffectStream(
+    const worker = createEffectStreamLogic(
       Stream.fromEffect(
         Effect.ensuring(
           Effect.never,
@@ -867,7 +965,7 @@ describe('@xstate/effect runtime', () => {
 
   it('does not report interruption of an Effect that loses an internal race', async () => {
     let loserReleased = false;
-    const logic = fromEffect(
+    const logic = createEffectLogic(
       Effect.race(
         Effect.as(Effect.sleep('5 millis'), 'winner'),
         Effect.ensuring(
@@ -889,7 +987,7 @@ describe('@xstate/effect runtime', () => {
 
   it('resolves the Effect host through the parent chain', async () => {
     const Greeting = Context.Service<{ value: string }>('Greeting');
-    const leaf = fromEffect(
+    const leaf = createEffectLogic(
       Greeting.use((greeting) => Effect.succeed(greeting.value))
     );
     const child = setup({ actors: { leaf } }).createMachine({
@@ -930,7 +1028,7 @@ describe('@xstate/effect runtime', () => {
 
   it('runs spawned Effect logic in the host Effect context', async () => {
     const Greeting = Context.Service<{ value: string }>('Greeting');
-    const leaf = fromEffect(
+    const leaf = createEffectLogic(
       Greeting.use((greeting) => Effect.succeed(greeting.value))
     );
     const machine = setup({ actors: { leaf } }).createMachine({
@@ -955,7 +1053,7 @@ describe('@xstate/effect runtime', () => {
     const machine = setup({}).createMachine({
       context: { ref: undefined as AnyActorRef | undefined },
       entry: (_args, enq) => ({
-        context: { ref: enq.spawn(fromEffect(Effect.succeed('inline'))) }
+        context: { ref: enq.spawn(createEffectLogic(Effect.succeed('inline'))) }
       })
     });
 
@@ -969,7 +1067,7 @@ describe('@xstate/effect runtime', () => {
   });
 
   it('rejects inline spawned logic even when another invoke has a dynamic src', async () => {
-    const leaf = fromEffect(Effect.succeed('leaf'));
+    const leaf = createEffectLogic(Effect.succeed('leaf'));
     const machine = setup({ actors: { leaf } }).createMachine({
       context: {
         declared: undefined as AnyActorRef | undefined,
@@ -986,7 +1084,7 @@ describe('@xstate/effect runtime', () => {
           entry: ({ actors }, enq) => ({
             context: {
               declared: enq.spawn(actors.leaf),
-              inline: enq.spawn(fromEffect(Effect.succeed('inline')))
+              inline: enq.spawn(createEffectLogic(Effect.succeed('inline')))
             }
           })
         },
@@ -1035,11 +1133,14 @@ describe('@xstate/effect runtime', () => {
     actor.send({ type: 'BOOM' });
     await until(() => actor.getSnapshot().value === 'failed');
 
-    expect(received).toBe(defect);
+    expect(received).toBeInstanceOf(EffectFailure);
+    expect((received as EffectFailure<never>).cause.reasons).toMatchObject([
+      { _tag: 'Die', defect }
+    ]);
   });
 
   it('reports a send to a stopped actor as a dead letter', async () => {
-    const worker = fromEffect(Effect.never);
+    const worker = createEffectLogic(Effect.never);
     const machine = setup({ actors: { worker } }).createMachine({
       initial: 'working',
       states: {
@@ -1131,14 +1232,14 @@ describe('@xstate/effect runtime', () => {
     expect(active).toBe(0);
   });
 
-  it('accepts a fromEffect config without schemas', async () => {
-    const logic = fromEffect({
+  it('accepts a createEffectLogic config without schemas', async () => {
+    const logic = createEffectLogic({
       id: 'loadUser',
       effect: ({ input }: { input: { id: string } }) =>
         Effect.succeed({ greeting: `Hello ${input.id}` })
     });
 
-    // `EffectActorLogic` does not surface the `id` that `createLogic` sets.
+    // `EffectActorLogic` does not surface the `id` that `createStepLogic` sets.
     expect(logic.id).toBe('loadUser');
 
     const actor = await runScoped(
@@ -1160,7 +1261,7 @@ describe('@xstate/effect runtime', () => {
         attributes: Object.fromEntries(span.attributes)
       });
     });
-    const worker = fromEffect(Effect.as(record, 'ok'));
+    const worker = createEffectLogic(Effect.as(record, 'ok'));
     const machine = setupEffect({
       actors: { worker },
       actions: { audit: (_args) => record }
@@ -1181,7 +1282,7 @@ describe('@xstate/effect runtime', () => {
     await until(() => spans.length === 2);
 
     expect(spans[0]).toEqual({
-      name: 'fromEffect',
+      name: 'createEffectLogic',
       attributes: {
         'xstate.actor.id': 'worker',
         'xstate.actor.address': `${actor.address}/worker`
@@ -1196,3 +1297,84 @@ describe('@xstate/effect runtime', () => {
     });
   });
 });
+
+it.each(['task', 'stream', 'action', 'factory'] as const)(
+  'retains a complete Cause through an invoked %s failure',
+  async (kind) => {
+    const defect = new Error('factory');
+    const cause = Cause.combine(
+      Cause.fail({ code: 'EXPECTED' }),
+      Cause.die(defect)
+    );
+    const worker =
+      kind === 'stream'
+        ? createEffectStreamLogic(Stream.failCause(cause))
+        : createEffectLogic(() => {
+            if (kind === 'factory') throw defect;
+            return Effect.failCause(cause);
+          });
+    const machine = setupEffect({
+      actors: { worker },
+      actions: {
+        fail: (_args: { self: AnyActorRef }) => Effect.failCause(cause)
+      }
+    }).createMachine({
+      ...(kind === 'action'
+        ? { entry: (args, enq) => enq(args.actions.fail, args) }
+        : { invoke: { src: 'worker' } })
+    });
+    const actor = await runScoped(createEffectActor(machine));
+    const exit = await Effect.runPromise(Effect.exit(join(actor)));
+    const error = actor.getSnapshot().error;
+    expect(error).toBeInstanceOf(EffectFailure);
+    expect(Exit.isFailure(exit) && exit.cause).toBe(
+      (error as EffectFailure<unknown>).cause
+    );
+    expect(Exit.isFailure(exit) && exit.cause.reasons).toMatchObject(
+      kind === 'factory'
+        ? [{ _tag: 'Die', defect }]
+        : [
+            { _tag: 'Fail', error: { code: 'EXPECTED' } },
+            { _tag: 'Die', defect }
+          ]
+    );
+  }
+);
+
+it('preserves self-interruption of a hosted action', async () => {
+  const machine = setupEffect({
+    actions: { stop: (_args: { self: AnyActorRef }) => Effect.interrupt }
+  }).createMachine({ entry: (args, enq) => enq(args.actions.stop, args) });
+  const actor = await runScoped(createEffectActor(machine));
+  const exit = await Effect.runPromise(Effect.exit(join(actor)));
+  expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(
+    true
+  );
+});
+
+it.each(['input', 'output'] as const)(
+  'terminates an invoked task after %s validation defects',
+  async (kind) => {
+    const { Schema } = await import('effect');
+    const { standardSchemaValidator } = await import('xstate/validation');
+    const logic = createEffectLogic({
+      validator: standardSchemaValidator(),
+      schemas: {
+        input: Schema.Number.check(Schema.isGreaterThan(0)),
+        output: Schema.String
+      },
+      effect: () => Effect.succeed(42) as unknown as Effect.Effect<string>
+    });
+    const machine = setup({ actors: { logic } }).createMachine({
+      invoke: { src: 'logic', input: kind === 'input' ? -1 : 1 }
+    });
+    const actor = await runScoped(createEffectActor(machine));
+    const exit = await Effect.runPromise(
+      Effect.exit(Effect.timeout(join(actor), '1 second'))
+    );
+    expect(actor.getSnapshot().error).toBeInstanceOf(EffectFailure);
+    expect(Exit.isFailure(exit) && exit.cause.reasons).toMatchObject([
+      { _tag: 'Die' }
+    ]);
+  }
+);

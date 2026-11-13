@@ -1,6 +1,7 @@
 import { createMachine, createActor } from '../src/index';
 import { createCallbackLogic } from '../src/actors/callback';
 import { z } from 'zod';
+import { restoreActor } from '../src/persist/index.ts';
 
 const exampleMachine = createMachine({
   // types: {} as {
@@ -109,10 +110,7 @@ describe('State', () => {
   it('should expose active state nodes as nodes', () => {
     const snapshot = createActor(exampleMachine).getSnapshot();
 
-    expect(snapshot.nodes.map((node) => node.id)).toEqual([
-      '(machine)',
-      '(machine).one'
-    ]);
+    expect(snapshot.nodes.map((node) => node.id)).toEqual(['', 'one']);
     expect('_nodes' in snapshot).toBe(false);
   });
 
@@ -509,9 +507,10 @@ describe('State', () => {
       const actorRef = createActor(machine).start();
       const persistedState = actorRef.getPersistedSnapshot();
       actorRef.stop();
-      const restoredSnapshot = createActor(machine, {
-        snapshot: persistedState
-      }).getSnapshot();
+      const restoredSnapshot = restoreActor(
+        machine,
+        persistedState
+      ).getSnapshot();
 
       expect(restoredSnapshot.hasTag('foo')).toBe(true);
     });
@@ -535,7 +534,10 @@ it.each(['__proto__', 'constructor', 'toString'])(
       JSON.parse(
         JSON.stringify({
           initial: key,
-          states: { [key]: { on: { GO: 'done' } }, done: { type: 'final' } }
+          states: {
+            [key]: { on: { GO: { target: 'done' } } },
+            done: { type: 'final' }
+          }
         })
       )
     );
@@ -549,3 +551,43 @@ it.each(['__proto__', 'constructor', 'toString'])(
     expect(error).not.toHaveBeenCalled();
   }
 );
+
+it.each(['done', 'error', 'stopped'] as const)(
+  'can() rejects events on %s snapshots without evaluating transitions',
+  (status) => {
+    const evaluate = vi.fn(() => {
+      throw new Error('must not run');
+    });
+    const machine = createMachine({ on: { GO: evaluate } });
+    const snapshot = createActor(machine).getSnapshot();
+    const terminal = { ...snapshot, status };
+    expect(terminal.can({ type: 'GO' })).toBe(false);
+    expect(evaluate).not.toHaveBeenCalled();
+  }
+);
+
+it('can() propagates evaluation errors without invoking state error recovery', () => {
+  const error = new Error('guard failed');
+  const recover = vi.fn(() => ({ target: 'recovered' }));
+  const machine = createMachine({
+    initial: 'idle',
+    states: {
+      idle: {
+        on: {
+          GO: () => {
+            throw error;
+          }
+        },
+        onError: recover
+      },
+      recovered: {}
+    }
+  });
+  const actor = createActor(machine).start();
+  expect(() => actor.getSnapshot().can({ type: 'GO' })).toThrow(error);
+  expect(actor.getSnapshot().value).toBe('idle');
+  expect(recover).not.toHaveBeenCalled();
+  actor.send({ type: 'GO' });
+  expect(actor.getSnapshot().value).toBe('recovered');
+  actor.stop();
+});

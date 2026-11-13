@@ -5,6 +5,8 @@ description: Log transitions in development and attach them to error reports.
 
 An inspector passed to the root actor observes the whole system: the root actor, every invoked or spawned child, and every transition. This guide uses it for a development log and for telemetry.
 
+> **Experimental:** the inspection event types (`InspectionEvent`, `ActorInspectionEvent`, `TransitionInspectionEvent`) may change in a minor release.
+
 ## 1. Attach an inspector in development only
 
 Inspection runs on every transition, so keep it out of production builds. Pass `undefined` and `createActor(...)` behaves as if no inspector were given.
@@ -43,7 +45,7 @@ function inspect(inspectionEvent: InspectionEvent) {
 }
 ```
 
-The root actor's first transition is `@xstate.init`, so the log starts with the initial state. Only machine snapshots have a `value`; a child running async logic reports its `status` instead. A `sessionId` is assigned once an actor starts, which is why the map allows `undefined` keys.
+The root actor's first transition is `xstate.init`, so the log starts with the initial state. Only machine snapshots have a `value`; a child running async logic reports its `status` instead. A `sessionId` is assigned once an actor starts, which is why the map allows `undefined` keys.
 
 Filter further when a system is noisy. An early `if (!eventType.startsWith('payment.')) return;` keeps payment activity and drops everything else.
 

@@ -18,9 +18,10 @@ import {
   createMachine,
   createCallbackLogic,
   createAsyncLogic,
-  createLogic
+  createStepLogic
 } from 'xstate';
 import { useActor } from '../src/index.ts';
+import { restoreActor } from 'xstate/persist';
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -94,15 +95,15 @@ describe('useActor', () => {
       },
       props
     );
-    const [snapshot, send] = useActor(
-      fetchMachine.provide({
-        actors: {
-          fetchData: createAsyncLogic({ run: mergedProps.onFetch }) as any
-        }
-      }),
-      {
-        snapshot: mergedProps.persistedState
+    const logic = fetchMachine.provide({
+      actors: {
+        fetchData: createAsyncLogic({ run: mergedProps.onFetch }) as any
       }
+    });
+    const [snapshot, send] = useActor(
+      mergedProps.persistedState
+        ? restoreActor(logic, mergedProps.persistedState)
+        : createActor(logic)
     );
 
     return (
@@ -220,7 +221,10 @@ describe('useActor', () => {
             );
           },
           on: {
-            'xstate.done.actor.my-promise': { target: 'success' }
+            'xstate.done.actor': {
+              matches: { actorId: 'my-promise' },
+              target: 'success'
+            }
           }
         },
         success: {
@@ -1019,7 +1023,7 @@ describe('useActor', () => {
 
       createEffect(() => {
         calls++;
-        state.matches('foo');
+        state.matches('idle');
       });
 
       onMount(() => {
@@ -1717,9 +1721,9 @@ describe('useActor', () => {
       actorRef.stop();
 
       const Test = () => {
-        const [state, send] = useActor(testMachine, {
-          snapshot: JSON.parse(persistedState)
-        });
+        const [state, send] = useActor(
+          restoreActor(testMachine, JSON.parse(persistedState))
+        );
 
         return (
           <>
@@ -1832,7 +1836,7 @@ describe('useActor', () => {
 
     const Test = () => {
       const [count, send] = useActor(
-        createLogic({
+        createStepLogic({
           context: 0,
           run: ({ context, event }) => ({
             context: reducer(context, event as { type: 'INC' })

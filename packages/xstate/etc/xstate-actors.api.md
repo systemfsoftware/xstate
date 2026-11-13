@@ -491,11 +491,11 @@ export class TimeoutError extends Error {
 
 // Warnings were encountered during analysis:
 //
-// dist/index-BMYfZluc.d.ts:36:5 - (ae-forgotten-export) The symbol "ActorSystemRuntime" needs to be exported by the entry point actors.d.ts
-// dist/index-BMYfZluc.d.ts:71:3 - (ae-forgotten-export) The symbol "LogicTransition" needs to be exported by the entry point actors.d.ts
-// dist/index-BMYfZluc.d.ts:171:3 - (ae-forgotten-export) The symbol "Receiver" needs to be exported by the entry point actors.d.ts
-// dist/index-BMYfZluc.d.ts:298:3 - (ae-forgotten-export) The symbol "Subscription" needs to be exported by the entry point actors.d.ts
-// dist/index-BMYfZluc.d.ts:362:3 - (ae-forgotten-export) The symbol "ObservableActor" needs to be exported by the entry point actors.d.ts
+// dist/index-DDWoKIF5.d.ts:35:5 - (ae-forgotten-export) The symbol "ActorSystemRuntime" needs to be exported by the entry point actors.d.ts
+// dist/index-DDWoKIF5.d.ts:70:3 - (ae-forgotten-export) The symbol "LogicTransition" needs to be exported by the entry point actors.d.ts
+// dist/index-DDWoKIF5.d.ts:168:3 - (ae-forgotten-export) The symbol "Receiver" needs to be exported by the entry point actors.d.ts
+// dist/index-DDWoKIF5.d.ts:291:3 - (ae-forgotten-export) The symbol "Subscription" needs to be exported by the entry point actors.d.ts
+// dist/index-DDWoKIF5.d.ts:355:3 - (ae-forgotten-export) The symbol "ObservableActor" needs to be exported by the entry point actors.d.ts
 
 // (No @packageDocumentation comment for this package)
 

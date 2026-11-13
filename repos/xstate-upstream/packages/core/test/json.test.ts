@@ -1,13 +1,17 @@
-import { createMachineFromConfig } from '../src/createMachineFromConfig';
+import { machineFromJSON } from '../src/machineFromJSON';
 import {
   createActor,
   createAsyncLogic,
   createMachine,
   createObservableLogic,
-  serializeMachine,
-  SimulatedClock
+  machineToJSON,
+  SimulatedClock,
+  type EventRejection,
+  type MachineJSON
 } from '../src/index.ts';
+import { standardSchemaValidator } from '../src/validation/index.ts';
 import { BehaviorSubject } from 'rxjs';
+import { z } from 'zod';
 
 import * as machineSchema from '../src/machine.schema.json';
 
@@ -31,8 +35,9 @@ function expectSchemaInvalid(json: unknown) {
 
 describe('json', () => {
   it('should serialize the machine', () => {
-    const machine = createMachineFromConfig(
+    const machine = machineFromJSON(
       {
+        id: 'machine',
         initial: 'foo',
         version: '1.0.0',
         context: {
@@ -116,7 +121,7 @@ describe('json', () => {
       }
     );
 
-    const json = JSON.parse(JSON.stringify(serializeMachine(machine)));
+    const json = JSON.parse(JSON.stringify(machineToJSON(machine)));
 
     try {
       validate(json);
@@ -150,7 +155,7 @@ describe('json', () => {
       }
     });
 
-    const json = JSON.parse(JSON.stringify(serializeMachine(machine)));
+    const json = JSON.parse(JSON.stringify(machineToJSON(machine)));
 
     validate(json);
 
@@ -176,19 +181,63 @@ describe('json', () => {
         done: {}
       }
     });
-    const json = JSON.parse(JSON.stringify(serializeMachine(machine)));
+    const json = JSON.parse(JSON.stringify(machineToJSON(machine)));
     const evaluator = ({ source, scope }: any) => {
       const fn = Function(`return (${source});`)();
       return fn(scope, scope.enq);
     };
 
     const actor = createActor(
-      createMachineFromConfig(json, {
+      machineFromJSON(json, {
         evaluators: { ts: evaluator }
       })
     ).start();
 
     expect(actor.getSnapshot().context).toEqual({ count: 1 });
+
+    actor.send({ type: 'GO' });
+
+    expect(actor.getSnapshot().value).toBe('done');
+  });
+
+  it('exposes named sources to revived code expressions', () => {
+    const isOk = (ok: boolean) => ok;
+    const track = vi.fn();
+    const machine = createMachine({
+      context: { ok: true },
+      actions: { track },
+      guards: { isOk },
+      initial: 'idle',
+      states: {
+        idle: {
+          entry: ({ actions }, enq) => {
+            enq(actions.track);
+          },
+          on: {
+            GO: ({ context, guards }) => {
+              if (!guards.isOk(context.ok)) return;
+              return { target: 'done' };
+            }
+          }
+        },
+        done: {}
+      }
+    });
+    const json = JSON.parse(JSON.stringify(machineToJSON(machine)));
+    const evaluator = ({ source, scope }: any) => {
+      const fn = Function(`return (${source});`)();
+      return fn(scope, scope.enq);
+    };
+
+    const actor = createActor(
+      machineFromJSON(json, {
+        actions: { track },
+        guards: { isOk },
+        evaluators: { ts: evaluator }
+      })
+    ).start();
+
+    expect(track).toHaveBeenCalledTimes(1);
 
     actor.send({ type: 'GO' });
 
@@ -209,7 +258,7 @@ describe('json', () => {
         }
       }
     });
-    const json = JSON.parse(JSON.stringify(serializeMachine(machine)));
+    const json = JSON.parse(JSON.stringify(machineToJSON(machine)));
     const evaluator = ({ source, scope }: any) => {
       const fn = Function(`return (${source});`)();
       return fn(scope);
@@ -223,7 +272,7 @@ describe('json', () => {
     `);
 
     const actor = createActor(
-      createMachineFromConfig(json, {
+      machineFromJSON(json, {
         evaluators: { ts: evaluator }
       })
     ).start();
@@ -246,7 +295,7 @@ describe('json', () => {
   });
 
   it('should not double-serialize invoke transitions', () => {
-    const machine = createMachineFromConfig(
+    const machine = machineFromJSON(
       {
         initial: 'active',
         states: {
@@ -274,11 +323,11 @@ describe('json', () => {
       }
     );
 
-    const machineJSON = JSON.stringify(serializeMachine(machine));
+    const machineJSON = JSON.stringify(machineToJSON(machine));
 
     const machineObject = JSON.parse(machineJSON);
 
-    const revivedMachine = createMachineFromConfig(machineObject, {
+    const revivedMachine = machineFromJSON(machineObject, {
       actors: {
         someSrc: createAsyncLogic({
           run: () => new Promise(() => {})
@@ -308,7 +357,7 @@ describe('json', () => {
     `);
 
     // A second round-trip is byte-stable.
-    expect(JSON.stringify(serializeMachine(revivedMachine))).toBe(machineJSON);
+    expect(JSON.stringify(machineToJSON(revivedMachine))).toBe(machineJSON);
 
     const transitions = [
       ...revivedMachine.states.active.transitions.values()
@@ -318,20 +367,20 @@ describe('json', () => {
       transitions.some(
         (t) =>
           t.eventType === 'xstate.done.actor' &&
-          t.matches?.actorId === '0.active'
+          t.matches?.actorId === 'active:0'
       )
     ).toBe(true);
     expect(
       transitions.some(
         (t) =>
           t.eventType === 'xstate.error.actor' &&
-          t.matches?.actorId === '0.active'
+          t.matches?.actorId === 'active:0'
       )
     ).toBe(true);
   });
 
   it('round-trips transition payload matches', () => {
-    const machine = createMachineFromConfig({
+    const machine = machineFromJSON({
       initial: 'pending',
       states: {
         pending: {
@@ -346,8 +395,8 @@ describe('json', () => {
         second: {}
       }
     });
-    const revived = createMachineFromConfig(
-      JSON.parse(JSON.stringify(serializeMachine(machine)))
+    const revived = machineFromJSON(
+      JSON.parse(JSON.stringify(machineToJSON(machine)))
     );
     const actor = createActor(revived).start();
 
@@ -359,7 +408,7 @@ describe('json', () => {
   it('revives delayed transitions from JSON', () => {
     const clock = new SimulatedClock();
     const actor = createActor(
-      createMachineFromConfig({
+      machineFromJSON({
         initial: 'waiting',
         states: {
           waiting: {
@@ -382,7 +431,7 @@ describe('json', () => {
   it('revives state timeouts from JSON', () => {
     const clock = new SimulatedClock();
     const actor = createActor(
-      createMachineFromConfig({
+      machineFromJSON({
         initial: 'waiting',
         states: {
           waiting: {
@@ -401,7 +450,7 @@ describe('json', () => {
 
   it('revives state tags and final output from JSON', () => {
     const actor = createActor(
-      createMachineFromConfig({
+      machineFromJSON({
         initial: 'pending',
         output: { ok: true },
         states: {
@@ -435,7 +484,7 @@ describe('json', () => {
     });
 
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           initial: 'loading',
           states: {
@@ -469,7 +518,7 @@ describe('json', () => {
     });
 
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           initial: 'loading',
           states: {
@@ -493,15 +542,34 @@ describe('json', () => {
 
   it('rejects missing action sources', () => {
     expect(() =>
-      createMachineFromConfig({
+      machineFromJSON({
         entry: [{ type: 'track' }]
       })
     ).toThrow('Missing action source "track"');
   });
 
+  it('rejects initial states that do not exist', () => {
+    expect(() =>
+      machineFromJSON({
+        initial: 'strat',
+        states: { start: {} }
+      })
+    ).toThrow('Invalid initial state at $.initial');
+
+    expect(() =>
+      machineFromJSON({
+        initial: 'start',
+        states: {
+          start: {},
+          details: { initial: 'nmae', states: { name: {} } }
+        }
+      })
+    ).toThrow('Invalid initial state at $.states.details.initial');
+  });
+
   it('rejects missing guard sources', () => {
     expect(() =>
-      createMachineFromConfig({
+      machineFromJSON({
         initial: 'idle',
         states: {
           idle: {
@@ -518,10 +586,57 @@ describe('json', () => {
     ).toThrow('Missing guard source "ready"');
   });
 
+  it('rejects an unknown key on a state node', () => {
+    const json = {
+      initial: 'idle',
+      states: {
+        idle: { whatever: 'xyz' },
+        done: {}
+      }
+    };
+
+    // machine.schema.json leaves state nodes open (additionalProperties: true),
+    // so it does not catch this; machineFromJSON must.
+    expectSchemaValid(json);
+    expect(() => machineFromJSON(json as any)).toThrow(
+      'Unknown key "whatever" at $.states.idle'
+    );
+  });
+
+  it('rejects an unknown key on a transition object', () => {
+    const json = {
+      initial: 'idle',
+      states: {
+        idle: { on: { GO: { target: 'done', bogusKey: true } } },
+        done: {}
+      }
+    };
+
+    expectSchemaInvalid(json);
+    expect(() => machineFromJSON(json as any)).toThrow(
+      'Unknown key "bogusKey" at $.states.idle.on.GO'
+    );
+  });
+
+  it('rejects a misspelled "guard" key on a transition object instead of silently dropping the guard', () => {
+    const json = {
+      initial: 'idle',
+      states: {
+        idle: { on: { GO: { target: 'done', gaurd: { type: 'ready' } } } },
+        done: {}
+      }
+    };
+
+    expectSchemaInvalid(json);
+    expect(() => machineFromJSON(json as any)).toThrow(
+      'Unknown key "gaurd" at $.states.idle.on.GO'
+    );
+  });
+
   it('revives serialized numeric delays from root delay maps', () => {
     const clock = new SimulatedClock();
     const actor = createActor(
-      createMachineFromConfig({
+      machineFromJSON({
         delays: {
           short: 10
         },
@@ -550,7 +665,7 @@ describe('json', () => {
     });
 
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           initial: 'loading',
           states: {
@@ -573,7 +688,7 @@ describe('json', () => {
     const subject = new BehaviorSubject(0);
     const worker = createObservableLogic(() => subject);
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           initial: 'watching',
           states: {
@@ -597,7 +712,7 @@ describe('json', () => {
 
   it('revives transition input from JSON', () => {
     const actor = createActor(
-      createMachineFromConfig({
+      machineFromJSON({
         initial: 'idle',
         states: {
           idle: {
@@ -627,7 +742,7 @@ describe('json', () => {
     });
 
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           initial: 'loading',
           states: {
@@ -652,7 +767,7 @@ describe('json', () => {
 
   it('rejects missing evaluators for expressions', () => {
     expect(() =>
-      createMachineFromConfig({
+      machineFromJSON({
         '@exprLang': 'js',
         context: {
           count: { '@expr': 'input.count' }
@@ -663,7 +778,7 @@ describe('json', () => {
 
   it('rejects expressions without a top-level or local language', () => {
     expect(() =>
-      createMachineFromConfig({
+      machineFromJSON({
         context: {
           count: { '@expr': 'input.count' }
         }
@@ -674,7 +789,7 @@ describe('json', () => {
   it('uses local expression language overrides and passes evaluator metadata', () => {
     const calls: any[] = [];
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           '@exprLang': 'js',
           context: {
@@ -709,10 +824,45 @@ describe('json', () => {
     expect(calls[0].scope.input).toEqual({ count: 7 });
   });
 
+  it('passes the JSON location of nested expressions to the evaluator, not a slot placeholder', () => {
+    const paths: Record<string, string> = {};
+    const evaluator = ({ source, scope, path }: any) => {
+      paths[source] = path;
+      return Function('scope', `with (scope) { return (${source}); }`)(scope);
+    };
+    const actor = createActor(
+      machineFromJSON(
+        {
+          '@exprLang': 'js',
+          initial: 'outer',
+          states: {
+            outer: {
+              initial: 'inner',
+              states: {
+                inner: {
+                  entry: [{ '@expr': '"entered"' }],
+                  on: {
+                    next: { guard: { '@expr': 'true' }, target: '#done' }
+                  }
+                }
+              }
+            },
+            done: { id: 'done', type: 'final' }
+          }
+        },
+        { evaluators: { js: evaluator } }
+      )
+    ).start();
+    actor.send({ type: 'next' });
+
+    expect(paths['"entered"']).toBe('$.states.outer.states.inner.entry[0]');
+    expect(paths['true']).toBe('$.states.outer.states.inner.on.next.guard');
+  });
+
   it('resolves expressions in delays and state timeouts', () => {
     const clock = new SimulatedClock();
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           '@exprLang': 'js',
           context: {
@@ -762,7 +912,7 @@ describe('json', () => {
     });
 
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           '@exprLang': 'js',
           context: {
@@ -799,7 +949,7 @@ describe('json', () => {
 
   it('resolves expressions in transition input and final output', () => {
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           '@exprLang': 'js',
           context: {
@@ -832,11 +982,84 @@ describe('json', () => {
     expect(actor.getSnapshot().output).toBe(4);
   });
 
+  it('resolves expressions nested in final output', () => {
+    const actor = createActor(
+      machineFromJSON(
+        {
+          '@exprLang': 'js',
+          context: {
+            count: 2
+          },
+          initial: 'idle',
+          states: {
+            idle: {
+              on: {
+                GO: { target: 'done' }
+              }
+            },
+            done: {
+              type: 'final',
+              output: {
+                total: { '@expr': 'context.count * 2' },
+                items: [{ '@expr': 'context.count' }, 'static']
+              }
+            }
+          }
+        },
+        { evaluators: { js: jsEvaluator } }
+      )
+    ).start();
+
+    actor.send({ type: 'GO' });
+
+    expect(actor.getSnapshot().output).toEqual({
+      total: 4,
+      items: [2, 'static']
+    });
+  });
+
+  it('resolves final output expressions with state input', () => {
+    const actor = createActor(
+      machineFromJSON(
+        {
+          '@exprLang': 'js',
+          initial: 'idle',
+          states: {
+            idle: {
+              on: {
+                GO: {
+                  target: 'done',
+                  input: { userId: 'u1' }
+                }
+              }
+            },
+            done: {
+              id: 'done',
+              type: 'final',
+              output: {
+                direct: { '@expr': 'input.userId' },
+                nested: { user: { '@expr': 'input.userId' } }
+              }
+            }
+          }
+        },
+        { evaluators: { js: jsEvaluator } }
+      )
+    ).start();
+
+    actor.send({ type: 'GO' });
+
+    expect(actor.getSnapshot().output).toEqual({
+      direct: 'u1',
+      nested: { user: 'u1' }
+    });
+  });
+
   it('revives serializable choice states and expression values', () => {
     const evaluator = ({ source, scope }: any) =>
       Function('scope', `with (scope) { return (${source}); }`)(scope);
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           '@exprLang': 'js',
           context: {
@@ -880,7 +1103,7 @@ describe('json', () => {
 
   it('rejects choice fallback branches before the last branch', () => {
     expect(() =>
-      createMachineFromConfig({
+      machineFromJSON({
         initial: 'routing',
         states: {
           routing: {
@@ -901,7 +1124,7 @@ describe('json', () => {
 
   it('errors when a choice state has no matching branch', () => {
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           '@exprLang': 'js',
           initial: 'routing',
@@ -930,7 +1153,7 @@ describe('json', () => {
     const evaluator = ({ source, scope }: any) =>
       Function('scope', `with (scope) { return (${source}); }`)(scope);
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           '@exprLang': 'js',
           context: {
@@ -961,7 +1184,7 @@ describe('json', () => {
 
   it('runs declarative named action arrays', () => {
     const actor = createActor(
-      createMachineFromConfig({
+      machineFromJSON({
         context: {
           count: 0
         },
@@ -984,9 +1207,52 @@ describe('json', () => {
     expect(actor.getSnapshot().context).toEqual({ count: 2 });
   });
 
+  it('lets each action in a list read the context written by earlier actions', () => {
+    const seen: number[] = [];
+    const inc = {
+      type: '@xstate.assign',
+      context: { count: { '@expr': 'context.count + 1' } }
+    } as const;
+    const counted = { type: 'COUNTED', count: { '@expr': 'context.count' } };
+    const actor = createActor(
+      machineFromJSON(
+        {
+          '@exprLang': 'js',
+          context: { count: 0, double: 0 },
+          actions: { incTwice: [inc, inc] },
+          entry: [
+            inc,
+            { type: 'incTwice' },
+            { '@expr': '({ context: { double: context.count * 2 } })' },
+            { type: 'track', params: { count: { '@expr': 'context.count' } } },
+            { type: '@xstate.raise', event: counted }
+          ],
+          on: {
+            COUNTED: {
+              actions: [
+                { type: 'track', params: { count: { '@expr': 'event.count' } } }
+              ]
+            }
+          }
+        },
+        {
+          evaluators: { js: jsEvaluator },
+          actions: {
+            track: (params: { count: number }) => {
+              seen.push(params.count);
+            }
+          }
+        }
+      )
+    ).start();
+
+    expect(actor.getSnapshot().context).toEqual({ count: 3, double: 6 });
+    expect(seen).toEqual([3, 3]);
+  });
+
   it('rejects circular declarative named actions', () => {
     expect(() =>
-      createMachineFromConfig({
+      machineFromJSON({
         actions: {
           a: { type: 'b' },
           b: { type: 'a' }
@@ -996,11 +1262,128 @@ describe('json', () => {
     ).toThrow('Circular action reference: a -> b -> a');
   });
 
+  it('rejects circular declarative named guards', () => {
+    expect(() =>
+      machineFromJSON({
+        guards: {
+          a: { when: { type: 'b' } },
+          b: { when: { type: 'a' } }
+        },
+        initial: 'idle',
+        states: {
+          idle: { on: { GO: { guard: { type: 'a' }, target: 'done' } } },
+          done: {}
+        }
+      })
+    ).toThrow('Circular guard reference: a -> b -> a');
+
+    expect(() =>
+      machineFromJSON({
+        guards: {
+          a: { when: { type: 'a' } }
+        }
+      })
+    ).toThrow('Circular guard reference: a -> a');
+
+    expect(() =>
+      machineFromJSON({
+        guards: {
+          a: {
+            when: { type: '@xstate.not', params: { guard: { type: 'a' } } }
+          }
+        }
+      })
+    ).toThrow('Circular guard reference: a -> a');
+  });
+
+  it('rejects missing guard sources inside @xstate.not', () => {
+    const createWithGuard = (guard: any) =>
+      machineFromJSON(
+        {
+          initial: 'idle',
+          states: {
+            idle: { on: { GO: { guard, target: 'done' } } },
+            done: {}
+          }
+        },
+        { guards: { ready: () => true } }
+      );
+
+    expect(() =>
+      createWithGuard({
+        type: '@xstate.not',
+        params: {
+          guard: { type: '@xstate.not', params: { guard: { type: 'raedy' } } }
+        }
+      })
+    ).toThrow('Missing guard source "raedy"');
+    expect(() => createWithGuard({ type: '@xstate.not' })).toThrow(
+      'Missing guard at $.states.idle.on.GO.guard.params.guard'
+    );
+  });
+
+  it('negates declarative named guards and expressions with @xstate.not', () => {
+    const createWithGuard = (guard: any) =>
+      machineFromJSON(
+        {
+          '@exprLang': 'js',
+          context: { ready: false },
+          guards: {
+            isReady: { when: { '@expr': 'context.ready' } }
+          },
+          initial: 'idle',
+          states: {
+            idle: { on: { GO: { guard, target: 'done' } } },
+            done: {}
+          }
+        },
+        { evaluators: { js: jsEvaluator } }
+      );
+
+    for (const inner of [{ type: 'isReady' }, { '@expr': 'context.ready' }]) {
+      const actor = createActor(
+        createWithGuard({ type: '@xstate.not', params: { guard: inner } })
+      ).start();
+      actor.send({ type: 'GO' });
+      expect(actor.getSnapshot().value).toBe('done');
+    }
+  });
+
+  it('rejects @xstate.stateIn references to unknown state IDs', () => {
+    const createWithStateId = (stateId?: string) =>
+      machineFromJSON({
+        id: 'm',
+        initial: 'idle',
+        states: {
+          idle: {
+            on: {
+              GO: {
+                guard: { type: '@xstate.stateIn', params: { stateId } },
+                target: 'done'
+              }
+            }
+          },
+          done: {}
+        }
+      });
+
+    expect(() => createWithStateId('#idle')).toThrow(
+      'Unknown state ID "#idle" at $.states.idle.on.GO.guard.params.stateId'
+    );
+    expect(() => createWithStateId()).toThrow(
+      'Missing state ID at $.states.idle.on.GO.guard.params.stateId'
+    );
+
+    const actor = createActor(createWithStateId('#m.idle')).start();
+    actor.send({ type: 'GO' });
+    expect(actor.getSnapshot().value).toBe('done');
+  });
+
   it('runs declarative named guards', () => {
     const evaluator = ({ source, scope }: any) =>
       Function('scope', `with (scope) { return (${source}); }`)(scope);
     const actor = createActor(
-      createMachineFromConfig(
+      machineFromJSON(
         {
           '@exprLang': 'js',
           context: {
@@ -1218,19 +1601,125 @@ describe('json', () => {
       }
     });
   });
+
+  it('validates revived machines against runtime schemas from sources', () => {
+    const json: MachineJSON = {
+      '@exprLang': 'js',
+      context: { email: '' },
+      schemas: {
+        events: {
+          'email.change': {
+            type: 'object',
+            properties: { value: { type: 'string' } }
+          }
+        }
+      },
+      initial: 'editing',
+      states: {
+        editing: {
+          on: {
+            'email.change': {
+              context: { email: { '@expr': 'event.value' } }
+            }
+          }
+        }
+      }
+    };
+    const machine = machineFromJSON(json, {
+      evaluators: { js: jsEvaluator },
+      schemas: {
+        events: { 'email.change': z.object({ value: z.string() }) }
+      },
+      validator: standardSchemaValidator()
+    });
+    const rejections: EventRejection[] = [];
+    const actor = createActor(machine.provide({}), {
+      onRejectedEvent: (rejection) => rejections.push(rejection)
+    }).start();
+
+    actor.send({ type: 'email.change', value: 12345 });
+
+    expect(actor.getSnapshot().context).toEqual({ email: '' });
+    expect(rejections.map((rejection) => rejection.reason)).toEqual([
+      'invalidEvent'
+    ]);
+
+    actor.send({ type: 'email.change', value: 'a@b.c' });
+
+    expect(actor.getSnapshot().context).toEqual({ email: 'a@b.c' });
+    // runtime schemas are not part of the definition
+    expect(machineToJSON(machine)).toEqual(json);
+  });
 });
 
 describe('reserved source names', () => {
-  it("rejects source names using the reserved '@xstate.' prefix", () => {
+  it.each(['@xstate.raise', 'xstate.raise'])(
+    "rejects provided source name '%s'",
+    (name) => {
+      expect(() =>
+        machineFromJSON({
+          initial: 'a',
+          states: { a: {} }
+        } as any).provide({
+          actions: { [name]: () => {} } as any
+        })
+      ).toThrow(
+        `Invalid actions name '${name}': the 'xstate.' and '@xstate.' prefixes are reserved`
+      );
+    }
+  );
+
+  it.each([
+    ['actions', { 'xstate.track': { type: '@xstate.log' } }],
+    ['guards', { '@xstate.not': { when: { type: 'ok' } } }],
+    ['delays', { 'xstate.slow': 1000 }]
+  ] as const)('rejects reserved %s names in the JSON', (kind, definitions) => {
     expect(() =>
-      createMachineFromConfig({
-        initial: 'a',
-        states: { a: {} }
-      } as any).provide({
-        actions: { '@xstate.raise': () => {} } as any
-      })
+      machineFromJSON(
+        { initial: 'a', states: { a: {} }, [kind]: definitions } as any,
+        { guards: { ok: () => true } }
+      )
     ).toThrow(
-      "Invalid actions name '@xstate.raise': the '@xstate.' prefix is reserved"
+      `Invalid ${kind} name '${Object.keys(definitions)[0]}': the 'xstate.' and '@xstate.' prefixes are reserved`
     );
   });
+});
+
+it('rejects string transition targets', () => {
+  const json = {
+    initial: 'green',
+    states: {
+      green: { on: { TIMER: 'yellow' } },
+      yellow: {}
+    }
+  };
+
+  expectSchemaInvalid(json);
+  expect(() => machineFromJSON(json as any)).toThrow(
+    'Invalid transition at $.states.green.on.TIMER: use { "target": "yellow" } instead of a string'
+  );
+});
+
+it('rejects circular declarative named guards', () => {
+  expect(() =>
+    machineFromJSON({
+      guards: {
+        a: { when: { type: 'b' } },
+        b: { when: { type: 'a' } }
+      },
+      initial: 'idle',
+      states: {
+        idle: { on: { GO: { guard: { type: 'a' }, target: 'done' } } },
+        done: {}
+      }
+    })
+  ).toThrow('Circular guard reference: a -> b -> a');
+
+  expect(() =>
+    machineFromJSON({
+      guards: {
+        a: { when: { type: 'a' } }
+      }
+    })
+  ).toThrow('Circular guard reference: a -> a');
 });

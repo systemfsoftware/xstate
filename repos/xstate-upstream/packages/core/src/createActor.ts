@@ -1,7 +1,10 @@
 import isDevelopment from '#is-development';
+import { xstateError } from './xstateError.ts';
+import { diagnoseActorOptions } from './devDiagnostics.ts';
+import { publishEmittedEvent } from './runtimeHelpers.ts';
 import type { ActionRecord, SentRecord } from './inspection.ts';
 import { Mailbox } from './Mailbox.ts';
-import { XSTATE_STOP } from './constants.ts';
+import { XSTATE_STOP, XSTATE_TIMER } from './constants.ts';
 import {
   createDoneActorEvent,
   createErrorActorEvent,
@@ -25,7 +28,7 @@ import type {
   createEventObservableLogic
 } from './actors/observable.ts';
 import type { createCallbackLogic } from './actors/callback.ts';
-import type { createLogic } from './actors/logic.ts';
+import type { createStepLogic } from './actors/logic.ts';
 import type { createAsyncLogic } from './actors/promise.ts';
 import type { createMachine } from './createMachine.ts';
 // oxlint-enable no-unused-vars
@@ -46,10 +49,14 @@ import type {
   Snapshot,
   SnapshotFrom,
   AnyTransitionDefinition,
-  ExecutableActionObject,
+  ExecutableEffect,
   Readable,
-  ActorLogicTransitionResult
+  ActorLogicTransitionResult,
+  LogicalTimer,
+  ReservedMachineEvent,
+  SerializedActorRef
 } from './types.ts';
+import { getTimerKey } from './timerKey.ts';
 import {
   ActorOptions,
   ActorInstance,
@@ -66,13 +73,24 @@ import {
   setSnapshotActorRef
 } from './snapshotActorRef.ts';
 
-/**
- * Marks a serialized object as an actor reference (`xstate$type` in JSON
- * output and persisted context).
- */
-export const ACTOR_REF_TYPE = 'actorRef';
+interface ActorMailboxEvent<TEvent> {
+  event: TEvent;
+  sourceRef: AnyActor | undefined;
+}
 
 const emptyInspectionRecords = Object.freeze([]) as unknown as never[];
+
+const reservedMachineEventTypes = {
+  'xstate.done.actor': true,
+  'xstate.error.actor': true,
+  'xstate.error.execution': true,
+  'xstate.snapshot.actor': true,
+  'xstate.done.state': true,
+  'xstate.after': true,
+  'xstate.timeout.state': true,
+  'xstate.timeout.actor': true,
+  [XSTATE_TIMER]: true
+} satisfies Record<ReservedMachineEvent['type'] | typeof XSTATE_TIMER, true>;
 
 // those values are currently used by @xstate/react directly so it's important to keep the assigned values in sync
 export enum ProcessingStatus {
@@ -102,7 +120,7 @@ function safeCall<T>(fn: ((arg: T) => void) | undefined, arg?: T) {
 }
 
 function executeExecutableEffects(
-  effects: readonly ExecutableActionObject[] | undefined,
+  effects: readonly ExecutableEffect[] | undefined,
   actorScope: ActorScope<any, any, any, any>
 ): void {
   if (!effects?.length) {
@@ -114,9 +132,19 @@ function executeExecutableEffects(
   }
 }
 
+/**
+ * Options core passes when it creates actors: the public {@link ActorOptions}
+ * plus the parent of a child actor. Not exported from the package entry.
+ */
+export interface InternalActorOptions<
+  TLogic extends AnyActorLogic
+> extends ActorOptions<TLogic> {
+  parent?: AnyActor;
+}
+
 function createActorRef(
   logic: AnyActorLogic,
-  options: ActorOptions<AnyActorLogic>
+  options: InternalActorOptions<AnyActorLogic>
 ): AnyActor {
   return new Actor(logic, options);
 }
@@ -151,8 +179,10 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
   /** The unique identifier for this actor relative to its parent. */
   public id: string;
 
-  private _boundProcess?: (event: EventFromLogic<TLogic>) => void;
-  private mailbox?: Mailbox<EventFromLogic<TLogic>>;
+  private _boundProcess?: (
+    item: ActorMailboxEvent<EventFromLogic<TLogic>>
+  ) => void;
+  private mailbox?: Mailbox<ActorMailboxEvent<EventFromLogic<TLogic>>>;
   private _mailboxStarted = false;
 
   private observers?: Set<Observer<SnapshotFrom<TLogic>>>;
@@ -194,7 +224,13 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
   public _collectedActions: ActionRecord[] | undefined;
   /** @internal Events relayed to other actors during the in-flight transition. */
   public _collectedSent: SentRecord[] | undefined;
-  private _initialEffects: ExecutableActionObject[] | undefined;
+  /**
+   * @internal Whether a transition is in flight: while the actor starts,
+   * processes an event, or recovers from an execution error. Sends are recorded
+   * for `sent[]` only then.
+   */
+  public _inTransition = false;
+  private _initialEffects: ExecutableEffect[] | undefined;
   public registryKey: string | undefined;
 
   /** The globally unique process ID for this invocation. */
@@ -265,14 +301,9 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
     public logic: TLogic,
     options?: ActorOptions<TLogic>
   ) {
-    if (isDevelopment && options && 'state' in options) {
-      throw new Error(
-        'The "state" actor option was removed. Pass the persisted snapshot as "snapshot" instead: createActor(logic, { snapshot }).'
-      );
-    }
     const resolvedOptions = (
       options ? { ...defaultOptions, ...options } : defaultOptions
-    ) as ActorOptions<TLogic> & typeof defaultOptions;
+    ) as InternalActorOptions<TLogic> & typeof defaultOptions;
 
     const { clock, logger, parent, syncSnapshot, id, registryKey, inspect } =
       resolvedOptions;
@@ -283,7 +314,6 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
         createRuntimeSystem(this, {
           clock,
           logger,
-          snapshot: resolvedOptions.snapshot,
           createActorRef
         }));
 
@@ -293,6 +323,7 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
       !resolvedOptions._systemRef.current
     ) {
       resolvedOptions._systemRef.current = this.system;
+      resolvedOptions._systemRef.initialize?.();
     }
 
     if (inspect && !parent) {
@@ -326,44 +357,35 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
 
     // prepare to collect initial microsteps during initialTransition
     this._collectedMicrosteps = undefined;
-    const persistedState = options?.snapshot;
-    this._restored = persistedState !== undefined;
+    const restore = resolvedOptions._restore;
+    this._restored = restore !== undefined;
     try {
-      if (persistedState) {
-        this._setSnapshot(
-          this.logic.restoreSnapshot
-            ? this.logic.restoreSnapshot(persistedState, this._actorScope)
-            : persistedState
-        );
+      if (restore) {
+        this._setSnapshot(restore.restore(this._actorScope));
       } else if (options?._inert) {
         // Inert actors (createInertActorScope) only anchor a scope for pure
         // transition functions; computing an initial snapshot here would run
         // init-time side effects (context factories, entry) a second time.
       } else {
-        const [snapshot, effects] = finalizeTransitionResult(
-          this._actorScope,
-          undefined,
-          this.logic.initialTransition(this.options?.input, this._actorScope)
-        );
-        this._setSnapshot(snapshot);
-        this._initialEffects = effects.length ? effects : undefined;
+        this._inTransition = true;
+        try {
+          const [snapshot, effects] = finalizeTransitionResult(
+            this._actorScope,
+            undefined,
+            this.logic.initialTransition(this.options?.input, this._actorScope)
+          );
+          this._setSnapshot(snapshot);
+          this._initialEffects = effects.length ? effects : undefined;
+        } finally {
+          this._inTransition = false;
+        }
       }
     } catch (err) {
-      const restoreErrorSnapshot =
-        persistedState &&
-        (
-          this.logic as {
-            _createRestoreErrorSnapshot?: (
-              persisted: unknown,
-              error: unknown
-            ) => SnapshotFrom<TLogic>;
-          }
-        )._createRestoreErrorSnapshot?.(persistedState, err);
-      // Machine logic keeps its snapshot shape on restore failures. Otherwise
-      // we can't get the true `TSnapshot & { status: 'error'; }`, so this is a
-      // lie of sorts.
+      // Restored logic may keep its snapshot shape on restore failures (e.g.
+      // machines). Otherwise we can't get the true
+      // `TSnapshot & { status: 'error'; }`, so this is a lie of sorts.
       this._setSnapshot(
-        restoreErrorSnapshot ??
+        restore?.error?.(err) ??
           ({
             status: 'error',
             output: undefined,
@@ -430,13 +452,13 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
 
   private get emit(): (event: EmittedFrom<TLogic>) => void | PromiseLike<void> {
     const emit = (event: EmittedFrom<TLogic>) =>
-      this.system.emitEvent(this, event);
+      publishEmittedEvent(this, event, this.system);
     Object.defineProperty(this, 'emit', { value: emit });
     return emit;
   }
 
-  private get actionExecutor(): (action: ExecutableActionObject) => void {
-    const actionExecutor = (action: ExecutableActionObject) =>
+  private get actionExecutor(): (action: ExecutableEffect) => void {
+    const actionExecutor = (action: ExecutableEffect) =>
       this._executeAction(action);
     Object.defineProperty(this, 'actionExecutor', { value: actionExecutor });
     return actionExecutor;
@@ -458,14 +480,14 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
       throw new Error(
         isDevelopment
           ? `Cannot stop child actor ${child.id} of ${this.id} because it is not a child`
-          : `Cannot stop non-child actor ${child.id}`
+          : xstateError(47, child.id, this.id)
       );
     }
     (child as Actor<AnyActorLogic>)._stop();
   }
 
   /** @internal */
-  public _executeAction(action: ExecutableActionObject): void {
+  public _executeAction(action: ExecutableEffect): void {
     const exec = () => {
       // Record every executed action for the '@xstate.transition' inspection
       // event's `actions[]` facet (replaces the v5 '@xstate.action' event).
@@ -549,6 +571,8 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
       return false;
     }
 
+    const inTransition = this._inTransition;
+    this._inTransition = true;
     try {
       const [nextSnapshot, effects] = finalizeTransitionResult(
         this._actorScope,
@@ -561,6 +585,8 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
       return true;
     } catch {
       return false;
+    } finally {
+      this._inTransition = inTransition;
     }
   }
 
@@ -825,6 +851,16 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
 
   /** Starts the Actor from the initial state */
   public start(): this {
+    const inTransition = this._inTransition;
+    this._inTransition = true;
+    try {
+      return this._start();
+    } finally {
+      this._inTransition = inTransition;
+    }
+  }
+
+  private _start(): this {
     if (this._processingStatus === ProcessingStatus.Running) {
       // Do not restart the service if it is already started
       return this;
@@ -838,7 +874,9 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
       }
       // Actors are single-use: a stopped actor cannot be restarted.
       throw new Error(
-        `Actor ${this.id} was stopped and cannot be restarted. Create a new actor with createActor().`
+        isDevelopment
+          ? `Actor ${this.id} was stopped and cannot be restarted. Create a new actor with createActor().`
+          : xstateError(48, this.id)
       );
     }
 
@@ -944,33 +982,32 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
     }
 
     if (this._restored) {
-      type RestoredTimer = { id: string; delay: number; startedAt?: number };
       const timers =
         (
           this._snapshot as unknown as {
-            timers?: Record<string, RestoredTimer>;
+            timers?: readonly LogicalTimer[];
           }
-        ).timers ?? {};
-      // startedAt is only persisted from — and only meaningful under — the
+        ).timers ?? [];
+      // scheduledAt is only persisted from — and only meaningful under — the
       // wall clock; a custom clock (a simulated clock, a monotonic counter)
       // restores every timer with its declared delay. The clamp bounds
       // remaining time by the declared delay in case the wall clock moved
       // backwards between persist and restore.
       const wallClock = !this.system._clock.now;
       const now = Date.now();
-      for (const timer of Object.values(timers)) {
+      for (const timer of timers) {
         // A timer persisted from a live runtime carries its wall-clock start;
         // honor the absolute deadline instead of restarting the full delay.
         // Without a start (a pure-transition snapshot, or an older snapshot)
         // the declared delay is all there is.
         const delay =
-          wallClock && timer.startedAt !== undefined
+          wallClock && timer.scheduledAt !== undefined
             ? Math.min(
                 timer.delay,
-                Math.max(0, timer.startedAt + timer.delay - now)
+                Math.max(0, timer.scheduledAt + timer.delay - now)
               )
             : timer.delay;
-        this.system.scheduleTimer(this, timer.id, delay);
+        this.system.scheduleTimer(this, getTimerKey(timer), delay);
       }
       this._restored = false;
     }
@@ -981,7 +1018,21 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
     return this;
   }
 
-  private _process(event: EventFromLogic<TLogic>) {
+  private _process(item: ActorMailboxEvent<EventFromLogic<TLogic>>) {
+    const inTransition = this._inTransition;
+    this._inTransition = true;
+    try {
+      this._processEvent(item);
+    } finally {
+      this._inTransition = inTransition;
+    }
+  }
+
+  private _processEvent({
+    event,
+    sourceRef
+  }: ActorMailboxEvent<EventFromLogic<TLogic>>) {
+    this._lastSourceRef = sourceRef;
     const previousSnapshot = this._snapshot;
     let nextState: ActorLogicTransitionResult<SnapshotFrom<TLogic>> | undefined;
     let caughtError;
@@ -1017,7 +1068,8 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
         !effects.length &&
         // State machine snapshots only; other logic may ignore events freely.
         'machine' in (previousSnapshot as object) &&
-        !event.type.startsWith('xstate.')
+        event.type !== XSTATE_STOP &&
+        (!sourceRef || !Object.hasOwn(reservedMachineEventTypes, event.type))
       ) {
         this._reportUnhandledEvent(event);
       }
@@ -1043,11 +1095,15 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
   private _reportUnhandledEvent(event: EventFromLogic<TLogic>): void {
     safeCall(() => this.options.onUnhandledEvent?.(event, this._snapshot));
     if (isDevelopment) {
+      const to =
+        event.type === 'xstate.route'
+          ? ` to ${JSON.stringify((event as { to?: unknown }).to)}`
+          : '';
       const warned = (this._warnedUnhandledTypes ??= new Set());
-      if (!warned.has(event.type)) {
-        warned.add(event.type);
+      if (!warned.has(event.type + to)) {
+        warned.add(event.type + to);
         console.warn(
-          `Actor ${this.id} received event "${event.type}" in state ${JSON.stringify(
+          `Actor ${this.id} received event "${event.type}"${to} in state ${JSON.stringify(
             (this._snapshot as { value?: unknown }).value
           )} with no matching transition`
         );
@@ -1111,7 +1167,11 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
   /** Stops the Actor and unsubscribe all listeners. */
   public stop(): this {
     if (this._parent) {
-      throw new Error('A non-root actor cannot be stopped directly.');
+      throw new Error(
+        isDevelopment
+          ? 'A non-root actor cannot be stopped directly.'
+          : xstateError(49, this.id)
+      );
     }
     return this._stop();
   }
@@ -1231,14 +1291,9 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
   }
 
   /** @internal */
-  public _send(event: EventFromLogic<TLogic>) {
+  public _send(event: EventFromLogic<TLogic>, sourceRef?: AnyActor) {
     if (this._processingStatus === ProcessingStatus.Stopped) {
-      this.system.deadLetter(
-        this._lastSourceRef,
-        this as AnyActor,
-        event,
-        'stopped'
-      );
+      this.system.deadLetter(sourceRef, this as AnyActor, event, 'stopped');
       return;
     }
 
@@ -1250,7 +1305,7 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
         mailbox.start();
       }
     }
-    mailbox.enqueue(event);
+    mailbox.enqueue({ event, sourceRef });
   }
 
   /**
@@ -1268,16 +1323,11 @@ export class Actor<TLogic extends AnyActorLogic> implements ActorInstance<
   }
 
   /**
-   * Returns the actor's serializable logical identity: its `id`, `address`,
-   * and registered source key (when the actor was created from one).
+   * Returns the actor's serializable logical identity: `{ "@actor": address }`.
+   * The result can be used as an `enq.sendTo(...)` target.
    */
-  public toJSON() {
-    return {
-      xstate$type: ACTOR_REF_TYPE,
-      id: this.id,
-      address: this.address,
-      src: typeof this.src === 'string' ? this.src : undefined
-    };
+  public toJSON(): SerializedActorRef {
+    return { '@actor': this.address };
   }
 
   /**
@@ -1354,8 +1404,7 @@ export type RequiredActorOptionsKeys<TLogic extends AnyActorLogic> =
 
 /**
  * The options `createActor` (and framework hooks) require for `TLogic`:
- * `{ input }` or a persisted `{ snapshot }` when
- * the logic requires input, otherwise nothing.
+ * `{ input }` when the logic requires input, otherwise nothing.
  *
  * @public
  */
@@ -1363,9 +1412,7 @@ export type RequiredActorOptionsFor<TLogic extends AnyActorLogic> = [
   RequiredActorOptionsKeys<TLogic>
 ] extends [never]
   ? {}
-  :
-      | { [K in RequiredActorOptionsKeys<TLogic>]: unknown }
-      | { snapshot: NonNullable<ActorOptions<TLogic>['snapshot']> };
+  : { [K in RequiredActorOptionsKeys<TLogic>]: unknown };
 
 /** Options accepted by {@link createActor}. */
 type CreateActorOptionsArgs<TLogic extends AnyActorLogic> = [
@@ -1409,7 +1456,7 @@ type CreateActorOptionsArgs<TLogic extends AnyActorLogic> = [
  * @param logic - The actor logic to create an actor from. For a state machine
  *   actor logic creator, see {@link createMachine}. Other actor logic creators
  *   include {@link createCallbackLogic}, {@link createEventObservableLogic},
- *   {@link createObservableLogic}, {@link createLogic}, and
+ *   {@link createObservableLogic}, {@link createStepLogic}, and
  *   {@link createAsyncLogic}.
  * @param options - Actor options
  * @public
@@ -1418,5 +1465,6 @@ export function createActor<TLogic extends AnyActorLogic>(
   logic: TLogic,
   ...[options]: CreateActorOptionsArgs<TLogic>
 ): Actor<TLogic> {
+  diagnoseActorOptions(options);
   return new Actor(logic, options);
 }

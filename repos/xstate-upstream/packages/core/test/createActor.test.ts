@@ -6,29 +6,44 @@ import {
 import {
   createMachine,
   createActor,
-  createLogic,
+  createStepLogic,
   type DoneActorEvent
 } from '../src/index.ts';
 import { setTimeout as sleep } from 'node:timers/promises';
 import z from 'zod';
 describe('createActor()', () => {
+  it('rejects the removed parent option before attaching an actor', () => {
+    const logic = createMachine({});
+    const parent = createActor(logic);
+    const inspect = vi.fn();
+    parent.system.inspect(inspect);
+
+    expect(() =>
+      // @ts-expect-error removed; use invoke or spawn
+      createActor(logic, { parent })
+    ).toThrow('The "parent" actor option was removed');
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
   it('throws in development for the removed `state` option', () => {
     const logic = createMachine({});
     const persisted = createActor(logic).getPersistedSnapshot();
     expect(() =>
-      // @ts-expect-error removed; use `snapshot`
+      // @ts-expect-error removed; use `restoreActor` from `xstate/persist`
       createActor(logic, { state: persisted })
-    ).toThrow('"snapshot"');
+    ).toThrow('restoreActor(logic, snapshot)');
   });
 
   it('reserves explicit IDs in the generated ID namespace', () => {
     const logic = createMachine({});
     const root = createActor(logic);
-    const explicitlyNamed = createActor(logic, {
+    const explicitlyNamed = root.system.createActorRef(logic, {
       id: 'x:1',
       parent: root
     });
-    const automaticallyNamed = createActor(logic, { parent: root });
+    const automaticallyNamed = root.system.createActorRef(logic, {
+      parent: root
+    });
 
     expect(explicitlyNamed.id).toBe('x:1');
     expect(automaticallyNamed.id).toBe('x:2');
@@ -86,9 +101,9 @@ describe('createActor()', () => {
       expect(actor.getSnapshot().status).toBe('active');
     });
   });
-  describe('createLogic', () => {
+  describe('createStepLogic', () => {
     it('should create an unstarted actor from custom logic', () => {
-      const logic = createLogic({
+      const logic = createStepLogic({
         context: { count: 0 },
         run: () => undefined
       });
@@ -98,7 +113,7 @@ describe('createActor()', () => {
       expect(actor.getSnapshot().context.count).toBe(0);
     });
     it('should accept input when creating actor', () => {
-      const logic = createLogic<
+      const logic = createStepLogic<
         { count: number },
         undefined,
         any,

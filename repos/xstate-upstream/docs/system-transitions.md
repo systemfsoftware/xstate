@@ -5,6 +5,8 @@ description: Branch, replay and advance an actor system using immutable snapshot
 
 <!-- experimental APIs and snapshot data from packages/core/src/systemTransition.ts -->
 
+> **Experimental:** `initialSystemTransition(...)`, `systemTransition(...)`, `advanceSystemTime(...)` and the `System*` types may change in a minor release.
+
 The experimental system transition APIs calculate immutable `SystemSnapshot`
 values. Each returns `[snapshot, externalEffects]`. A system snapshot contains
 actor snapshots, topology, the registry, messages, pending external work,
@@ -65,8 +67,8 @@ actor's macrostep. Microsteps are atomic; system snapshots contain no unfinished
 microstep or continuation state. A UI presenting individual completed
 microsteps within a macrostep needs a separate tracing interface.
 
-Snapshot actor references are data: `{ $actor, incarnation }`. Use `$actor`
-as `actorPath`, for example `snapshot.actors[snapshot.root].snapshot.children.worker.$actor`.
+Snapshot actor references are data: `{ '@actor': address, incarnation }`, the same shape as `SerializedActorRef`, with a string `incarnation`. Use `@actor`
+as `actorPath`, for example `snapshot.actors[snapshot.root].snapshot.children.worker["@actor"]`.
 Paths encode IDs; avoid concatenating unescaped IDs. Replacing an actor at the
 same path allocates a fresh incarnation.
 
@@ -84,7 +86,10 @@ the native child completion/error notification, matching live actor ordering.
 
 `advanceSystemTime(systemLogic, snapshot, { time })` takes an absolute destination
 in milliseconds. Time must be finite and cannot move backwards. Timers record
-`scheduledAt`, `dueAt`, a unique `occurrence`, and an ordering `sequence`.
+`scheduledAt`, `dueAt`, a unique `occurrence`, an ordering `sequence`, and the
+`event` delivered when they fire (`{ type: 'xstate.timer', ...timer }` for a
+logical timer; see [durable timers](durable-execution.md#durable-timers)).
+`snapshot.timers` lists them in scheduling order.
 Actor incarnations prevent old timers reaching replacement actors.
 
 Advancing the example to 4000 fires the first timer at 2000, cancels the 6000
@@ -95,17 +100,16 @@ in that run; equal deadlines use insertion order.
 Select a pending timer in a simulator with its current occurrence:
 
 ```ts
-const selected = Object.values(snapshot.timers).find((timer) => timer.dueAt === 6000)!;
-const [next] = systemTransition(systemLogic, snapshot, selected.source.$actor, {
+const selected = snapshot.timers.find((timer) => timer.dueAt === 6000)!;
+const [next] = systemTransition(systemLogic, snapshot, selected.source["@actor"], {
   type: 'xstate.timer',
-  id: selected.id,
   occurrence: selected.occurrence
 });
 ```
 
 Selection advances the entire snapshot through that deadline. Earlier events
 can cancel or replace the occurrence; selection never forces it to fire.
-Stale selections and direct external `xstate.after`/`xstate.timeout` injection
+Stale selections and direct external `xstate.after`/`xstate.timeout.state` injection
 throw. Delayed raises/sends, state/invocation timeouts and async-logic timeouts
 share the scheduler. Ordinary events leave matching pending timers intact;
 ordinary sends first drain timers due at the current time.
@@ -115,16 +119,16 @@ ordinary sends first drain timers due at the current time.
 Effects contain data: `id`, `source`, `type`, `kind`, `args`, and optional
 `params`/`event`. They contain no `exec` function. Name callable machine actions
 in `systemLogic.effects` or machine action sources so hosts receive stable
-names. `enq.log` returns `xstate.log`. Emissions return `kind: 'emit'` effects
+names. `enq.log` returns `@xstate.log`. Emissions return `kind: 'emit'` effects
 and also reach system-owned listeners.
 
-The host interprets descriptors. `createLogic`/`createAsyncLogic` produce
-`xstate.logic.effect`, with `params.key` for keyed logic effects. Dispatch
+The host interprets descriptors. `createStepLogic`/`createAsyncLogic` produce
+`@xstate.effect`, with `params.key` for keyed logic effects. Dispatch
 using the source actor's definition and saved input; the host owns the
 external implementation. Its result reenters as a correlated input:
 
 ```ts
-const [resolved] = systemTransition(systemLogic, pendingSnapshot, effect.source.$actor, {
+const [resolved] = systemTransition(systemLogic, pendingSnapshot, effect.source["@actor"], {
   type: 'xstate.system.effect.result',
   effectId: effect.id,
   event: { type: 'xstate.async.resolve', data: result }
@@ -134,8 +138,8 @@ const [resolved] = systemTransition(systemLogic, pendingSnapshot, effect.source.
 Use `xstate.async.reject` with `data: error` for async failure. Omit `event`
 to acknowledge without delivery. Results must match a pending effect's owner
 and incarnation; duplicate, cancelled and stale results throw. Stopping or
-completing actors returns `xstate.system.cancelEffect` commands carrying
-`params.effectId`. Hosts cancel that work. Cleanup uses `xstate.logic.cleanup`.
+completing actors returns `@xstate.cancelEffect` commands carrying
+`params.effectId`. Hosts cancel that work. Cleanup uses `@xstate.cleanup`.
 Acknowledgements without events can retire pending notifications, cleanup and
 cancellation commands after their owner has stopped or been replaced.
 
@@ -146,8 +150,8 @@ input, outputs, events and effect arguments are JSON-compatible. Actor reference
 state-node references, errors and named mappers use data markers. Errors retain
 name/message. Undefined properties follow ordinary JSON rules. Cycles,
 unregistered functions, live actors, class instances, symbols, bigint and
-nonfinite numbers are rejected. `$actor`, `$stateNode`, `$error` and
-`$systemMapper` marker shapes are reserved. Logic versions must match on replay.
+nonfinite numbers are rejected. `@actor`, `@stateNode`, `@error` and
+`@systemMapper` marker shapes are reserved. Logic versions must match on replay.
 
 Transition functions, guards and mappers must be deterministic and pure.
 Read external values from input/events and virtual time from `system._clock.now()`.
@@ -157,8 +161,8 @@ runtime `start` hooks are never executed.
 
 Calls bound message/timer chains to 10,000 steps. Initialization and advancement
 accept `maxSteps`. Exhaustion throws without changing the input snapshot; there
-is no resumable partial result. Machine macrosteps retain their existing
-`options.maxIterations` bound.
+is no resumable partial result. Machine macrosteps use the machine's
+`options.maxIterations` bound, which is unbounded by default.
 
 For running-actor tests, `SimulatedClock.set`/`increment` likewise visit each
 deadline before reaching their destination, including new intermediate timers

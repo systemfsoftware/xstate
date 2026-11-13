@@ -114,7 +114,7 @@ export interface PlaywrightTestInfo {
 
 // Warnings were encountered during analysis:
 //
-// dist/playwright.d.ts:202:3 - (ae-forgotten-export) The symbol "TestSut" needs to be exported by the entry point playwright.d.ts
+// dist/playwright.d.ts:201:3 - (ae-forgotten-export) The symbol "TestSut" needs to be exported by the entry point playwright.d.ts
 
 // (No @packageDocumentation comment for this package)
 
