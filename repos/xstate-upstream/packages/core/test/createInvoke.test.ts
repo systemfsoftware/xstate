@@ -4,7 +4,7 @@ import {
   createCallbackLogic,
   createSystem,
   initialTransition,
-  type ActorRefFromLogic,
+  type ActorRefFrom,
   type SnapshotFrom,
   setup,
   types,
@@ -112,14 +112,14 @@ describe('setup.createInvoke', () => {
         s.createInvoke({
           src: createAsyncLogic({ run: async () => 1 }),
           onDone: ({ event }) => {
-            expectTypeOf(event.output).toEqualTypeOf<1>();
+            expectTypeOf(event.output).toEqualTypeOf<number>();
             return { context: { total: event.output } };
           }
         }),
         {
           src: 'registered',
           onDone: ({ event }) => {
-            expectTypeOf(event.output).toEqualTypeOf<42>();
+            expectTypeOf(event.output).toEqualTypeOf<number>();
             return { context: { total: event.output } };
           }
         }
@@ -286,7 +286,7 @@ describe('setup.createInvoke', () => {
                 {
                   src: 'registered',
                   onDone: ({ event }) => {
-                    expectTypeOf(event.output).toEqualTypeOf<42>();
+                    expectTypeOf(event.output).toEqualTypeOf<number>();
                     return {};
                   }
                 }
@@ -352,10 +352,10 @@ describe('setup.createInvoke', () => {
                   }),
                   onDone: ({ event, output }) => {
                     expectTypeOf(event.output).toEqualTypeOf<{
-                      readonly name: 'David';
+                      name: string;
                     }>();
                     expectTypeOf(output).toEqualTypeOf<{
-                      readonly name: 'David';
+                      name: string;
                     }>();
                     return {};
                   }
@@ -363,14 +363,14 @@ describe('setup.createInvoke', () => {
                 s.createInvoke({
                   src: createAsyncLogic({ run: async () => true }),
                   onDone: ({ event }) => {
-                    expectTypeOf(event.output).toEqualTypeOf<true>();
+                    expectTypeOf(event.output).toEqualTypeOf<boolean>();
                     return {};
                   }
                 }),
                 {
                   src: 'registered',
                   onDone: ({ event }) => {
-                    expectTypeOf(event.output).toEqualTypeOf<42>();
+                    expectTypeOf(event.output).toEqualTypeOf<number>();
                     return {};
                   }
                 }
@@ -641,7 +641,7 @@ describe('setup.createInvoke', () => {
   it('preserves explicit child ids and logic compatibility', () => {
     const s = setup({
       schemas: {
-        children: { user: types<ActorRefFromLogic<typeof userLogic>>() }
+        children: { user: types<ActorRefFrom<typeof userLogic>>() }
       }
     });
     s.createMachine({
@@ -677,9 +677,9 @@ describe('setup.createInvoke', () => {
     const machine = s.createMachine({
       schemas: {
         children: {
-          staticUser: types<ActorRefFromLogic<typeof userLogic>>(),
-          mappedUser: types<ActorRefFromLogic<typeof userLogic>>(),
-          optional: types<ActorRefFromLogic<typeof optionalLogic>>()
+          staticUser: types<ActorRefFrom<typeof userLogic>>(),
+          mappedUser: types<ActorRefFrom<typeof userLogic>>(),
+          optional: types<ActorRefFrom<typeof optionalLogic>>()
         }
       },
       context: { id: 7 },

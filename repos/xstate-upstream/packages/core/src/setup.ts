@@ -1,5 +1,6 @@
 import isDevelopment from '#is-development';
-import { diagnoseAuthorConfig } from './devDiagnostics.ts';
+import { diagnoseAuthorConfig, diagnoseSetupConfig } from './devDiagnostics.ts';
+import { xstateError } from './xstateError.ts';
 import { SetupStateSchemas, StandardSchemaV1 } from './schema.types.ts';
 import type {
   SetupSchemas,
@@ -7,7 +8,11 @@ import type {
   SetupStateType
 } from './base.types.ts';
 import type { ActorLogicValidator } from './validation.types.ts';
-import { StateMachine } from './StateMachine.ts';
+import {
+  StateMachine,
+  type CompatibleProvidedActorSource,
+  type ProvidedActionContracts
+} from './StateMachine.ts';
 import {
   createActor as createActorFromLogic,
   type Actor,
@@ -18,11 +23,14 @@ import {
   AnyActorRef,
   AnyStateMachine,
   AnyActorLogic,
-  ActorRefFromLogic,
+  ActorRefFrom,
+  ActorSelf,
   AnyStateNode,
   EventObject,
   AnyEventObject,
   EventDescriptor,
+  ReservedMachineEvent,
+  ReservedEventFromDescriptor,
   ExtractEvent,
   MachineContext,
   ProvidedActor,
@@ -32,8 +40,6 @@ import {
   StateValueFromStateSchema,
   ToChildren,
   MetaObject,
-  Cast,
-  Compute,
   EnqueueObject,
   DoneActorEvent,
   DoneStateEvent,
@@ -46,7 +52,6 @@ import {
   Subscription,
   OutputArg,
   SnapshotEvent,
-  SingleOrArray,
   AfterEvent,
   TimeoutEvent,
   ErrorEvent,
@@ -55,15 +60,22 @@ import {
   OutputFrom,
   SnapshotFrom,
   ActorTimeoutEvent,
-  NonReducibleUnknown
+  TransitionTargetString
 } from './types.ts';
+import type {
+  Cast,
+  Compute,
+  SingleOrArray,
+  NonReducibleUnknown
+} from './typeUtils.ts';
 import { AnyActorSystem } from './system.ts';
 import { InspectionEvent } from './inspection.ts';
+import type { MachineSnapshot } from './State.ts';
 import {
   createAsyncLogic,
   type AsyncActorLogic,
   type AsyncSnapshot,
-  type LogicFunction
+  type AsyncLogicFunction
 } from './actors/promise.ts';
 import {
   ActionSchemas,
@@ -72,6 +84,7 @@ import {
   GuardSourceMap,
   GuardSchemas,
   InferChildren,
+  InferredInvokeChildren,
   InferActions,
   InferGuards,
   Sources,
@@ -93,6 +106,8 @@ import {
   ValidateDelayNames,
   ValidateEventDescriptors,
   ValidateHistoryDefaults,
+  ValidateInvokeInputs,
+  ValidateVersionedMachineId,
   ValidateStateTargets,
   WithDefault
 } from './types.v6.ts';
@@ -116,7 +131,21 @@ export type SetupConfig<
   actors?: TActorMap;
   guards?: TGuardMap & SetupGuardSources<NoInfer<TSchemas>>;
   delays?: TDelayMap & SetupDelaySources<NoInfer<TSchemas>>;
+  /**
+   * Declared only so that a misplaced `internalEvents` key is rejected instead
+   * of being accepted and silently ignored: private events are declared under
+   * `schemas.internalEvents`.
+   */
+  internalEvents?: MisplacedInternalEventsKey;
 };
+
+/**
+ * `setup()` has no `internalEvents` option. Typing the key as this message
+ * makes the compiler print the replacement rather than accepting dead
+ * configuration.
+ */
+type MisplacedInternalEventsKey =
+  '`internalEvents` is not a setup() option. Declare private events under `schemas.internalEvents`, e.g. `setup({ schemas: { internalEvents: { tick: types<{}>() } } })`.';
 
 /**
  * Contextual types for guard/delay source maps passed to `setup()`, derived
@@ -226,28 +255,31 @@ type ValidateSetupSchemas<TSchemas> = TSchemas extends SetupSchemas
     }
   : TSchemas;
 
-type ValidateSetupStates<TStates> =
-  TStates extends Record<string, SetupStateSchema>
-    ? {
-        [K in keyof TStates]: TStates[K] extends SetupStateSchema
-          ? Omit<TStates[K], 'schemas' | 'states'> & {
-              schemas?: TStates[K]['schemas'] extends SetupStateSchemas
+// Only constrains `schemas`, recursing into `states`, and never returns the
+// state configs themselves: `createMachine` intersects this type with the
+// config it is inferring, so a copy of the config would duplicate every
+// transition type. Each state is checked on its own, so a state without
+// `schemas` (such as `{ on: ... }`) doesn't affect its siblings.
+type ValidateSetupStates<TStates> = TStates extends object
+  ? {
+      [K in keyof TStates]?: TStates[K] extends object
+        ? {
+            schemas?: TStates[K] extends { schemas?: infer TStateSchemas }
+              ? TStateSchemas extends SetupStateSchemas
                 ? {
-                    [P in keyof TStates[K]['schemas']]: TStates[K]['schemas'][P] extends StandardSchemaV1
-                      ? AssertNonTransformingSchema<TStates[K]['schemas'][P]>
-                      : TStates[K]['schemas'][P];
+                    [P in keyof TStateSchemas]: TStateSchemas[P] extends StandardSchemaV1
+                      ? AssertNonTransformingSchema<TStateSchemas[P]>
+                      : TStateSchemas[P];
                   }
-                : TStates[K]['schemas'];
-              states?: TStates[K]['states'] extends Record<
-                string,
-                SetupStateSchema
-              >
-                ? ValidateSetupStates<TStates[K]['states']>
-                : TStates[K]['states'];
-            }
-          : TStates[K];
-      }
-    : TStates;
+                : TStateSchemas
+              : unknown;
+            states?: TStates[K] extends { states?: infer TChildStates }
+              ? ValidateSetupStates<TChildStates>
+              : unknown;
+          }
+        : unknown;
+    }
+  : unknown;
 
 type RuntimeValidationConstraint<TSchemas, TStates, TValidator> = [
   TValidator
@@ -283,10 +315,49 @@ type ExtendValidatorConfig<TExtension> = [TExtension] extends [
   ? { validator?: never }
   : { validator: TExtension };
 
+// An extension may add sources freely, but a source that reuses a base name
+// replaces it at runtime, so it must satisfy the base contract, the same rule
+// `machine.provide(...)` applies.
+type ExtendOverrideContracts<
+  TBaseActionMap,
+  TBaseActorMap,
+  TBaseGuardMap,
+  TExtendActionMap,
+  TExtendActorMap,
+  TExtendGuardMap
+> = {
+  actions?: {
+    [K in keyof NoInfer<TExtendActionMap> &
+      keyof TBaseActionMap]?: ProvidedActionContracts<TBaseActionMap>[K];
+  };
+  guards?: {
+    [K in keyof NoInfer<TExtendGuardMap> &
+      keyof TBaseGuardMap]?: TBaseGuardMap[K];
+  };
+  // Mapped over the extension's own keys, like `provide()`'s actor check, so
+  // an incompatible actor becomes `never` under its own name and the error is
+  // reported there.
+  actors?: {
+    [K in keyof NoInfer<TExtendActorMap>]: K extends keyof TBaseActorMap
+      ? TBaseActorMap[K] extends AnyActorLogic
+        ? NoInfer<TExtendActorMap>[K] extends AnyActorLogic
+          ? CompatibleProvidedActorSource<
+              TBaseActorMap[K],
+              NoInfer<TExtendActorMap>[K]
+            >
+          : never
+        : never
+      : NoInfer<TExtendActorMap>[K];
+  };
+};
+
 type SetupExtensionConfig<
   TBaseSchemas,
   TBaseStates,
   TBaseValidator,
+  TBaseActionMap,
+  TBaseActorMap,
+  TBaseGuardMap,
   TExtendSchemas extends SetupSchemas,
   TExtendStates extends Record<string, SetupStateSchema>,
   TExtendActionMap extends Sources['actions'],
@@ -314,6 +385,14 @@ type SetupExtensionConfig<
       NoInfer<MergedSetupSchemas<TBaseSchemas, TExtendSchemas>>
     >;
 } & ExtendValidatorConfig<TExtendValidator> &
+  ExtendOverrideContracts<
+    TBaseActionMap,
+    TBaseActorMap,
+    TBaseGuardMap,
+    TExtendActionMap,
+    TExtendActorMap,
+    TExtendGuardMap
+  > &
   RuntimeValidationCompatibility<
     NoInfer<TBaseSchemas>,
     NoInfer<TBaseStates>,
@@ -368,17 +447,16 @@ type MachineConfigSchemas<TConfig> = TConfig extends {
 /** @public */
 export type SystemConfig<TSystemRegistry extends SystemRegistry> = {
   registry?: TSystemRegistry;
+  onEmitted?: Parameters<AnyActorSystem['onEmitted']>[0];
 };
 
 /** @public */
 export type SystemActorMap<TSystemRegistry extends SystemRegistry> = {
-  [K in keyof TSystemRegistry & string]: ActorRefFromLogic<TSystemRegistry[K]>;
+  [K in keyof TSystemRegistry & string]: ActorRefFrom<TSystemRegistry[K]>;
 };
 
 type MachineIdentity<TConfig> = {
-  readonly id: TConfig extends { id: infer TId extends string }
-    ? TId
-    : '(machine)';
+  readonly id: TConfig extends { id: infer TId extends string } ? TId : '';
   readonly version: TConfig extends { version: infer TVersion extends string }
     ? TVersion
     : undefined;
@@ -402,7 +480,7 @@ type LogicMatchesRegistryKey<TLogic, TSystemLogic> =
         ? true
         : [TSystemLogic] extends [TLogic]
           ? true
-          : ActorRefFromLogic<TLogic> extends ActorRefFromLogic<TSystemLogic>
+          : ActorRefFrom<TLogic> extends ActorRefFrom<TSystemLogic>
             ? true
             : false
       : false
@@ -566,15 +644,15 @@ type SetupRelativeStateTarget<
       : '.' | `.${StatePaths<TStateSchemas> & string}`;
 
 type SetupStateTarget<TStateSchemas extends Record<string, SetupStateSchema>> =
-  TStateSchemas extends StrictSetupStateTargetsFlag
+  TStateSchemas extends StrictSetupStateTargetsMarker
     ?
         | StrictSetupStatePaths<TStateSchemas>
         | SetupRelativeStateTarget<RelativeSetupStateSchemas<TStateSchemas>>
         | `#${string}`
     : string extends SetupStateKeys<TStateSchemas>
-      ? string
+      ? TransitionTargetString
       : [SetupStateKeys<TStateSchemas>] extends [never]
-        ? string
+        ? TransitionTargetString
         : StatePaths<TStateSchemas> | `.${string}` | `#${string}`;
 
 type KnownSetupStateTarget<
@@ -601,31 +679,31 @@ declare const parentSetupStateType: unique symbol;
 // markers instead of expanding their private unique-symbol keys into exported
 // types. They are split one key apiece because the conditional types below
 // match on a single key at a time, and those conditionals are emitted too.
-/** @public Referenced by emitted declarations of strict transition targets. */
-export type StrictSetupStateTargetsFlag = {
+/** @experimental Type-level plumbing referenced by emitted declarations of strict transition targets; not for direct use. */
+export type StrictSetupStateTargetsMarker = {
   readonly [strictSetupStateTargets]: true;
 };
 
-/** @public Referenced by emitted declarations of strict transition targets. */
+/** @experimental Type-level plumbing referenced by emitted declarations of strict transition targets; not for direct use. */
 export type RelativeSetupStateSchemasMarker<
   TRelativeStateSchemas extends Record<string, SetupStateSchema>
 > = {
   readonly [relativeSetupStateSchemas]: TRelativeStateSchemas;
 };
 
-/** @public Referenced by emitted declarations of strict transition targets. */
+/** @experimental Type-level plumbing referenced by emitted declarations of strict transition targets; not for direct use. */
 export type CurrentSetupStateSchemaMarker<
   TCurrentStateSchema extends SetupStateSchema
 > = {
   readonly [currentSetupStateSchema]: TCurrentStateSchema;
 };
 
-/** @public Referenced by emitted declarations of strict transition targets. */
-export type StrictSetupStateTargetsMarker<
+/** @experimental Type-level plumbing referenced by emitted declarations of strict transition targets; not for direct use. */
+export type StrictSetupStateMarkers<
   TRelativeStateSchemas extends Record<string, SetupStateSchema>,
   TRootStateSchemas extends Record<string, SetupStateSchema>,
   TCurrentStateSchema extends SetupStateSchema
-> = StrictSetupStateTargetsFlag &
+> = StrictSetupStateTargetsMarker &
   RelativeSetupStateSchemasMarker<TRelativeStateSchemas> &
   RootSetupStateSchemasMarker<TRootStateSchemas> &
   CurrentSetupStateSchemaMarker<TCurrentStateSchema>;
@@ -641,7 +719,7 @@ export type StrictSetupStateSchemas<
     RootSetupStateSchemas<TStateSchemas>,
   TCurrentStateSchema extends SetupStateSchema = never
 > = TStateSchemas &
-  StrictSetupStateTargetsMarker<
+  StrictSetupStateMarkers<
     TRelativeStateSchemas,
     TRootStateSchemas,
     TCurrentStateSchema
@@ -675,7 +753,7 @@ type SetupStateSelfSchema<TStateSchema extends SetupStateSchema> =
     ? { schemas: TSchemas }
     : {};
 
-/** @public Referenced by emitted declarations of strict transition targets. */
+/** @experimental Type-level plumbing referenced by emitted declarations of strict transition targets; not for direct use. */
 export type SetupStateParentTypeMarker<
   TParentStateType extends SetupStateType | never
 > = {
@@ -718,7 +796,7 @@ type ResolveStateSiblingsForPath<
       : ResolveStateSiblings<TStates, TPath>
     : never;
 
-/** @public Referenced by emitted declarations of strict transition targets. */
+/** @experimental Type-level plumbing referenced by emitted declarations of strict transition targets; not for direct use. */
 export type RootSetupStateSchemasMarker<
   TRootStateSchemas extends Record<string, SetupStateSchema>
 > = {
@@ -802,34 +880,8 @@ type SetupStateIds<TStateSchemas extends Record<string, SetupStateSchema>> =
         : never;
     }[keyof TStateSchemas & string];
 
-type SetupStateIdTarget<TId extends string> =
-  `#${EscapeSetupStatePathDots<TId>}`;
-
-type SetupStateIdTargets<
-  TStateSchemas extends Record<string, SetupStateSchema>
-> =
-  string extends SetupStateKeys<TStateSchemas>
-    ? never
-    :
-        | {
-            [K in keyof TStateSchemas & string]: TStateSchemas[K] extends {
-              id: infer TId extends string;
-            }
-              ? TStateSchemas[K]['states'] extends infer TChildStateSchemas extends
-                  Record<string, SetupStateSchema>
-                ? string extends SetupStateKeys<TChildStateSchemas>
-                  ? never
-                  : `${SetupStateIdTarget<TId>}.${StatePaths<TChildStateSchemas> & string}`
-                : never
-              : never;
-          }[keyof TStateSchemas & string]
-        | {
-            [K in keyof TStateSchemas &
-              string]: TStateSchemas[K]['states'] extends infer TChildStateSchemas extends
-              Record<string, SetupStateSchema>
-              ? SetupStateIdTargets<TChildStateSchemas>
-              : never;
-          }[keyof TStateSchemas & string];
+// `#id` names a state by its whole id; it is never followed by a path.
+type SetupStateIdTarget<TId extends string> = `#${TId}`;
 
 type RootSetupStateIdTarget<
   TStateSchemas extends Record<string, SetupStateSchema>
@@ -837,7 +889,7 @@ type RootSetupStateIdTarget<
   SetupStateIds<TStateSchemas> extends infer TIds extends string
     ? [TIds] extends [never]
       ? never
-      : SetupStateIdTarget<TIds> | SetupStateIdTargets<TStateSchemas>
+      : SetupStateIdTarget<TIds>
     : never;
 
 type SetupStateSchemaAtTarget<
@@ -876,24 +928,8 @@ type SetupStateSchemaAtId<
 type SetupStateSchemaAtIdTarget<
   TStateSchemas extends Record<string, SetupStateSchema>,
   TTarget extends string
-> = TTarget extends `#${infer TPath}`
-  ? SplitSetupStatePath<TPath> extends [
-      infer TId extends string,
-      ...infer TDescendant extends string[]
-    ]
-    ? SetupStateSchemaAtId<TStateSchemas, TId> extends infer TStateSchema
-      ? TDescendant extends []
-        ? TStateSchema
-        : TStateSchema extends {
-              states: infer TChildStateSchemas extends Record<
-                string,
-                SetupStateSchema
-              >;
-            }
-          ? ResolveStatePathSegments<TChildStateSchemas, TDescendant>
-          : never
-      : never
-    : never
+> = TTarget extends `#${infer TId}`
+  ? SetupStateSchemaAtId<TStateSchemas, TId>
   : never;
 
 type StateSchemasWithKeys<
@@ -903,11 +939,6 @@ type StateSchemasWithKeys<
   [K in Exclude<TStateKeys, keyof TStateSchemas>]: {};
 };
 
-type EscapeSetupStatePathDots<TValue extends string> =
-  TValue extends `${infer THead}.${infer TTail}`
-    ? `${THead}\\.${EscapeSetupStatePathDots<TTail>}`
-    : TValue;
-
 type ProtectSetupStatePathDots<TValue extends string> =
   TValue extends `${infer THead}\\.${infer TTail}`
     ? `${THead}__XSTATE_ESCAPED_DOT__${ProtectSetupStatePathDots<TTail>}`
@@ -915,7 +946,7 @@ type ProtectSetupStatePathDots<TValue extends string> =
 
 type RestoreSetupStatePathDots<TValue extends string> =
   TValue extends `${infer THead}__XSTATE_ESCAPED_DOT__${infer TTail}`
-    ? `${THead}.${RestoreSetupStatePathDots<TTail>}`
+    ? `${THead}\\.${RestoreSetupStatePathDots<TTail>}`
     : TValue;
 
 type SplitSetupStatePath<TPath extends string> =
@@ -999,9 +1030,9 @@ type SetupStateParentAtPath<
 /** Union of every addressable dotted path into a setup states tree */
 type StatePathsInner<TStates extends Record<string, SetupStateSchema>> = {
   [K in SetupStateKeys<TStates>]:
-    | EscapeSetupStatePathDots<K>
+    | K
     | (TStates[K]['states'] extends Record<string, SetupStateSchema>
-        ? `${EscapeSetupStatePathDots<K>}.${StatePathsInner<TStates[K]['states']>}`
+        ? `${K}.${StatePathsInner<TStates[K]['states']>}`
         : never);
 }[SetupStateKeys<TStates>];
 
@@ -1035,17 +1066,8 @@ type SetupResolvedStatePath<
   TRootStateSchemas extends Record<string, SetupStateSchema>,
   TSourcePath extends string,
   TTarget extends string
-> = TTarget extends `#${infer TIdPath}`
-  ? SplitSetupStatePath<TIdPath> extends [
-      infer TId extends string,
-      ...infer TDescendant extends string[]
-    ]
-    ? SetupStatePathAtId<TRootStateSchemas, TId> extends infer TIdStatePath
-      ? TIdStatePath extends SetupStatePath
-        ? [...TIdStatePath, ...TDescendant]
-        : never
-      : never
-    : never
+> = TTarget extends `#${infer TId}`
+  ? SetupStatePathAtId<TRootStateSchemas, TId>
   : TTarget extends '.'
     ? SplitSetupStatePath<TSourcePath>
     : TTarget extends `.${infer TDescendant}`
@@ -1356,14 +1378,14 @@ type SetupStateNodeConfig<
   TSystemRegistry
 >;
 
-type SetupContext<TSchemas, TContextSchema extends StandardSchemaV1> = [
-  SetupSchema<TSchemas, 'context'>
-] extends [never]
-  ? unknown extends StandardSchemaV1.InferOutput<TContextSchema>
-    ? MachineContext
-    : StandardSchemaV1.InferOutput<TContextSchema> & MachineContext
-  : StandardSchemaV1.InferOutput<SetupSchema<TSchemas, 'context'>> &
-      MachineContext;
+type SetupContext<TSchemas, TContextSchema extends StandardSchemaV1> = Cast<
+  [SetupSchema<TSchemas, 'context'>] extends [never]
+    ? unknown extends StandardSchemaV1.InferOutput<TContextSchema>
+      ? MachineContext
+      : StandardSchemaV1.InferOutput<TContextSchema>
+    : StandardSchemaV1.InferOutput<SetupSchema<TSchemas, 'context'>>,
+  MachineContext
+>;
 
 type SetupContextShape<
   TSchemas,
@@ -1397,13 +1419,21 @@ type SetupInternalEvents<
   ? InferInternalEvents<TInternalEventSchemaMap>
   : InferInternalEvents<SetupSchemaMap<TSchemas, 'internalEvents'>>;
 
+// Without internal events this must be `SetupPublicEvents` itself, not a union
+// with `never`: such a union has the same members but is a different type, so
+// the config types computed from it are not shared with the ones computed from
+// `SetupPublicEvents`. With a validator, `setup().createMachine()` sees both
+// copies of each state's config, and TypeScript multiplies their unions out
+// (invoke sources per registered actor, targets per state contract).
 type SetupEvents<
   TSchemas,
   TEventSchemaMap extends Record<string, StandardSchemaV1>,
   TInternalEventSchemaMap extends Record<string, StandardSchemaV1> = {}
-> =
-  | SetupPublicEvents<TSchemas, TEventSchemaMap>
-  | SetupInternalEvents<TSchemas, TInternalEventSchemaMap>;
+> = [SetupInternalEvents<TSchemas, TInternalEventSchemaMap>] extends [never]
+  ? SetupPublicEvents<TSchemas, TEventSchemaMap>
+  :
+      | SetupPublicEvents<TSchemas, TEventSchemaMap>
+      | SetupInternalEvents<TSchemas, TInternalEventSchemaMap>;
 
 type SetupTags<TSchemas, TTagSchema extends StandardSchemaV1> = [
   SetupSchema<TSchemas, 'tags'>
@@ -1647,7 +1677,6 @@ type StateContext<
   ? TContextSchema extends StandardSchemaV1
     ? StandardSchemaV1.InferOutput<TContextSchema> &
         RootContext<TFallbackContext> &
-        MachineContext &
         RootContextMarker<TFallbackContext>
     : RootContext<TFallbackContext>
   : RootContext<TFallbackContext>;
@@ -1656,7 +1685,7 @@ declare const rootContext: unique symbol;
 
 // Keep this marker named so declaration emit can reference it without expanding
 // the private unique-symbol key into exported machine config types.
-/** @public Referenced by emitted declarations of narrowed state contexts. */
+/** @experimental Type-level plumbing referenced by emitted declarations of narrowed state contexts; not for direct use. */
 export interface RootContextMarker<TContext> {
   readonly [rootContext]?: RootContext<TContext>;
 }
@@ -1684,9 +1713,7 @@ export type ActiveStateContext<
   TStateSchema extends SetupStateSchema,
   TRootContext extends MachineContext,
   TAncestorContext
-> = StateContext<TStateSchema, TRootContext> &
-  TAncestorContext &
-  MachineContext;
+> = StateContext<TStateSchema, TRootContext> & TAncestorContext;
 
 type ActiveStateContextShape<
   TStateSchema extends SetupStateSchema,
@@ -1773,7 +1800,7 @@ type SetupChoiceTargetConfig<
         TEvent
       >;
     }[KnownSetupStateTarget<TStateSchemas>]
-  | (TStateSchemas extends StrictSetupStateTargetsFlag
+  | (TStateSchemas extends StrictSetupStateTargetsMarker
       ? {
           target: KnownSetupStateTarget<TStateSchemas>[];
           input?: Record<string, unknown>;
@@ -2080,13 +2107,12 @@ type ValidateSetupTargetArrayInputs<
 type ValidateSetupStateContracts<
   TConfig,
   TStateSchemas extends Record<string, SetupStateSchema>
-> =
-  HasExplicitSetupStateContracts<TStateSchemas> extends true
+> = ValidateStateTargets<MergeSetupConfig<TConfig, TStateSchemas>> &
+  (HasExplicitSetupStateContracts<TStateSchemas> extends true
     ? ValidateSetupHistoryInputs<TConfig, TStateSchemas> &
         ValidateHistoryDefaults<MergeSetupConfig<TConfig, TStateSchemas>> &
-        ValidateStateTargets<MergeSetupConfig<TConfig, TStateSchemas>> &
         NoInfer<ValidateSetupTargetArrayInputs<TConfig, TStateSchemas>>
-    : unknown;
+    : unknown);
 
 type SetupInitialTransitionConfig<
   TStateSchema extends SetupStateSchema,
@@ -3419,11 +3445,14 @@ type StateTransitions<
 } & (string extends TEvent['type']
   ? unknown
   : {
-      [K in `xstate.${string}`]?: StateTransitionConfigOrTarget<
+      [K in Exclude<
+        EventDescriptor<ReservedMachineEvent>,
+        EventDescriptor<TEvent>
+      >]?: StateTransitionConfigOrTarget<
         TStateSchemas,
         TContext,
         TContextShape,
-        { type: K },
+        ReservedEventFromDescriptor<K>,
         TEvent,
         TEmitted,
         TChildren,
@@ -3606,7 +3635,7 @@ export interface CreatedInvoke<
     input: TStateInput;
     child: NoInfer<{
       id: TConfig extends { id: infer TId } ? TId : undefined;
-      ref: ActorRefFromLogic<TLogic>;
+      ref: ActorRefFrom<TLogic>;
     }>;
   };
   readonly [createdInvokeConfig]: NoInfer<TConfig>;
@@ -3654,7 +3683,7 @@ type CreatedInvokeId<
     : {
         id: {
           [K in keyof TChildren &
-            string]: ActorRefFromLogic<TLogic> extends NonNullable<TChildren[K]>
+            string]: ActorRefFrom<TLogic> extends NonNullable<TChildren[K]>
             ? K
             : never;
         }[keyof TChildren & string];
@@ -3876,7 +3905,7 @@ export type CreateAsyncInvokeConfig<
     };
     src: (
       ...args: Parameters<
-        LogicFunction<
+        AsyncLogicFunction<
           AsyncInvokeSchemaOutput<NoInfer<TOutputSchema>, unknown>,
           AsyncInvokeSchemaOutput<NoInfer<TInputSchema>, NonReducibleUnknown>
         >
@@ -4103,8 +4132,8 @@ type StateTransitionObjectConfig<
       TKnownTarget
     > & {
       description?: string;
-    })
-  | {
+    } & RemovedTransitionKeys)
+  | ({
       target: TTarget[];
       context?: StateTransitionContext<
         TAllowContextMapper,
@@ -4131,7 +4160,18 @@ type StateTransitionObjectConfig<
               event: TExpressionEvent;
             } & OutputArg<TExpressionEvent>
           ) => Record<string, unknown>);
-    };
+    } & RemovedTransitionKeys);
+
+/**
+ * v5 keys that transition objects no longer have. Typing each one as a message
+ * makes the compiler print the replacement instead of accepting config that
+ * the runtime rejects.
+ */
+type RemovedTransitionKeys = {
+  cond?: '`cond` was removed from transition objects in v6. Use a transition function that returns { target } when the condition passes, or undefined to reject the event.';
+  guard?: '`guard` was removed from transition objects in v6. Use a transition function that returns { target } when the condition passes; named guards are available as `guards.name(...)` in its arguments.';
+  actions?: '`actions` was removed from transition objects in v6. Use a transition function `(args, enq) => { ... }` and call named actions with `enq(actions.name, params)`.';
+};
 
 type StateTransitionContextMapper<
   TContext extends MachineContext,
@@ -4149,7 +4189,19 @@ type StateTransitionContextMapper<
   args: {
     context: TContext;
     event: TExpressionEvent;
-    self: AnyActorRef;
+    self: ActorSelf<
+      MachineSnapshot<
+        TContext,
+        AnyEventObject,
+        TChildren,
+        StateValue,
+        string,
+        unknown,
+        MetaObject,
+        StateSchema
+      >,
+      AnyEventObject
+    >;
     parent: AnyActorRef | undefined;
     value: StateValue;
     children: TChildren;
@@ -4241,7 +4293,20 @@ type StateTransitionFunction<
     context: TContext;
     event: TExpressionEvent;
     output: TOutput;
-    self: AnyActorRef;
+    self: ActorSelf<
+      MachineSnapshot<
+        TContext,
+        TEvent,
+        TChildren,
+        StateValue,
+        string,
+        unknown,
+        TMeta,
+        StateSchema
+      >,
+      TEvent,
+      TEmitted
+    >;
     parent: AnyActorRef | undefined;
     value: StateValue;
     children: TChildren;
@@ -4377,7 +4442,7 @@ type StateTransitionResult<
             });
     }[TKnownTarget]
   | {
-      target: TStateSchemas extends StrictSetupStateTargetsFlag
+      target: TStateSchemas extends StrictSetupStateTargetsMarker
         ? never
         : Exclude<TTarget, TKnownTarget>;
       context?: StateTransitionContext<
@@ -4504,6 +4569,9 @@ export interface SetupReturn<
       TSchemas,
       TStates,
       TValidator,
+      TSetupActionMap,
+      TSetupActorMap,
+      TSetupGuardMap,
       TExtendSchemas,
       TExtendStates,
       TExtendActionMap,
@@ -4955,7 +5023,12 @@ export interface SetupReturn<
         TConfig,
         TSystemRegistry,
         MergeSourceMaps<TSetupActorMap, TActorMap>
-      >
+      > &
+      ValidateInvokeInputs<
+        TConfig,
+        MergeSourceMaps<TSetupActorMap, TActorMap>
+      > &
+      ValidateVersionedMachineId<TConfig>
   ): [TConfig] extends [never]
     ? AnyStateMachine
     : StateMachine<
@@ -4970,7 +5043,11 @@ export interface SetupReturn<
                 to: RoutableStateId<SetupMachineStateSchema<TConfig, TStates>>;
               }),
         Cast<
-          MergeChildren<SetupChildren<TSchemas, TChildrenSchemaMap>, TActor>,
+          MergeChildren<SetupChildren<TSchemas, TChildrenSchemaMap>, TActor> &
+            InferredInvokeChildren<
+              TConfig,
+              MergeSourceMaps<TSetupActorMap, TActorMap>
+            >,
           Record<string, AnyActorRef | undefined>
         >,
         StateValueFromStateSchema<SetupMachineStateSchema<TConfig, TStates>>,
@@ -4979,7 +5056,9 @@ export interface SetupReturn<
         SetupOrConfigOutput<TSchemas, TOutputSchema, TConfig, TStates>,
         SetupEmitted<TSchemas, TEmittedSchemaMap>,
         SetupMeta<TSchemas, TMetaSchema>,
-        PublicStateSchema<SetupMachineStateSchema<TConfig, TStates>>,
+        PublicStateSchema<SetupMachineStateSchema<TConfig, TStates>> & {
+          schemas: MergedSetupSchemas<SetupConfigSchemas<TConfig>, TSchemas>;
+        },
         MergeSourceMaps<
           SetupActions<TSchemas, TSetupActionMap>,
           MergeSourceMaps<InferActions<TActionSchemaMap>, TActionMap>
@@ -5048,7 +5127,8 @@ export interface SetupReturn<
           ResolveStateSiblingsForPath<TStates, TPath>,
           TStates
         >
-      >
+      > &
+      ValidateInvokeInputs<TConfig, TSetupActorMap>
   ): TConfig;
 
   /** Creates a state node config with the setup configuration */
@@ -5068,7 +5148,8 @@ export interface SetupReturn<
       ValidateEventDescriptors<
         TConfig,
         NoInfer<SetupEvents<TSchemas, Record<string, StandardSchemaV1>>>
-      >
+      > &
+      ValidateInvokeInputs<TConfig, TSetupActorMap>
   ): TConfig;
 
   /** State input schemas from setup config */
@@ -5264,6 +5345,7 @@ export const setup = function setupImplementation<
   SystemRegistry,
   TValidator
 > {
+  diagnoseSetupConfig(config);
   const {
     validator,
     states = {} as TStates,
@@ -5291,6 +5373,9 @@ export const setup = function setupImplementation<
         TSchemas,
         TStates,
         TValidator,
+        TActionMap,
+        TActorMap,
+        TGuardMap,
         TExtendSchemas,
         TExtendStates,
         TExtendActionMap,
@@ -5315,7 +5400,14 @@ export const setup = function setupImplementation<
         ResolveExtendedValidator<TValidator, TExtendValidator>
       >;
     },
-    createMachine(machineConfig) {
+    createMachine(machineConfig, ...rest: unknown[]) {
+      if (rest[0] !== undefined) {
+        throw new Error(
+          isDevelopment
+            ? 'createMachine(config) takes one argument; the second argument (implementations) was removed. Declare implementations in setup({ actions, guards, actors, delays }), or pass them to machine.provide({ ... }).'
+            : xstateError(71)
+        );
+      }
       const configSchemas = machineConfig.schemas;
       const mergedSchemas = mergeSchemas(configSchemas, schemas);
       const mergedStates = mergeStateSchemas(machineConfig.states, states);
@@ -5333,14 +5425,12 @@ export const setup = function setupImplementation<
         ...(mergedGuards ? { guards: mergedGuards } : undefined),
         ...(mergedDelays ? { delays: mergedDelays } : undefined)
       } as any;
-      if (isDevelopment) {
-        diagnoseAuthorConfig(config);
-      }
+      diagnoseAuthorConfig(config);
       return new StateMachine(config, undefined, validator) as any;
     },
     createInvoke(
       invokeConfig: {
-        src: AnyActorLogic | LogicFunction<unknown, any>;
+        src: AnyActorLogic | AsyncLogicFunction<unknown, any>;
         schemas?: {
           input?: StandardSchemaV1;
           output?: StandardSchemaV1;
@@ -5394,19 +5484,22 @@ type SystemBuilder<TSystemRegistry extends SystemRegistry> = {
       | ((inspectionEvent: InspectionEvent) => void)
   ): Subscription;
   onRejectedEvent: AnyActorSystem['onRejectedEvent'];
+  onEmitted: AnyActorSystem['onEmitted'];
   setup: SetupFunction<TSystemRegistry>;
 };
 
 /** @public */
 export function createSystem<const TSystemRegistry extends SystemRegistry = {}>(
-  _config: SystemConfig<TSystemRegistry> = {}
+  config: SystemConfig<TSystemRegistry> = {}
 ): SystemBuilder<TSystemRegistry> {
-  const runtimeRef: { current?: AnyActorSystem } = {};
-  const pending: Array<{
+  const runtimeRef: NonNullable<ActorOptions<AnyActorLogic>['_systemRef']> = {
+    initialize: () => flushObservers()
+  };
+  type PendingSubscription = {
     subscribe: (system: AnyActorSystem) => Subscription;
     subscription?: Subscription;
-    active: boolean;
-  }> = [];
+  };
+  const pending = new Set<PendingSubscription>();
 
   const flushObservers = () => {
     const runtime = runtimeRef.current;
@@ -5415,8 +5508,11 @@ export function createSystem<const TSystemRegistry extends SystemRegistry = {}>(
     }
 
     for (const entry of pending) {
-      if (entry.active && !entry.subscription) {
-        entry.subscription = entry.subscribe(runtime);
+      const subscription = entry.subscribe(runtime);
+      if (pending.delete(entry)) {
+        entry.subscription = subscription;
+      } else {
+        subscription.unsubscribe();
       }
     }
   };
@@ -5432,16 +5528,21 @@ export function createSystem<const TSystemRegistry extends SystemRegistry = {}>(
       return subscribe(runtime);
     }
 
-    const entry: (typeof pending)[number] = { subscribe, active: true };
-    pending.push(entry);
+    const entry: PendingSubscription = { subscribe };
+    pending.add(entry);
 
     return {
       unsubscribe() {
-        entry.active = false;
+        pending.delete(entry);
         entry.subscription?.unsubscribe();
       }
     };
   };
+
+  if (config.onEmitted) {
+    const listener = config.onEmitted;
+    subscribeToSystem((system) => system.onEmitted(listener));
+  }
 
   return {
     createActor(logic, ...[options]) {
@@ -5449,7 +5550,6 @@ export function createSystem<const TSystemRegistry extends SystemRegistry = {}>(
         ...options,
         _systemRef: runtimeRef
       } as any);
-      flushObservers();
       return actor as any;
     },
     get(key) {
@@ -5464,6 +5564,9 @@ export function createSystem<const TSystemRegistry extends SystemRegistry = {}>(
       return subscribeToSystem((system) =>
         system.inspect(observer as Parameters<AnyActorSystem['inspect']>[0])
       );
+    },
+    onEmitted(listener) {
+      return subscribeToSystem((system) => system.onEmitted(listener));
     },
     onRejectedEvent(listener) {
       return subscribeToSystem((system) => system.onRejectedEvent(listener));

@@ -1,8 +1,10 @@
 import { createActor, createMachine } from '../src';
+import { restoreActor } from '../src/persist/index.ts';
 
 describe('persisted snapshot versioning', () => {
   it('stamps the machine version on persisted snapshots', () => {
     const machine = createMachine({
+      id: 'machine',
       version: '1',
       initial: 'a',
       states: { a: {} }
@@ -11,8 +13,11 @@ describe('persisted snapshot versioning', () => {
     const actor = createActor(machine).start();
     const persisted = actor.getPersistedSnapshot();
 
-    expect((persisted as any).version).toBe('1');
-    expect(JSON.parse(JSON.stringify(persisted)).version).toBe('1');
+    expect((persisted as any).machine).toEqual({
+      id: 'machine',
+      version: '1'
+    });
+    expect(persisted).not.toHaveProperty('version');
   });
 
   it('does not stamp a version when the machine has none', () => {
@@ -29,6 +34,7 @@ describe('persisted snapshot versioning', () => {
 
   it('restores a snapshot with a matching version', () => {
     const machine = createMachine({
+      id: 'machine',
       version: '1',
       initial: 'a',
       states: { a: { on: { NEXT: { target: 'b' } } }, b: {} }
@@ -39,7 +45,7 @@ describe('persisted snapshot versioning', () => {
     const persisted = actor.getPersistedSnapshot();
     actor.stop();
 
-    const restored = createActor(machine, { snapshot: persisted }).start();
+    const restored = restoreActor(machine, persisted).start();
     expect(restored.getSnapshot().value).toBe('b');
   });
 
@@ -60,7 +66,7 @@ describe('persisted snapshot versioning', () => {
     actor.send({ type: 'NEXT' });
     const migrated = { ...actor.getSnapshot(), version: '2' };
 
-    const restored = createActor(machineV2, { snapshot: migrated }).start();
+    const restored = restoreActor(machineV2, migrated).start();
 
     expect(restored.getSnapshot().status).toBe('active');
     expect(restored.getSnapshot().value).toBe('b');
@@ -78,18 +84,20 @@ describe('persisted snapshot versioning', () => {
     actor.send({ type: 'NEXT' });
     const { version: _, ...persisted } = actor.getPersistedSnapshot() as any;
 
-    const restored = createActor(machine, { snapshot: persisted }).start();
+    const restored = restoreActor(machine, persisted).start();
 
     expect(restored.getSnapshot().value).toBe('b');
   });
 
   it('errors when restoring a version-mismatched snapshot without a migrate function', () => {
     const machineV1 = createMachine({
+      id: 'machine',
       version: '1',
       initial: 'a',
       states: { a: {} }
     });
     const machineV2 = createMachine({
+      id: 'machine',
       version: '2',
       initial: 'a',
       states: { a: {} }
@@ -97,7 +105,7 @@ describe('persisted snapshot versioning', () => {
 
     const persisted = createActor(machineV1).start().getPersistedSnapshot();
 
-    const restored = createActor(machineV2, { snapshot: persisted });
+    const restored = restoreActor(machineV2, persisted);
     restored.subscribe({ error: () => {} });
     restored.start();
 
@@ -110,6 +118,7 @@ describe('persisted snapshot versioning', () => {
 
   it('migrates a version-mismatched snapshot with the `migrate` function', () => {
     const machineV1 = createMachine({
+      id: 'machine',
       version: '1',
       context: { count: 5 },
       initial: 'a',
@@ -126,6 +135,7 @@ describe('persisted snapshot versioning', () => {
     });
 
     const machineV2 = createMachine({
+      id: 'machine',
       version: '2',
       migrate,
       context: { total: 0 },
@@ -134,7 +144,7 @@ describe('persisted snapshot versioning', () => {
     });
 
     const persisted = createActor(machineV1).start().getPersistedSnapshot();
-    const restored = createActor(machineV2, { snapshot: persisted }).start();
+    const restored = restoreActor(machineV2, persisted).start();
 
     expect(migrate).toHaveBeenCalledTimes(1);
     expect(restored.getSnapshot().status).toBe('active');
@@ -167,7 +177,7 @@ describe('persisted snapshot versioning', () => {
       .start()
       .getPersistedSnapshot() as any;
 
-    const restored = createActor(machineV2, { snapshot: persisted }).start();
+    const restored = restoreActor(machineV2, persisted).start();
 
     expect(migrate).toHaveBeenCalledWith(expect.anything(), '1');
     expect(restored.getSnapshot().context).toEqual({ total: 5 });
@@ -175,12 +185,14 @@ describe('persisted snapshot versioning', () => {
 
   it('migrates an unversioned snapshot (fromVersion is undefined)', () => {
     const legacyMachine = createMachine({
+      id: 'machine',
       context: { count: 3 },
       initial: 'a',
       states: { a: {} }
     });
 
     const machineV1 = createMachine({
+      id: 'machine',
       version: '1',
       migrate: (persisted: any, fromVersion) => {
         expect(fromVersion).toBeUndefined();
@@ -192,7 +204,7 @@ describe('persisted snapshot versioning', () => {
     });
 
     const persisted = createActor(legacyMachine).start().getPersistedSnapshot();
-    const restored = createActor(machineV1, { snapshot: persisted }).start();
+    const restored = restoreActor(machineV1, persisted).start();
 
     expect(restored.getSnapshot().status).toBe('active');
     expect(restored.getSnapshot().context).toEqual({ count: 3 });

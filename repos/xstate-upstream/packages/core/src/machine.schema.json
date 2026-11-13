@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema",
   "title": "XState v6 machine definition (MachineJSON)",
-  "description": "The JSON-serializable XState machine definition accepted by createMachineFromConfig. Expressions use reserved @ keys: @exprLang on the machine and @expr/@code with optional @lang in value slots.",
+  "description": "The JSON-serializable XState machine definition accepted by machineFromJSON. Expressions use reserved @ keys: @exprLang on the machine and @expr/@code with optional @lang in value slots.",
   "$ref": "#/$defs/machine",
   "$defs": {
     "jsonSchema": {
@@ -302,6 +302,8 @@
         "initial": { "$ref": "#/$defs/initial" },
         "states": {
           "type": "object",
+          "description": "State keys escape a literal dot as \\\\. (an unescaped . separates path segments).",
+          "propertyNames": { "pattern": "^(?:[^.\\\\]|\\\\.)*$" },
           "additionalProperties": { "$ref": "#/$defs/stateNode" }
         },
         "on": { "$ref": "#/$defs/transitionMap" },
@@ -388,6 +390,10 @@
       ],
       "additionalProperties": true
     },
-    "machine": { "$ref": "#/$defs/stateNode" }
+    "machine": {
+      "allOf": [{ "$ref": "#/$defs/stateNode" }],
+      "description": "A machine with a version must declare an id.",
+      "dependencies": { "version": ["id"] }
+    }
   }
 }

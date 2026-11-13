@@ -7,15 +7,19 @@ Combine XState's event-driven workflows with Effect services, scopes, clocks and
 - Provide services once for the actor and its child logic.
 - Keep actor lifetime inside your Effect application.
 
-This package is experimental. It targets XState v6 alpha and Effect 4.
+This package is experimental. It targets XState v6 beta and Effect 4.
+
+In these docs, "transition effects" are the executable effect descriptors (`ExecutableEffect`) that an XState transition returns. "Effect" means an Effect.ts program.
 
 ## Installation
 
-<!-- package name and peer dependencies from package.json -->
+<!-- package name, zero direct runtime dependencies and required versus optional peers from package.json -->
 
 ```bash
-npm install @xstate/effect@alpha xstate@alpha effect@^4
+npm install @xstate/effect@beta xstate@beta effect@^4
 ```
+
+`@xstate/effect` has zero direct runtime dependencies. Effect and XState are its only required peers. Lint tooling is opt-in and installed as development dependencies.
 
 ## XState Effect: Quick start
 
@@ -29,7 +33,7 @@ A release waits for approval, expires after 30 seconds, and allows cancellation 
 import { Context, Effect, Schema } from 'effect';
 import {
   createEffectActor,
-  fromEffect,
+  createEffectLogic,
   send,
   setupEffect,
   waitFor
@@ -40,7 +44,7 @@ export class Deployments extends Context.Service<
   { readonly deploy: (release: string) => Effect.Effect<string, Error> }
 >()('@app/Deployments') {}
 
-const deploy = fromEffect({
+const deploy = createEffectLogic({
   schemas: { input: Schema.Struct({ release: Schema.String }) },
   effect: ({ input }) => Deployments.use((api) => api.deploy(input.release))
 });
@@ -121,6 +125,10 @@ Start Effect-backed logic with `createEffectActor` inside an Effect scope.
 
 </details>
 
+<!-- declared Effect action typing from src/setupEffect.ts -->
+
+Declared Effect actions infer context and event types from `setupEffect({ schemas })`, including schemas inherited through `extend`. See [Action argument types](docs/schemas-and-actions.md#action-argument-types) for custom arguments and safe defaults.
+
 ## Guides
 
 | Guide | Examples |
@@ -134,7 +142,7 @@ Start Effect-backed logic with `createEffectActor` inside an Effect scope.
 | [Atoms and React](docs/atoms-and-react.md) | Registry ownership, approval controls and useSelector. |
 | [Testing and errors](docs/testing-and-errors.md) | TestClock, task retries, supervision and typed failures. |
 
-Runnable copies live in [examples/effect-workflows](../../examples/effect-workflows). Their tests verify the docs use the same code.
+Try the runnable examples in [examples/effect-workflows](../../examples/effect-workflows).
 
 ## Actors
 
@@ -183,13 +191,13 @@ The actor's later errors are observed through `join` or snapshots. Invalid input
 
 ## Effect actor logic
 
-<!-- fromEffect, fromEffectStream, fromEffectEventStream from src/fromEffect.ts -->
+<!-- createEffectLogic, createEffectStreamLogic, createEffectEventStreamLogic from src/effectLogic.ts -->
 
 | Function | Behavior |
 | --- | --- |
-| `fromEffect` | Run a task; its success value is the actor's output. |
-| `fromEffectStream` | Expose the latest stream item as snapshot context. |
-| `fromEffectEventStream` | Relay stream items to the parent as events. |
+| `createEffectLogic` | Run a task; its success value is the actor's output. |
+| `createEffectStreamLogic` | Expose the latest stream item as snapshot context. |
+| `createEffectEventStreamLogic` | Relay stream items to the parent as events. |
 
 For example, a progress stream can feed an upload UI:
 
@@ -197,10 +205,14 @@ For example, a progress stream can feed an upload UI:
 
 ```ts
 import { Effect, Option, Stream } from 'effect';
-import { createEffectActor, fromEffectStream, snapshots } from '@xstate/effect';
+import {
+  createEffectActor,
+  createEffectStreamLogic,
+  snapshots
+} from '@xstate/effect';
 
 // Demo upload progress. Replace with your upload SDK's progress stream.
-const uploadProgress = fromEffectStream(Stream.make(0, 25, 60, 100));
+const uploadProgress = createEffectStreamLogic(Stream.make(0, 25, 60, 100));
 
 const program = Effect.gen(function* () {
   const actor = yield* createEffectActor(uploadProgress);
@@ -229,16 +241,20 @@ See [Effect actor logic](docs/effect-logic.md) for tasks and a stream that drive
 <!-- effect action contract from src/setupEffect.ts; spawn guard from src/internal.ts -->
 
 - Register background Effect actions in `setupEffect({ actions })`; enqueue them with explicit arguments.
-- Invoke `fromEffect` logic when the machine needs to wait for a result.
+- Invoke `createEffectLogic` logic when the machine needs to wait for a result.
 - Register spawned Effect logic in `actors`, then use `enq.spawn(args.actors.worker)`.
 
 See [schemas and actions](docs/schemas-and-actions.md) for a complete audit example, runtime schema constraints and inline-source pitfalls.
+
+<!-- lint plugin export from package.json; rule from src/oxlint.ts -->
+
+Enable `xstate-effect/no-inline-effect` with the compiled `@xstate/effect/oxlint` plugin to catch discarded inline Effects and unsupported inline spawned Effect logic. See [Oxlint configuration](docs/schemas-and-actions.md#declared-sources) for installation and the rule's syntactic limits.
 
 ## Atoms and React
 
 <!-- atom surface from src/atom.ts -->
 
-`createActorAtoms` from `@xstate/effect/atom` exposes `actor`, `snapshot`, `result`, `send`, `select` and `state`. Its `Atom.runtime` must provide the logic's services. Pass `{ input }` when the logic requires input; missing or mismatched input is a type error.
+`createActorAtoms` from `@xstate/effect/atom` exposes `actor`, `snapshot`, `result`, `send` and `select`. Machine logic also exposes `state`; tasks and streams do not. Its `Atom.runtime` must provide the logic's services. Pass `{ input }` when the logic requires input; missing or mismatched input is a type error.
 
 - Read atoms with `@effect/atom-react` in React, or an `AtomRegistry` elsewhere.
 - The registry owns their lifetime; dispose it when its owner shuts down.
@@ -250,16 +266,17 @@ See [atoms and React](docs/atoms-and-react.md) for complete examples with import
 
 <!-- error types from src/errors.ts; timeout failure from src/actor.ts -->
 
+- Use `sendAndAwait` from `@xstate/effect` to acknowledge one event after its transition and immediate effects. It does not wait for child replies, invoked work, background actions or future timers.
 - Use `TestClock` to drive deadlines without waiting for real time.
 - `ActorStoppedError` reports a stop before an awaited result.
-- `EffectInterruptedError` reports self-interruption inside Effect logic.
+- `EffectFailure<E>` carries the original `Cause<E>` in task and stream error snapshots, including defects and self-interruption.
 - Timed waits fail with Effect's `Cause.TimeoutError`.
-- `join` preserves a task's typed failure. Unexpected machine errors have type `unknown`.
+- `join` replays the original Cause and preserves a task's typed failure. Unexpected machine errors have type `unknown`.
 
-See [testing and errors](docs/testing-and-errors.md) for executable deadline, retry and failure examples. Persisted snapshots record actor state; pass one to `createEffectActor(logic, { snapshot })` to resume the actor. See [persisting and restoring](docs/actors.md#persisting-and-restoring).
+See [testing and errors](docs/testing-and-errors.md) for executable deadline, retry and failure examples. Persisted snapshots record actor state; pass one to `createEffectActor(logic, { snapshot })` to resume the actor. Use `createSnapshotCodec` with a full bidirectional Effect schema for validated JSON persistence of versioned machines. See [persisting and restoring](docs/actors.md#persisting-and-restoring).
 
 ## Tracing
 
-<!-- span names and attributes from src/internal.ts and src/fromEffect.ts -->
+<!-- span names and attributes from src/internal.ts and src/effectLogic.ts -->
 
-Hosted work uses spans named `fromEffect`, `fromEffectStream`, `fromEffectEventStream` and `action.<name>`. Each carries `xstate.actor.id` and `xstate.actor.address`. Provide a `Tracer` to record and export them.
+Hosted work uses spans named `createEffectLogic`, `createEffectStreamLogic`, `createEffectEventStreamLogic` and `action.<name>`. Each carries `xstate.actor.id` and `xstate.actor.address`. Provide a `Tracer` to record and export them.

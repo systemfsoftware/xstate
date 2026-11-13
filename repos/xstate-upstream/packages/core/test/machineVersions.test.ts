@@ -1,5 +1,8 @@
+import { eventSchema } from '../src/index.ts';
+import { snapshotSchema } from '../src/persist/index.ts';
 import { z } from 'zod';
 import { createActor, createMachine, machineVersions, types } from '../src';
+import { restoreActor } from '../src/persist/index.ts';
 
 describe('machineVersions', () => {
   it('exposes the same version schemas on machines and descriptors', async () => {
@@ -17,19 +20,19 @@ describe('machineVersions', () => {
     const persisted = createActor(checkout).getPersistedSnapshot();
 
     await expect(
-      checkout.snapshotSchema['~standard'].validate({
+      snapshotSchema(checkout)['~standard'].validate({
         ...persisted,
         context: { count: 1 }
       })
     ).resolves.toMatchObject({ value: { context: { count: 1 } } });
     await expect(
-      checkout.eventSchema['~standard'].validate({
+      eventSchema(checkout)['~standard'].validate({
         type: 'ADD',
         value: 2
       })
     ).resolves.toEqual({ value: { type: 'ADD', value: 2 } });
     await expect(
-      checkout.snapshotSchema['~standard'].validate({
+      snapshotSchema(checkout)['~standard'].validate({
         ...persisted,
         value: 'removed'
       })
@@ -49,9 +52,9 @@ describe('machineVersions', () => {
           context: z.object({ count: z.number() }),
           children: z.record(z.string(), z.unknown()),
           historyValue: z.record(z.string(), z.unknown()),
-          timers: z.record(z.string(), z.unknown()),
+          timers: z.array(z.unknown()),
           _nextActorId: z.number(),
-          _nextTimerId: z.number(),
+          nextTimerId: z.number(),
           machine: z.object({
             id: z.literal('checkout'),
             version: z.literal('1')
@@ -74,9 +77,9 @@ describe('machineVersions', () => {
       context: { count: 3 },
       children: {},
       historyValue: {},
-      timers: {},
+      timers: [],
       _nextActorId: 0,
-      _nextTimerId: 0,
+      nextTimerId: 0,
       machine: { id: 'checkout', version: '1' },
       version: '1'
     } as const;
@@ -118,8 +121,8 @@ describe('machineVersions', () => {
         context: {};
         children: {};
         historyValue: {};
-        timers: {};
-        _nextTimerId: number;
+        timers: [];
+        nextTimerId: number;
       }>()
     } as const;
     const current = createMachine({
@@ -147,8 +150,8 @@ describe('machineVersions', () => {
         context: {};
         children: {};
         historyValue: {};
-        timers: {};
-        _nextTimerId: number;
+        timers: [];
+        nextTimerId: number;
       }>()
     } as const;
     const current = createMachine({
@@ -187,7 +190,7 @@ describe('machineVersions', () => {
         context: {};
         children: {};
         historyValue: {};
-        timers: {};
+        timers: [];
       }>()
     } as const;
     const current = createMachine({
@@ -618,7 +621,7 @@ describe('machineVersions', () => {
     const versions = machineVersions([checkout]);
     const events = [
       { type: 'xstate.done.actor', actorId: 'child' },
-      { type: '@xstate.init' }
+      { type: 'xstate.init' }
     ];
 
     await expect(
@@ -668,7 +671,7 @@ describe('machineVersions', () => {
         }
       }
     });
-    const actor = createActor(checkoutV2, { snapshot: compatible }).start();
+    const actor = restoreActor(checkoutV2, compatible).start();
 
     expect(actor.getSnapshot().context).toEqual({ total: 2 });
   });
@@ -730,10 +733,9 @@ describe('machineVersions', () => {
       }
     );
 
-    expect(compatible).toMatchObject({ historyValue: {}, timers: {} });
+    expect(compatible).toMatchObject({ historyValue: {}, timers: [] });
     expect(
-      createActor(checkout, { snapshot: compatible }).start().getSnapshot()
-        .context
+      restoreActor(checkout, compatible).start().getSnapshot().context
     ).toEqual({ total: 3 });
   });
 
@@ -859,10 +861,8 @@ describe('machineVersions', () => {
     });
     const persisted = createActor(checkout).getPersistedSnapshot();
 
-    const restored = createActor(cart, {
-      // @ts-expect-error -- cross-ID restore is also rejected at the type level
-      snapshot: persisted
-    });
+    // @ts-expect-error -- cross-ID restore is also rejected at the type level
+    const restored = restoreActor(cart, persisted);
     restored.subscribe({ error: () => {} });
     restored.start();
 
@@ -926,6 +926,7 @@ describe('machineVersions', () => {
 
     const parsed = await versions.parseSnapshot({
       ...legacyPersisted,
+      version: '1',
       context: { count: 2 }
     });
 
@@ -987,7 +988,7 @@ describe('machineVersions', () => {
         })
       }
     });
-    const actor = createActor(checkoutV1, { snapshot: compatible }).start();
+    const actor = restoreActor(checkoutV1, compatible).start();
 
     expect(actor.getSnapshot().context).toEqual({ total: 2 });
   });
@@ -1004,9 +1005,9 @@ describe('machineVersions', () => {
         context: z.object({ count: z.number() }),
         children: z.object({}),
         historyValue: z.object({}),
-        timers: z.object({}),
+        timers: z.tuple([]),
         _nextActorId: z.number().optional(),
-        _nextTimerId: z.number()
+        nextTimerId: z.number()
       })
     } as const;
     const versions = machineVersions([historical], { unversioned: '0' });
@@ -1017,8 +1018,8 @@ describe('machineVersions', () => {
       context: { count: 1 },
       children: {},
       historyValue: {},
-      timers: {},
-      _nextTimerId: 0
+      timers: [],
+      nextTimerId: 0
     });
 
     expect(parsed.source).toBe(historical);
@@ -1072,10 +1073,11 @@ describe('machineVersions', () => {
     });
     const persisted = {
       ...createActor(checkout).getPersistedSnapshot(),
+      version: '1',
       machine: { id: 'checkout', version: '2' }
     };
 
-    const restored = createActor(checkout, { snapshot: persisted });
+    const restored = restoreActor(checkout, persisted);
     restored.subscribe({ error: () => {} });
     restored.start();
 
@@ -1147,7 +1149,7 @@ describe('machineVersions', () => {
         '*': wildcard
       }
     });
-    const actor = createActor(checkoutV2, { snapshot: compatible }).start();
+    const actor = restoreActor(checkoutV2, compatible).start();
 
     expect(actor.getSnapshot().context).toEqual({ total: 1 });
     expect((compatible as any).machine).toEqual({

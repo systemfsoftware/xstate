@@ -1,28 +1,28 @@
 import isDevelopment from '#is-development';
+import { xstateError } from './xstateError.ts';
 import { isMachineSnapshot } from './State.ts';
 import type { StateNode } from './StateNode.ts';
 import { TARGETLESS_KEY, WILDCARD } from './constants.ts';
-import { isStateId } from './stateUtils.ts';
 import type {
   AnyActor,
+  AnyActorLogic,
   AnyEventObject,
+  AnyInvokeDefinition,
   AnyMachineSnapshot,
   AnyStateMachine,
+  AnyStateNode,
   AnyTransitionConfig,
   AnyTransitionConfigFunction,
   ErrorEvent,
   EventObject,
-  InvokeConfig,
   MachineContext,
   Mapper,
-  NonReducibleUnknown,
   Observer,
   OutputArg,
-  SingleOrArray,
   StateLike,
-  StateValue,
-  TransitionConfigTarget
+  StateValue
 } from './types.ts';
+import type { NonReducibleUnknown, SingleOrArray } from './typeUtils.ts';
 
 /** @public */
 export function matchesState(
@@ -54,17 +54,31 @@ export function matchesState(
   });
 }
 
-/** @public */
-export function checkStateIn(
-  snapshot: AnyMachineSnapshot,
-  stateValue: StateValue
-) {
-  if (typeof stateValue === 'string' && isStateId(stateValue)) {
-    const target = snapshot.machine.getStateNodeById(stateValue);
-    return snapshot.nodes.some((sn) => sn === target);
+/**
+ * @internal Throws when a user source name (action, guard, actor or delay)
+ * enters the `xstate.` / `@xstate.` namespaces, which are reserved for
+ * built-in events, effects and source keys.
+ */
+export function assertUnreservedSourceName(kind: string, name: string): void {
+  if (name.startsWith('xstate.') || name.startsWith('@xstate.')) {
+    throw new Error(
+      isDevelopment
+        ? `Invalid ${kind} name '${name}': the 'xstate.' and '@xstate.' prefixes are reserved for built-in names.`
+        : xstateError(37, kind, name)
+    );
   }
+}
 
-  return snapshot.matches(stateValue);
+/** Whether a state key contains a `.` that is not escaped as `\\.`. */
+export function hasUnescapedDot(key: string): boolean {
+  for (let i = 0; i < key.length; i++) {
+    if (key[i] === '\\') {
+      i++;
+    } else if (key[i] === '.') {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function toStatePath(stateId: string | string[]): string[] {
@@ -80,8 +94,10 @@ export function toStatePath(stateId: string | string[]): string[] {
     switch (char) {
       // \
       case 92:
-        // consume the next character
-        segment += stateId[i + 1];
+        // An escaped `.` stays escaped: `foo\\.bar` is one path segment, the
+        // literal state key `'foo\\.bar'`. Other escapes consume the next
+        // character.
+        segment += stateId[i + 1] === '.' ? '\\.' : stateId[i + 1];
         // and skip over it
         i++;
         continue;
@@ -113,8 +129,8 @@ function toStateValue(stateValue: StateLike<any> | StateValue): StateValue {
   return pathToStateValue(statePath);
 }
 
-/** @public */
-export function pathToStateValue(statePath: string[]): StateValue {
+/** @internal */
+function pathToStateValue(statePath: string[]): StateValue {
   if (statePath.length === 1) {
     return statePath[0];
   }
@@ -262,17 +278,28 @@ export function isErrorEvent(event: AnyEventObject): event is ErrorEvent {
   return event.type.startsWith('xstate.error.');
 }
 
+/**
+ * Normalizes authored transitions to config objects. A bare string target is
+ * rejected (the types and `machineFromJSON` reject it too): `name` and
+ * `stateId` locate it in the error.
+ */
 export function toTransitionConfigArray(
-  configLike: SingleOrArray<
-    AnyTransitionConfig | TransitionConfigTarget | AnyTransitionConfigFunction
-  >
+  configLike: SingleOrArray<AnyTransitionConfig | AnyTransitionConfigFunction>,
+  name: string,
+  stateId: string
 ): Array<AnyTransitionConfig> {
   return toArrayStrict(configLike).map((transitionLike) => {
-    if (
-      typeof transitionLike === 'undefined' ||
-      typeof transitionLike === 'string'
-    ) {
-      return { target: transitionLike };
+    // Untyped (JS or JSON-parsed) configs can still contain a string.
+    const value: unknown = transitionLike;
+    if (typeof value === 'string') {
+      throw new Error(
+        isDevelopment
+          ? `Transition for "${name}" in ${stateId ? `state "${stateId}"` : 'the root state'} is the string "${value}". Use { target: '${value}' }. The @xstate/codemod string-targets transform rewrites these.`
+          : xstateError(38, name, stateId, value)
+      );
+    }
+    if (typeof transitionLike === 'undefined') {
+      return { target: undefined };
     }
 
     if (typeof transitionLike === 'function') {
@@ -295,7 +322,7 @@ export function normalizeTarget<
   return toArray(target);
 }
 
-/** @public */
+/** @experimental Used by framework integrations; not part of the stable API. */
 export function toObserver<T>(
   nextHandler?: Observer<T> | ((value: T) => void),
   errorHandler?: (error: any) => void,
@@ -314,8 +341,17 @@ export function toObserver<T>(
   };
 }
 
+/**
+ * Names a machine in messages: `machine 'shop'`, or `the machine` when it
+ * has no id.
+ */
+export function describeMachine(id: string): string {
+  return id ? `machine '${id}'` : 'the machine';
+}
+
+/** The implicit id of an invoke: `<stateId>:<index>`, e.g. `loading:0`. */
 export function createInvokeId(stateNodeId: string, index: number): string {
-  return `${index}.${stateNodeId}`;
+  return `${stateNodeId}:${index}`;
 }
 
 /** Whether `value` looks like an actor ref (as persisted context detects them). */
@@ -323,40 +359,61 @@ export function isActorRefLike(value: object): boolean {
   return 'sessionId' in value && 'send' in value && 'ref' in value;
 }
 
-export function resolveReferencedActor(machine: AnyStateMachine, src: string) {
-  const match = src.match(/^xstate\.invoke\.(\d+)\.(.*)/)!;
-  if (!match) {
-    return machine.sources.actors[src];
+/**
+ * Resolves the logic of a persisted child that has no source key: an inline
+ * invoke, identified by its id among the invoke definitions of the active
+ * state nodes.
+ */
+export function resolveInvokedActorLogic(
+  machine: AnyStateMachine,
+  nodes: Iterable<AnyStateNode>,
+  childId: string
+): AnyActorLogic {
+  const definitions: AnyInvokeDefinition[] = [];
+  for (const node of nodes) {
+    for (const definition of node.invoke) {
+      if (definition.id === childId) {
+        definitions.push(definition);
+      }
+    }
   }
-  const [, indexStr, nodeId] = match;
-  const node = machine.getStateNodeById(nodeId);
-  const invokeConfig = node.config.invoke!;
-  const configSrc = (
-    Array.isArray(invokeConfig)
-      ? invokeConfig[indexStr as any]
-      : (invokeConfig as InvokeConfig<
-          any,
-          any,
-          any,
-          any,
-          any,
-          any,
-          any, // TEmitted
-          any // TMeta
-        >)
-  ).src;
-  // A referenced actor may itself be registered by name.
-  return typeof configSrc === 'string'
-    ? machine.sources.actors[configSrc]
-    : configSrc;
+  if (definitions.length !== 1) {
+    throw new Error(
+      isDevelopment
+        ? `Unable to restore child actor '${childId}': it has no source key, and ${definitions.length ? 'several active states' : 'no active state'} of ${describeMachine(machine.id)} ${definitions.length ? 'invoke' : 'invokes'} it.`
+        : xstateError(39, childId)
+    );
+  }
+  const logic = definitions[0].logic;
+  if (typeof logic === 'string') {
+    const registered = machine.sources.actors[logic];
+    if (!registered) {
+      throw new Error(
+        isDevelopment
+          ? `Unable to restore child actor '${childId}': child source '${logic}' is not provided in ${describeMachine(machine.id)}.`
+          : xstateError(29, childId, logic)
+      );
+    }
+    return registered;
+  }
+  if (typeof logic === 'function') {
+    throw new Error(
+      isDevelopment
+        ? `Unable to restore child actor '${childId}': its invoke resolves \`src\` with a function that returned inline logic. Register the logic in \`actors\` and return its key so the child persists by source key.`
+        : xstateError(40, childId)
+    );
+  }
+  return logic;
 }
 
-/** @experimental */
-export function getAllOwnEventDescriptors(snapshot: AnyMachineSnapshot) {
-  return [...new Set([...snapshot.nodes.flatMap((sn) => sn.ownEvents)])];
-}
-
-/** @internal Events synthesized from active transition descriptors. */
+/**
+ * Returns one event per transition of the active state nodes of `snapshot`,
+ * including the internal events for invoked actors (`xstate.done.actor`,
+ * `xstate.error.actor`) and delayed transitions (`xstate.after`). Graph
+ * traversal sends these when the `events` option is not given.
+ *
+ * @public
+ */
 export function getAllOwnEvents(snapshot: AnyMachineSnapshot) {
   const events = snapshot.nodes.flatMap((stateNode) =>
     [...stateNode.transitions.values()].flatMap((transitions) =>

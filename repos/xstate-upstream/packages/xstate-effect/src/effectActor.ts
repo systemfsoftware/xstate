@@ -1,4 +1,6 @@
-import { Queue } from 'effect';
+import { Effect, Exit, Queue } from 'effect';
+import { ActorStoppedError, EventRejectedError } from './errors.ts';
+import { StateMachine } from 'xstate';
 import type {
   ActorRef,
   AnyActor,
@@ -7,26 +9,40 @@ import type {
   EventFromLogic,
   InspectionEvent,
   Observer,
+  PersistedSnapshotOf,
   Snapshot,
   SnapshotFrom,
   Subscription
 } from 'xstate';
 
-/** A mailbox item that reports a failed fire-and-forget action. */
-export interface ActionFailure {
-  readonly [actionFailure]: true;
-  readonly error: unknown;
+export interface Receipt<TSnapshot> {
+  resume?: (
+    exit: Exit.Exit<TSnapshot, ActorStoppedError | EventRejectedError>
+  ) => void;
 }
 
-export const actionFailure: unique symbol = Symbol.for(
-  '@xstate/effect/actionFailure'
-) as any;
+export type MailboxItem<TEvent, TSnapshot> =
+  | {
+      readonly kind: 'event';
+      readonly event: TEvent;
+      readonly receipt?: Receipt<TSnapshot>;
+    }
+  | { readonly kind: 'actionFailure'; readonly error: unknown };
 
-export function isActionFailure(value: unknown): value is ActionFailure {
-  return typeof value === 'object' && value !== null && actionFailure in value;
-}
-
-export type MailboxItem<TEvent> = TEvent | ActionFailure;
+/** @internal */
+export type Step<TSnapshot> =
+  | {
+      readonly kind: 'start';
+      readonly snapshot: TSnapshot;
+      readonly effects: Effect.Effect<void>;
+    }
+  | {
+      readonly kind: 'transition';
+      readonly snapshot: TSnapshot;
+      readonly effects: Effect.Effect<void>;
+      readonly receipt?: Receipt<TSnapshot>;
+      readonly rejection?: EventRejectedError;
+    };
 
 const symbolObservable: typeof Symbol.observable = (() =>
   (typeof Symbol === 'function' && Symbol.observable) ||
@@ -66,6 +82,8 @@ function toObserver<T>(
  * contract (`send`, `getSnapshot`, `subscribe`, `on`), so it works with
  * `useSelector`, this package's actor functions and the inspection APIs, while
  * the actor itself is driven by an Effect fiber over pure transitions.
+ *
+ * @experimental
  */
 export class EffectActor<TLogic extends AnyActorLogic> implements ActorRef<
   SnapshotFrom<TLogic>,
@@ -87,12 +105,18 @@ export class EffectActor<TLogic extends AnyActorLogic> implements ActorRef<
     Set<(emitted: EmittedFrom<TLogic>) => void>
   >();
   private _settled = false;
+  private readonly _pending = new Set<Receipt<SnapshotFrom<TLogic>>>();
+  private _inStep = false;
+  private _deliveryDepth = 0;
+  private _stopHeld = false;
 
   constructor(
     readonly logic: TLogic,
     root: AnyActor,
     snapshot: SnapshotFrom<TLogic>,
-    private readonly _mailbox: Queue.Queue<MailboxItem<EventFromLogic<TLogic>>>,
+    private readonly _mailbox: Queue.Queue<
+      MailboxItem<EventFromLogic<TLogic>, SnapshotFrom<TLogic>>
+    >,
     private readonly _stopExecution: () => void,
     private readonly _inspectors: Set<(event: InspectionEvent) => void>
   ) {
@@ -108,21 +132,95 @@ export class EffectActor<TLogic extends AnyActorLogic> implements ActorRef<
     return this._snapshot;
   }
 
-  getPersistedSnapshot(): Snapshot<unknown> {
-    return this.logic.getPersistedSnapshot(this._snapshot as never);
+  getPersistedSnapshot(): PersistedSnapshotOf<TLogic> {
+    return this.logic.getPersistedSnapshot(
+      this._snapshot as never
+    ) as PersistedSnapshotOf<TLogic>;
   }
 
   /** Sends an event; the actor processes it on its own fiber. */
   send(event: EventFromLogic<TLogic>): void {
-    if (this._settled) {
-      this.system.deadLetter(undefined, this._root, event, 'stopped');
-      return;
-    }
-    Queue.offerUnsafe(this._mailbox, event);
+    if (this._deliveryError(event)) return;
+    Queue.offerUnsafe(this._mailbox, { kind: 'event', event });
   }
 
-  /** Stops the actor, its children and every Effect it hosts. */
+  /** @internal */
+  _sendAndAwait(
+    event: EventFromLogic<TLogic>
+  ): Effect.Effect<
+    SnapshotFrom<TLogic>,
+    ActorStoppedError | EventRejectedError
+  > {
+    return Effect.callback((resume) => {
+      const error = this._deliveryError(event);
+      if (error) {
+        resume(Effect.fail(error));
+        return;
+      }
+      const receipt: Receipt<SnapshotFrom<TLogic>> = {
+        resume: (exit) => resume(exit)
+      };
+      this._pending.add(receipt);
+      Queue.offerUnsafe(this._mailbox, { kind: 'event', event, receipt });
+      return Effect.sync(() => {
+        this._pending.delete(receipt);
+        receipt.resume = undefined;
+      });
+    });
+  }
+
+  private _deliveryError(
+    event: EventFromLogic<TLogic>
+  ): ActorStoppedError | EventRejectedError | undefined {
+    if (this._settled) {
+      this.system.deadLetter(undefined, this._root, event, 'stopped');
+      return this._stoppedError();
+    }
+    if (
+      this.logic instanceof StateMachine &&
+      this.logic.isInternalEventType(event.type)
+    ) {
+      this.system.deadLetter(undefined, this._root, event, 'internalEvent');
+      return new EventRejectedError({
+        actorId: this.id,
+        event,
+        reason: 'internalEvent'
+      });
+    }
+    return undefined;
+  }
+
+  private _stoppedError(): ActorStoppedError {
+    return new ActorStoppedError({
+      actorId: this.id,
+      snapshot: this._snapshot
+    });
+  }
+
+  /** @internal */
+  _completeReceipt(
+    receipt: Receipt<SnapshotFrom<TLogic>> | undefined,
+    exit: Exit.Exit<
+      SnapshotFrom<TLogic>,
+      ActorStoppedError | EventRejectedError
+    >
+  ): void {
+    if (!receipt || !this._pending.delete(receipt)) return;
+    const resume = receipt.resume;
+    receipt.resume = undefined;
+    resume?.(exit);
+  }
+
+  /**
+   * Stops the actor, its children and every Effect it hosts. If a listener or
+   * an observer calls `stop()` while the actor delivers a macrostep to it, the
+   * actor stops when that macrostep ends. `createActor` does the same.
+   */
   stop(): this {
+    if (this._inStep && this._deliveryDepth > 0) {
+      this._stopHeld = true;
+      return this;
+    }
     this._stopExecution();
     return this;
   }
@@ -185,12 +283,24 @@ export class EffectActor<TLogic extends AnyActorLogic> implements ActorRef<
 
   /** @internal Delivers an emitted event to `on` listeners. */
   _emit(event: EmittedFrom<TLogic>): void {
+    if (this._settled) return;
     const listeners = [
       ...(this._listeners.get(event.type) ?? []),
       ...(this._listeners.get('*') ?? [])
     ];
-    for (const listener of listeners) {
-      safeCall(listener, event);
+    this._deliver(() => {
+      for (const listener of listeners) {
+        safeCall(listener, event);
+      }
+    });
+  }
+
+  private _deliver(notify: () => void): void {
+    this._deliveryDepth++;
+    try {
+      notify();
+    } finally {
+      this._deliveryDepth--;
     }
   }
 
@@ -217,25 +327,54 @@ export class EffectActor<TLogic extends AnyActorLogic> implements ActorRef<
     return this;
   }
 
-  toJSON() {
-    return { xstate$$type: 1, id: this.id };
+  toJSON(): { '@actor': string } {
+    return { '@actor': this.address };
   }
 
-  /** @internal Publishes a snapshot produced by the execution loop. */
-  _publish(snapshot: SnapshotFrom<TLogic>): void {
-    this._snapshot = snapshot;
-    const status = (snapshot as Snapshot<unknown>).status;
-    if (status === 'active') {
-      for (const observer of this._observers) {
-        safeCall(observer.next, snapshot);
+  /** @internal */
+  _runStep(step: Step<SnapshotFrom<TLogic>>): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      if (this._settled) return;
+      this._snapshot = step.snapshot;
+      this._inStep = true;
+      yield* step.effects;
+      if (this._settled) return;
+      if ((this._snapshot as Snapshot<unknown>).status !== 'active') {
+        this._settle(
+          this._snapshot,
+          step.kind === 'transition' ? step.receipt : undefined
+        );
+      } else if (step.kind === 'transition') {
+        this._deliver(() => {
+          for (const observer of this._observers) {
+            safeCall(observer.next, this._snapshot);
+          }
+        });
       }
-      return;
-    }
-    this._settle(snapshot);
+    }).pipe(
+      Effect.onExit((exit) =>
+        Effect.sync(() => {
+          this._inStep = false;
+          if (this._stopHeld) {
+            this._stopExecution();
+          } else if (step.kind === 'transition' && Exit.isSuccess(exit)) {
+            this._completeReceipt(
+              step.receipt,
+              step.rejection
+                ? Exit.fail(step.rejection)
+                : Exit.succeed(step.snapshot)
+            );
+          }
+        })
+      )
+    );
   }
 
-  /** @internal Marks the actor stopped and notifies observers. */
-  _settle(snapshot: SnapshotFrom<TLogic>): void {
+  /** @internal Settles the actor and notifies its observers. */
+  _settle(
+    snapshot: SnapshotFrom<TLogic>,
+    processing?: Receipt<SnapshotFrom<TLogic>>
+  ): void {
     if (this._settled) {
       return;
     }
@@ -244,17 +383,23 @@ export class EffectActor<TLogic extends AnyActorLogic> implements ActorRef<
     const observers = [...this._observers];
     this._observers.clear();
     const status = (snapshot as Snapshot<unknown>).status;
-    if (status === 'done') {
+    this._deliver(() => {
+      if (status === 'done') {
+        for (const observer of observers) {
+          safeCall(observer.next, snapshot);
+        }
+      }
       for (const observer of observers) {
-        safeCall(observer.next, snapshot);
+        if (status === 'error') {
+          safeCall(observer.error, (snapshot as Snapshot<unknown>).error);
+        } else {
+          safeCall(observer.complete);
+        }
       }
-    }
-    for (const observer of observers) {
-      if (status === 'error') {
-        safeCall(observer.error, (snapshot as Snapshot<unknown>).error);
-      } else {
-        safeCall(observer.complete);
-      }
+    });
+    this._completeReceipt(processing, Exit.succeed(snapshot));
+    for (const receipt of this._pending) {
+      this._completeReceipt(receipt, Exit.fail(this._stoppedError()));
     }
   }
 

@@ -13,26 +13,20 @@ import {
   isMachineSnapshot,
   stopActor,
   terminateActor,
-  type ActorOptions,
   type AnyActor,
   type AnyActorLogic,
   type AnyEventObject,
   type EventFromLogic,
   type InspectionEvent,
   type InputFrom,
-  type RequiredActorOptionsFor,
+  type RestorablePersistedSnapshotFor,
   type RequiredActorOptionsKeys,
   type Snapshot,
-  type SnapshotFrom
+  type SnapshotFrom,
+  type TimerKey
 } from 'xstate';
 import { createDurable, type DurableEffect } from 'xstate/durable';
-import {
-  EffectActor,
-  actionFailure,
-  isActionFailure,
-  safeCall,
-  type MailboxItem
-} from './effectActor.ts';
+import { EffectActor, safeCall, type MailboxItem } from './effectActor.ts';
 import {
   bindEffectHost,
   closeEffectHost,
@@ -42,24 +36,38 @@ import {
 } from './internal.ts';
 import type { RequirementsFrom } from './types.ts';
 import { ActorScope } from './actorScope.ts';
+import { EventRejectedError } from './errors.ts';
 
 const XSTATE_TIMER = 'xstate.timer';
-const XSTATE_INIT = '@xstate.init';
+const XSTATE_INIT = 'xstate.init';
 
-/** Options for {@link createEffectActor}. */
+/**
+ * Options for {@link createEffectActor}.
+ *
+ * @experimental
+ */
 export type EffectActorOptions<TLogic extends AnyActorLogic> = {
   readonly input?: InputFrom<TLogic>;
   /**
    * A snapshot from `actor.getPersistedSnapshot()`. The actor resumes in that
    * state without re-running entry actions, and pending timers keep their
-   * original deadlines, as with XState's `createActor(logic, { snapshot })`.
+   * original deadlines, as with `restoreActor(logic, snapshot)` from
+   * `xstate/persist`.
    * State-machine children resume their persisted state and completed
    * children stay done. Effect tasks and streams that were running, at the
    * root or as children, start again from the beginning. A restored actor
    * does not need `input`.
    */
-  readonly snapshot?: ActorOptions<TLogic>['snapshot'];
-} & RequiredActorOptionsFor<TLogic>;
+  readonly snapshot?: Snapshot<unknown> &
+    Partial<RestorablePersistedSnapshotFor<TLogic>>;
+} & ([RequiredActorOptionsKeys<TLogic>] extends [never]
+  ? {}
+  :
+      | { [K in RequiredActorOptionsKeys<TLogic>]: unknown }
+      | {
+          snapshot: Snapshot<unknown> &
+            Partial<RestorablePersistedSnapshotFor<TLogic>>;
+        });
 
 export type EffectActorOptionsArgs<TLogic extends AnyActorLogic> = [
   RequiredActorOptionsKeys<TLogic>
@@ -80,6 +88,8 @@ export type EffectActorOptionsArgs<TLogic extends AnyActorLogic> = [
  * The actor is a scoped resource: it stops, and every Effect it hosts is
  * interrupted, when the enclosing `Scope` closes. The returned Effect never
  * fails; the actor's own outcome is its snapshot status, read with `join`.
+ *
+ * @experimental
  */
 export function createEffectActor<TLogic extends AnyActorLogic>(
   logic: TLogic,
@@ -104,7 +114,13 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
       const runPromise = Effect.runPromiseWith(context);
 
       const mailbox =
-        yield* Queue.unbounded<MailboxItem<EventFromLogic<TLogic>>>();
+        yield* Queue.unbounded<
+          MailboxItem<EventFromLogic<TLogic>, SnapshotFrom<TLogic>>
+        >();
+      let delivered:
+        | MailboxItem<EventFromLogic<TLogic>, SnapshotFrom<TLogic>>
+        | undefined;
+      const getDelivered = () => delivered;
       const timers = new Map<string, Fiber.Fiber<void>>();
       // `root` and `actor` are declared after the adapter below; its
       // callbacks only run once they are initialized.
@@ -112,13 +128,15 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
       const isRoot = (candidate: AnyActor) =>
         candidate.address === durable.rootAddress;
 
-      const offer = (item: MailboxItem<EventFromLogic<TLogic>>) => {
+      const offer = (
+        item: MailboxItem<EventFromLogic<TLogic>, SnapshotFrom<TLogic>>
+      ) => {
         if (!stopped) {
           Queue.offerUnsafe(mailbox, item);
         }
       };
-      const timerKey = (source: AnyActor, id: string) =>
-        `${source.sessionId}:${id}`;
+      const timerKey = (source: AnyActor, timer: TimerKey) =>
+        `${source.sessionId}:${JSON.stringify(timer)}`;
 
       const inspectors = new Set<(event: InspectionEvent) => void>();
       let rootAnnounced = false;
@@ -139,11 +157,11 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
                 typeof (result as PromiseLike<unknown>).then === 'function'
               ) {
                 void Promise.resolve(result).catch((error: unknown) => {
-                  offer({ [actionFailure]: true, error });
+                  offer({ kind: 'actionFailure', error });
                 });
               }
             } catch (error) {
-              offer({ [actionFailure]: true, error });
+              offer({ kind: 'actionFailure', error });
             }
           },
           spawnActor: (_source, child) => {
@@ -165,7 +183,7 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
           },
           sendEvent: (source, target, event) => {
             if (isRoot(target)) {
-              offer(event as EventFromLogic<TLogic>);
+              offer({ kind: 'event', event: event as EventFromLogic<TLogic> });
               return;
             }
             deliverEvent(source, target, event);
@@ -177,8 +195,8 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
             }
             (source as AnyActor & { _emit(value: unknown): void })._emit(event);
           },
-          scheduleTimer: (source, id, delay) => {
-            const key = timerKey(source, id);
+          scheduleTimer: (source, timer, delay) => {
+            const key = timerKey(source, timer);
             timers.get(key)?.interruptUnsafe();
             const fiber = Fiber.runIn(
               runFork(
@@ -188,10 +206,13 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
                     timers.delete(key);
                     const timerEvent: AnyEventObject = {
                       type: XSTATE_TIMER,
-                      id
+                      ...timer
                     };
                     if (isRoot(source)) {
-                      offer(timerEvent as EventFromLogic<TLogic>);
+                      offer({
+                        kind: 'event',
+                        event: timerEvent as EventFromLogic<TLogic>
+                      });
                     } else {
                       deliverEvent(source, source, timerEvent);
                     }
@@ -202,8 +223,8 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
             );
             timers.set(key, fiber);
           },
-          cancelTimer: (source, id) => {
-            const key = timerKey(source, id);
+          cancelTimer: (source, timer) => {
+            const key = timerKey(source, timer);
             timers.get(key)?.interruptUnsafe();
             timers.delete(key);
           },
@@ -216,9 +237,18 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
             }
           },
           waitForEvent: () =>
-            runPromise(Queue.take(mailbox)) as Promise<EventFromLogic<TLogic>>
+            runPromise(Queue.take(mailbox)).then((item) => {
+              delivered = item;
+              return item.kind === 'event'
+                ? item.event
+                : ({
+                    type: 'xstate.effect.actionFailure'
+                  } as EventFromLogic<TLogic>);
+            })
         },
         {
+          // A live actor needs one FIFO for child events, sends and timers.
+          captureRootEvents: false,
           inspect: (event) => {
             // The pure step scope re-materializes the root ref per step and
             // announces it again; observers should see the root once.
@@ -274,10 +304,12 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
         }
         runFork(Queue.shutdown(mailbox));
         if (!actor._isSettled) {
-          actor._settle({
-            ...(actor.getSnapshot() as Snapshot<unknown>),
-            status: 'stopped'
-          } as SnapshotFrom<TLogic>);
+          const current = actor.getSnapshot() as Snapshot<unknown>;
+          actor._settle(
+            (current.status === 'active'
+              ? { ...current, status: 'stopped' }
+              : current) as SnapshotFrom<TLogic>
+          );
         }
         closeEffectHost(host);
       };
@@ -331,28 +363,33 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
           durable.executeEffects(batch).then(
             () => undefined,
             (error: unknown) => {
-              offer({ [actionFailure]: true, error });
+              offer({ kind: 'actionFailure', error });
             }
           )
         );
 
       const loop = Effect.gen(function* () {
-        yield* executeEffects(effects);
+        yield* actor._runStep({
+          kind: 'start',
+          snapshot,
+          effects: executeEffects(effects)
+        });
         while (
           (snapshot as Snapshot<unknown>).status === 'active' &&
           !stopped
         ) {
-          const item = yield* Effect.promise(() =>
-            durable.waitForEvent().then(
-              (event) => event as MailboxItem<EventFromLogic<TLogic>>,
-              () => undefined
-            )
+          delivered = undefined;
+          const received = yield* Effect.promise(() =>
+            durable.waitForEvent().catch(() => undefined)
           );
-          if (item === undefined || stopped) {
-            break;
-          }
+          if (received === undefined || stopped) break;
+          const item: MailboxItem<
+            EventFromLogic<TLogic>,
+            SnapshotFrom<TLogic>
+          > = getDelivered() ?? { kind: 'event', event: received };
+          const receipt = item.kind === 'event' ? item.receipt : undefined;
           let event: EventFromLogic<TLogic>;
-          if (isActionFailure(item)) {
+          if (item.kind === 'actionFailure') {
             const errorEvent = (
               logic as {
                 getExecutionErrorEvent?: (
@@ -363,23 +400,52 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
             ).getExecutionErrorEvent?.(snapshot, item.error);
             if (!errorEvent) {
               snapshot = errorSnapshot(snapshot, item.error);
+              yield* actor._runStep({
+                kind: 'transition',
+                snapshot,
+                effects: Effect.void
+              });
               break;
             }
             event = errorEvent;
           } else {
-            event = item;
+            event = item.event;
           }
           try {
             [snapshot, effects] = durable.transition(snapshot, event);
           } catch (error) {
             snapshot = errorSnapshot(snapshot, error);
+            yield* actor._runStep({
+              kind: 'transition',
+              snapshot,
+              effects: Effect.void,
+              receipt
+            });
             break;
           }
-          actor._publish(snapshot);
-          yield* executeEffects(effects);
+          const rejectedReason =
+            effects.length === 1 &&
+            effects[0].effect.type === '@xstate.deadLetter' &&
+            'reason' in effects[0].effect &&
+            effects[0].effect.reason === 'invalidEvent'
+              ? effects[0].effect.reason
+              : undefined;
+          yield* actor._runStep({
+            kind: 'transition',
+            snapshot,
+            effects: executeEffects(effects),
+            receipt,
+            rejection:
+              rejectedReason !== undefined
+                ? new EventRejectedError({
+                    actorId: actor.id,
+                    event,
+                    reason: rejectedReason
+                  })
+                : undefined
+          });
         }
         if (!stopped) {
-          actor._publish(snapshot);
           if ((snapshot as Snapshot<unknown>).status !== 'active') {
             stopChildren(snapshot);
             closeEffectHost(host);
@@ -388,11 +454,18 @@ export function createEffectActor<TLogic extends AnyActorLogic>(
       });
 
       yield* Effect.forkIn(loop, actorScope);
-      return { actor, host };
+      return { actor, host, stopNow: stop };
     }),
-    ({ actor, host }: { actor: EffectActor<TLogic>; host: EffectHost }) =>
+    ({
+      host,
+      stopNow
+    }: {
+      actor: EffectActor<TLogic>;
+      host: EffectHost;
+      stopNow: () => void;
+    }) =>
       Effect.gen(function* () {
-        actor.stop();
+        stopNow();
         if (host.closing) {
           yield* Fiber.join(host.closing);
         } else {

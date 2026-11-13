@@ -7,7 +7,7 @@ Understanding the order of operations makes machines predictable to write, test,
 
 ## Transitions are pure
 
-When an event arrives, XState calls the matching transition function. The function computes what should change and returns it. Nothing else happens while it runs.
+When an event arrives, XState calls the matching transition function. The function computes what should change and returns it. Put external effects in `enq(...)` so XState can defer them until it accepts the transition.
 
 ```ts
 on: {
@@ -19,6 +19,12 @@ on: {
 ```
 
 The `enq` calls do not run effects. They record them. The analytics call above has not happened when the function returns. It has been added to a queue. This is why a transition function must not rely on an effect's result: the result does not exist yet.
+
+Selection records ordinary enqueue calls, including calls inside `try` blocks, without executing their effects. An effect-only transition is enabled even when it returns `undefined`. XState reuses that result when it applies the selected transition.
+
+`enq.spawn(...)`, `enq.listen(...)`, and `enq.subscribeTo(...)` return actor refs. Selection stops at these calls without initializing an actor. An accepted transition runs again with real refs, so `enq.spawn(...).getSnapshot().context` remains available during execution. These calls and direct parent sends still use an internal selection abort. Catching that abort does not discard their effects, but the transition function can run again. Keep transition calculations free of external effects, and use `enq(...)` to schedule those effects.
+
+A losing transition and `snapshot.can(...)` do not execute queued effects or initialize spawned actors. An enqueue handle expires when its callback exits, including when the callback throws. Keep enqueue calls synchronous and inside that callback.
 
 Because transitions are pure, XState can calculate the next snapshot without an actor. [`transition(...)`](utilities.md) does this, so a test can compute a next snapshot directly. Restoring a [persisted snapshot](persistence.md) does not replay effects either.
 
@@ -35,7 +41,9 @@ event received
   → subscribers are notified
 ```
 
-One event may take at most `maxIterations` microsteps (default `1000`). A machine that exceeds the bound, usually through a cycle of `always` transitions or raised events, throws an `InfiniteTransitionError` whose message names the actor, the event and the last five states visited. Raise the bound for machines that legitimately take more steps:
+The number of microsteps one event may take is unbounded by default. In development builds, a macrostep that passes 1000 microsteps logs a warning once per machine, naming the actor, the event and the last five states visited. A cycle of `always` transitions or raised events never reaches a stable state, so it runs until the process stops it.
+
+Set `maxIterations` to bound the macrostep. A macrostep that exceeds the bound throws an `InfiniteTransitionError` with the same details, and the actor's status becomes `'error'`:
 
 ```ts
 const machine = createMachine({
@@ -58,7 +66,7 @@ Events raised with `enq.raise(...)` are processed before the actor handles the n
 
 ## Which transition runs
 
-When an event arrives, the deepest active state gets the first chance to handle it. If it has no matching transition, the event bubbles up through its ancestors. A child can define an event as `undefined` to block a parent's transition. Wildcards such as `pointer.*` and `*` only match when no exact transition matches at that state.
+When an event arrives, the deepest active state gets the first chance to handle it. If it has no matching transition, or its transition function returns `undefined` without calling `enq`, the event bubbles up through its ancestors. A child can define an event as `undefined` to block a parent's transition. Wildcards such as `pointer.*` and `*` only match when no exact transition matches at that state.
 
 In a [parallel state](parallel-states.md), every active region receives the event, so one event can move several regions at once.
 

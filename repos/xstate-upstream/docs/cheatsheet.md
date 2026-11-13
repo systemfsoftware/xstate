@@ -8,7 +8,7 @@ Every snippet on this page is v6 syntax. See [migrate from v5 to v6](xstate-v5-t
 ## Install
 
 ```bash
-npm install xstate@alpha
+npm install xstate@beta
 ```
 
 ```ts
@@ -125,10 +125,9 @@ const machine = createMachine({
 
 ```ts
 // check another state (replaces stateIn)
-import { checkStateIn } from 'xstate';
-
 play: ({ self }) => {
-  if (checkStateIn(self.getSnapshot(), 'volume.muted')) return;
+  if (self.getSnapshot().matches('volume.muted')) return;
+  // or by state id: self.getSnapshot().matches('#muted')
   return { target: 'playing' };
 };
 ```
@@ -206,7 +205,7 @@ loading: {
     src: loadUser,
     input: ({ context }) => ({ id: context.userId }),
     registryKey: 'request',
-    timeout: 5_000, // milliseconds only
+    timeout: 5_000, // milliseconds or a duration string
     onTimeout: { target: 'timedOut' },
     onDone: ({ context, event }) => ({
       target: 'ready',
@@ -259,7 +258,7 @@ import {
   createCallbackLogic,
   createObservableLogic,
   createEventObservableLogic,
-  createLogic,
+  createStepLogic,
   createEmptyActor,
   TimeoutError
 } from 'xstate';
@@ -292,7 +291,7 @@ const socketLogic = createCallbackLogic<{ type: 'send'; message: string }>(
 const ticks = createObservableLogic(() => interval(1000));
 
 // stateful custom logic
-const counterLogic = createLogic({
+const counterLogic = createStepLogic({
   id: 'counter',
   context: { count: 0 },
   run: ({ context, event }, enq) => {
@@ -315,7 +314,6 @@ See [actor logic](actor-logic.md).
 const actor = createActor(machine, {
   id: 'checkout',
   input: { userId: 'u_1' },
-  snapshot: restored,
   inspect: (event) => console.log(event),
   clock: new SimulatedClock(),
   logger: console.log,
@@ -430,8 +428,7 @@ s.createMachine({
 });
 ```
 
-State contracts without structural metadata remain permissive, so existing
-`setup(...)` machines do not need to add `type` or `initial` declarations.
+State contracts can declare schemas without `type` or `initial` metadata.
 
 See [final](final-states.md), [history](history-states.md), [parallel](parallel-states.md), [choice](choice-states.md), [route](route-states.md) and [state input](state-input.md).
 
@@ -488,12 +485,15 @@ const testMachine = machine.provide({ actors: { chargeCard: fakeChargeCard } });
 ## Persistence
 
 ```ts
+import { restoreActor } from 'xstate/persist';
+
 const persisted = actor.getPersistedSnapshot();
 localStorage.setItem('checkout', JSON.stringify(persisted));
 
-const restored = createActor(machine, {
-  snapshot: JSON.parse(localStorage.getItem('checkout')!)
-}).start();
+const restored = restoreActor(
+  machine,
+  JSON.parse(localStorage.getItem('checkout')!)
+).start();
 
 // migrate across machine versions
 const versions = machineVersions([checkoutV1, checkoutV2]);

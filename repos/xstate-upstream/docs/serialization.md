@@ -5,14 +5,14 @@ description: Treat machine definitions as data.
 
 A machine definition can be represented as data. Serialize it to JSON, store or send it, and build a running machine from it again.
 
-Call `serializeMachine(machine)` to get the JSON-serializable definition.
+Call `machineToJSON(machine)` to get the JSON-serializable definition.
 
 ```ts
-const json = serializeMachine(machine);
+const json = machineToJSON(machine);
 localStorage.setItem('checkout-definition', JSON.stringify(json));
 ```
 
-`serializeMachine()` never throws. Values that cannot be represented as data are handled explicitly: inline functions become code expressions, and runtime-only values are omitted.
+`machineToJSON()` never throws. Values that cannot be represented as data are handled explicitly: inline functions become code expressions, and runtime-only values are omitted.
 
 Serialize a config that was never passed to `createMachine()` with `machineConfigToJSON(config)`.
 
@@ -24,7 +24,9 @@ Use machine-as-data for cases such as:
 
 ## What survives serialization
 
-States, transitions, targets, serialized action objects, guard references, string actor `src` names, `after` delays, `timeout`/`onTimeout`, `meta`, `description`, `tags`, `output`, `context` values, internal event names (from `schemas.internalEvents`, as a top-level `internalEvents` array), `version`, and any other JSON-safe data on the config all survive.
+Call `getMachineSerializationDiagnostics(machine)` before exporting a code-authored machine when omitted values would matter to a tool. This experimental preflight reports JSON Pointer paths for omitted runtime values, code expressions needing an evaluator, and source implementations that must be supplied again. It does not call function values, prove behavioral equivalence or validate every required runtime binding.
+
+States, transitions, targets, serialized action objects, guard references, string actor `src` names, `after` delays, `timeout`/`onTimeout`, `meta`, `description`, `tags`, `output`, `context` values, internal event names (from `schemas.internalEvents`, as a top-level `internalEvents` array), `version`, and JSON-safe data within supported config fields all survive.
 
 Inline functions become code expressions:
 
@@ -43,18 +45,20 @@ These values are omitted rather than serialized:
 - runtime schemas such as Zod schemas in `schemas`
 - `schemas.internalEvents` declarations; restore those schemas when reviving if runtime validation is needed
 - root `actions`, `guards`, `actors` and `delays` sources that are functions
+- `undefined` object properties and array entries; omitted array entries shift later indexes
 - class instances, `Date`s, `bigint` and `symbol` values, including inside arrays
 
 > **Warning:** Named source keys are not preserved when their values are functions. The definition records where a source is _used_ (`invoke: { src: 'worker' }`, `guard: { type: 'canFinish' }`), and you supply the implementations when reviving.
 
 ## Reviving a machine
 
-`createMachineFromConfig(json, sources?)` builds a machine from a plain JSON definition.
+`machineFromJSON(json, sources?)` builds a machine from a plain JSON definition.
 
 ```ts
-import { createMachineFromConfig, type MachineJSON } from 'xstate';
+import { machineFromJSON, type MachineJSON } from 'xstate';
 
 const definition: MachineJSON = {
+  id: 'job',
   initial: 'idle',
   version: '1.0.0',
   states: {
@@ -73,7 +77,7 @@ const definition: MachineJSON = {
   }
 };
 
-const machine = createMachineFromConfig(definition, {
+const machine = machineFromJSON(definition, {
   actors: { worker: workerLogic },
   guards: { canFinish: ({ context }, params) => context.retries < params.limit }
 });
@@ -81,17 +85,17 @@ const machine = createMachineFromConfig(definition, {
 
 The second argument supplies the runtime sources the definition refers to: `actions`, `guards`, `actors`, `delays`, and `evaluators` for code expressions. Invokes keep their string `src` names, so a machine built this way can be cloned with different actors through [`provide()`](setup-and-provide.md), including when restoring its children. Deserialization still requires an implementation for every referenced actor; provide the initial implementations in the second argument, then override them by name.
 
-Actions in JSON are objects. The built-in vocabulary is `{ type: '@xstate.raise', event, id?, delay? }`, `{ type: '@xstate.emit', event }`, `{ type: '@xstate.assign', context }`, `{ type: '@xstate.cancel', id }` and `{ type: '@xstate.log', args }`. Any other `{ type, params }` object is a custom action resolved against the `actions` sources. Guards are `{ type, params? }` references resolved against `guards`. Because the runtime invokes these references itself, a JSON-referenced guard receives the transition arguments object first and the declared `params` second — unlike code-authored machines, where guards are plain functions called by your own transition code.
+Actions in JSON are objects. The built-in vocabulary is `{ type: '@xstate.raise', event, id?, delay? }`, `{ type: '@xstate.emit', event }`, `{ type: '@xstate.assign', context }`, `{ type: '@xstate.cancel', id }` and `{ type: '@xstate.log', args }`. Any other `{ type, params }` object is a custom action resolved against the `actions` sources. Guards are `{ type, params? }` references resolved against `guards`. Two guard types are built in: `{ type: '@xstate.not', params: { guard } }` negates another guard reference or expression, and `{ type: '@xstate.stateIn', params: { stateId: '#id' } }` is true while the state node with that `id` is active (the same check as `snapshot.matches('#id')`). Source names, and the names of `actions`, `guards` and `delays` defined in the JSON, may not start with `xstate.` or `@xstate.`; those prefixes are reserved for built-in names. Because the runtime invokes these references itself, a JSON-referenced guard receives the transition arguments object first and the declared `params` second. This differs from code-authored machines, where guards are plain functions called by your own transition code.
 
-Machines built from JSON round-trip losslessly. Serializing a revived machine returns its original definition.
+Machines built from JSON round-trip losslessly. The loader copies the definition, and each serialization returns a fresh copy. Mutating either copy does not change the machine.
 
 ```ts
-const revived = createMachineFromConfig(
-  JSON.parse(JSON.stringify(serializeMachine(machine)))
+const revived = machineFromJSON(
+  JSON.parse(JSON.stringify(machineToJSON(machine)))
 );
 ```
 
-`createMachineFromConfig()` validates the definition as it builds. Illegal definitions (a history state without a target, a transition whose target set is not a legal configuration) throw with the JSON path of the offending node.
+`machineFromJSON()` validates the definition as it builds. Illegal definitions (a history state without a target, a transition whose target set is not a legal configuration) throw with the JSON path of the offending node.
 
 Some v6 features have no JSON representation yet: state `input`, `enq.listen`/`enq.subscribeTo`, and `choice` functions. Definitions that rely on them are not fully portable.
 
@@ -99,17 +103,25 @@ Some v6 features have no JSON representation yet: state `input`, `enq.listen`/`e
 
 `MachineJSON` types a machine definition; `StateNodeJSON`, `TransitionJSON`, `ActionJSON`, `GuardJSON` and `InvokeJSON` type its parts. `CodeExpression` types a `@code` object.
 
-`createMachineFromConfig()` returns `AnyStateMachine`. A definition loaded at runtime has no static context or event types, so validate persisted data and narrow events with schemas where it matters.
+`machineFromJSON()` returns `AnyStateMachine`. A definition loaded at runtime has no static context or event types, so validate persisted data and narrow events with schemas where it matters.
 
 ## Serialization cheatsheet
 
 ```ts
-const json = serializeMachine(machine);
+const json = machineToJSON(machine);
 const definitionJSON = machineConfigToJSON(config);
 
-const machine = createMachineFromConfig(JSON.parse(stored), {
+const machine = machineFromJSON(JSON.parse(stored), {
   actions: { track },
   guards: { canFinish },
   actors: { worker: workerLogic }
 });
 ```
+
+## Loading and validation
+
+The loader rejects unknown structural keys, string transition shorthand, missing initial states, unresolved nested guard references, and cyclic `@xstate.not` definitions. Use transition objects such as `{ target: 'done' }`. Evaluator errors include the path of the failing expression. Expressions inside nested final output are evaluated recursively.
+
+JSON action lists execute in order. Later expressions observe context assigned by earlier actions. Assignments merge context shallowly; explicitly spread nested objects to preserve their other properties. Custom action implementations receive only their declared `params`, run as effects, and their return values are ignored. Use `@xstate.assign` to update context.
+
+JSON `schemas` describe data; they do not automatically validate it. Supply runtime Standard Schemas through `sources.schemas` and an actor logic validator through `sources.validator`, as with `setup({ schemas, validator })`. Restored code evaluators receive those runtime sources, including actions, guards, actors, and delays.

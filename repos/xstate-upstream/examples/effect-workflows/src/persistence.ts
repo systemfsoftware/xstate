@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { createEffectActor, waitFor } from '@xstate/effect';
+import { createEffectActor, sendAndAwait } from '@xstate/effect';
 import { createMachine, type Snapshot } from 'xstate';
 
 const review = createMachine({
@@ -20,9 +20,7 @@ const handle = (
   Effect.scoped(
     Effect.gen(function* () {
       const actor = yield* createEffectActor(review, { snapshot: stored });
-      const before = actor.getSnapshot();
-      actor.send(event);
-      yield* waitFor(actor, (snapshot) => snapshot !== before);
+      yield* sendAndAwait(actor, event);
       return JSON.parse(JSON.stringify(actor.getPersistedSnapshot()));
     })
   );

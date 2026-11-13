@@ -5,7 +5,7 @@ Create [XState](https://github.com/statelyai/xstate) machines from [SCXML](https
 ## Install
 
 ```bash
-npm i xstate @xstate/scxml
+npm i xstate@beta @xstate/scxml@beta
 ```
 
 ## Usage
@@ -27,4 +27,8 @@ const actor = createActor(machine).start();
 actor.send({ type: 'START' });
 ```
 
-See the [SCXML guide](https://github.com/statelyai/xstate/blob/main/docs/scxml.md) for resource resolution and supported features.
+<!-- experimental public API from src/scxml.ts and compatibility contract from ../../docs/scxml.md -->
+
+`@xstate/scxml` is experimental. Imported machines use SCXML transition domains, event matching, and document ordering, which differ from native XState v6 machines.
+
+See the [SCXML guide](https://github.com/statelyai/xstate/blob/next/docs/scxml.md) for the compatibility contract, supported execution profile, and synchronous resource resolution.

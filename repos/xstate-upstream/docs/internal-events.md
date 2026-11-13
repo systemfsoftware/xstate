@@ -77,7 +77,7 @@ self-targeted effect such as `enq.raise(...)` or `enq.sendTo(self, ...)` is
 allowed. Anything else is rejected: `actor.send` from application code, a
 parent sending to a child, or a sibling actor.
 
-> **Warning:** a rejection is silent unless you observe it. It does not throw and it does not error the actor. Register `onRejectedEvent` or an inspection observer to detect rejected events. Treat internal events as a private surface, and if application code needs to reach that behavior, expose a public event that raises the internal one.
+> **Warning:** a rejection is silent unless you observe it. It does not throw and it does not error the actor. Register `onRejectedEvent` or `actor.system.onRejectedEvent(...)` to detect rejected events. Dead letters are not inspection events. Treat internal events as a private surface, and if application code needs to reach that behavior, expose a public event that raises the internal one.
 
 Use internal events for:
 
@@ -95,8 +95,8 @@ handlers, guards, actions, `enq.raise` and [transitions](transitions.md).
 
 The top-level `internalEvents: ['tick']` list was removed before 6.0. Move
 each listed event's schema from `schemas.events` to `schemas.internalEvents`.
-In development builds, a machine config with a top-level `internalEvents` key
-throws an error naming `schemas.internalEvents`.
+A machine config with a top-level `internalEvents` key throws an error naming
+`schemas.internalEvents`.
 
 ## Internal events cheatsheet
 
@@ -125,3 +125,32 @@ createMachine({
   }
 });
 ```
+
+## Validating public input
+
+`eventSchema(machine)` is a Standard Schema for complete public input event
+objects. Validate untrusted input (including agent tool arguments) before sending:
+
+```ts
+const result = await eventSchema(machine)['~standard'].validate(input);
+if (result.issues) {
+  throw new Error(result.issues[0]?.message);
+}
+actor.send(result.value);
+```
+
+The schema validates payloads using `schemas.events`, rejects declared internal
+events (including wildcard descriptors), and rejects `xstate.*` / `@xstate.*`
+runtime events. `xstate.route` is accepted only with a `to` destination identifying
+an explicitly configured route. Route guards and current-state eligibility are
+evaluated during delivery, not schema validation.
+
+Without event schemas, application event names remain open. `types<T>()` provides
+type inference only; use a runtime schema such as Zod to validate payloads.
+Validation is not authorization: a well-formed public event may still require
+application permission checks.
+
+`actor.send(event)` keeps supporting trusted runtime delivery and replay. It does
+not automatically run `eventSchema(machine)`. For event histories,
+`machineVersions().adaptEvents()` retains historical internal/runtime validation
+when given actual machines.

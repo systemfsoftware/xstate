@@ -1,8 +1,10 @@
-import { ACTOR_REF_TYPE } from './createActor.ts';
+import isDevelopment from '#is-development';
+import { xstateError } from './xstateError.ts';
 import type { AnyActorSystem } from './system.ts';
 import type {
   AnyActor,
   AnyEventObject,
+  SerializedActorRef,
   Snapshot,
   Subscription
 } from './types.ts';
@@ -18,6 +20,70 @@ export function isRemoteActorRef(actorRef: AnyActor): boolean {
 }
 
 /**
+ * @internal Whether a send target is an actor reference that went through
+ * JSON (`actor.toJSON()`): plain data carrying an address, not an actor.
+ */
+export function isSerializedActorRef(
+  target: unknown
+): target is SerializedActorRef {
+  if (
+    typeof target !== 'object' ||
+    target === null ||
+    Array.isArray(target) ||
+    typeof (target as SerializedActorRef)['@actor'] !== 'string'
+  ) {
+    return false;
+  }
+  for (const key in target) {
+    if (key !== '@actor' && key !== 'incarnation') {
+      return false;
+    }
+  }
+  const incarnation = (target as SerializedActorRef).incarnation;
+  return incarnation === undefined || typeof incarnation === 'string';
+}
+
+/** @internal The actor id that the last segment of an address encodes. */
+export function getAddressId(address: string): string {
+  const segment = address.slice(address.lastIndexOf('/') + 1);
+  return segment.includes('%')
+    ? segment.replaceAll('%2F', '/').replaceAll('%25', '%')
+    : segment;
+}
+
+/** @internal The error reported when no live actor has a serialized address. */
+export function createMissingAddressError(target: SerializedActorRef): Error {
+  return new Error(
+    !isDevelopment
+      ? xstateError(
+          50,
+          ...(target.incarnation === undefined
+            ? [target['@actor']]
+            : [target['@actor'], target.incarnation])
+        )
+      : target.incarnation === undefined
+        ? `Unable to send event to actor '${target['@actor']}': no live actor has that address`
+        : `Unable to send event to actor '${target['@actor']}' (incarnation '${target.incarnation}'): no live actor has that address and incarnation`
+  );
+}
+
+/**
+ * @internal The live actor a serialized ref names: the actor at its address,
+ * and, when the ref carries an `incarnation`, only that incarnation. A ref
+ * without one follows whichever actor is live at the address.
+ */
+export function resolveSerializedActorRef(
+  system: { _getByAddress?: (address: string) => AnyActor | undefined },
+  target: SerializedActorRef
+): AnyActor | undefined {
+  const live = system._getByAddress?.(target['@actor']);
+  return live &&
+    (target.incarnation === undefined || live.sessionId === target.incarnation)
+    ? live
+    : undefined;
+}
+
+/**
  * The lifecycle-only snapshot a remote handle exposes. `active` is accurate
  * by construction: a completion removes the child from its parent's
  * `children`, so a handle only exists while the child is presumed active,
@@ -29,6 +95,54 @@ const remoteSnapshot: Snapshot<undefined> = Object.freeze({
   output: undefined,
   error: undefined
 });
+
+/**
+ * Creates the inert ref `enq.spawn(...)` returns while a transition is only
+ * evaluated (for example by `snapshot.can(...)`, or to resolve conflicting
+ * transitions) and no actor is created. It carries the identity the spawn
+ * would get, accepts and drops events, exposes the same lifecycle-only
+ * snapshot as a remote handle, and serializes like any actor ref. Its address
+ * is unknown when the evaluating scope is detached from the parent actor.
+ *
+ * @internal
+ */
+export function createInertActorRef(options: {
+  id: string;
+  address: string | undefined;
+  src: string | undefined;
+}): AnyActor {
+  const { id, address } = options;
+  const handle = {
+    ref: undefined as unknown as AnyActor,
+    id,
+    address,
+    src: options.src,
+    sessionId: undefined,
+    send() {},
+    getSnapshot(): Snapshot<undefined> {
+      return remoteSnapshot;
+    },
+    subscribe(): Subscription {
+      return emptySubscription;
+    },
+    on(): Subscription {
+      return emptySubscription;
+    },
+    toJSON(): SerializedActorRef {
+      if (address === undefined) {
+        throw new Error(
+          isDevelopment
+            ? `Cannot serialize actor ref '${id}': it was returned by a spawn during speculative transition evaluation, which creates no actor and has no parent address.`
+            : xstateError(51, id)
+        );
+      }
+      return { '@actor': address };
+    }
+  };
+  const ref = handle as unknown as AnyActor;
+  handle.ref = ref;
+  return ref;
+}
 
 /**
  * Creates a location-transparent handle to an actor whose state lives with
@@ -84,7 +198,9 @@ export function createRemoteActorRef(
     },
     _send(event: AnyEventObject) {
       throw new Error(
-        `Remote actor '${options.address}' has no local mailbox to receive "${event.type}". Its state lives with another runtime; install a runtime that can reach it (via \`createDurable\`'s adapter runtime operations, or \`system.runtime\`) before sending, ${restoreHint}`
+        isDevelopment
+          ? `Remote actor '${options.address}' has no local mailbox to receive "${event.type}". Its state lives with another runtime; install a runtime that can reach it (via \`createDurable\`'s adapter runtime operations, or \`system.runtime\`) before sending, ${restoreHint}`
+          : xstateError(52, options.address, event.type)
       );
     },
     getSnapshot(): Snapshot<undefined> {
@@ -92,24 +208,32 @@ export function createRemoteActorRef(
     },
     getPersistedSnapshot(): never {
       throw new Error(
-        `Cannot persist remote actor '${options.address}' from here: its state lives with the runtime that owns it. Persist it there, ${restoreHint}`
+        isDevelopment
+          ? `Cannot persist remote actor '${options.address}' from here: its state lives with the runtime that owns it. Persist it there, ${restoreHint}`
+          : xstateError(53, options.address)
       );
     },
     start() {},
     _stop() {},
     stop() {
       throw new Error(
-        `Cannot stop remote actor '${options.address}' directly: stopping is a co-located operation. Stop it through the system runtime that owns it (\`system.stopActor(ref)\`), ${restoreHint}`
+        isDevelopment
+          ? `Cannot stop remote actor '${options.address}' directly: stopping is a co-located operation. Stop it through the system runtime that owns it (\`system.stopActor(ref)\`), ${restoreHint}`
+          : xstateError(54, options.address)
       );
     },
     select() {
       throw new Error(
-        `Cannot select from remote actor '${options.address}': its snapshot is not synchronously readable because its state lives with another runtime. Read it on the runtime that owns it, ${restoreHint}`
+        isDevelopment
+          ? `Cannot select from remote actor '${options.address}': its snapshot is not synchronously readable because its state lives with another runtime. Read it on the runtime that owns it, ${restoreHint}`
+          : xstateError(55, options.address)
       );
     },
     get trigger(): never {
       throw new Error(
-        `Remote actor '${options.address}' has no \`trigger\` shorthand: it requires a co-located actor. Use \`send(...)\`, which routes through the system runtime.`
+        isDevelopment
+          ? `Remote actor '${options.address}' has no \`trigger\` shorthand: it requires a co-located actor. Use \`send(...)\`, which routes through the system runtime.`
+          : xstateError(56, options.address)
       );
     },
     // Observation is a co-location capability: a remote handle never emits,
@@ -125,14 +249,9 @@ export function createRemoteActorRef(
       return false;
     },
     // The same shape Actor.toJSON produces, so serialized snapshots carry
-    // one actor-reference marker whether a child is co-located or remote.
-    toJSON() {
-      return {
-        xstate$type: ACTOR_REF_TYPE,
-        id: options.id,
-        address: options.address,
-        src: options.src
-      };
+    // one actor-reference shape whether a child is co-located or remote.
+    toJSON(): SerializedActorRef {
+      return { '@actor': options.address };
     }
   };
   const ref = handle as unknown as AnyActor;

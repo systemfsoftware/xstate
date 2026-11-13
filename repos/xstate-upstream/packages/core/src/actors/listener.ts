@@ -2,7 +2,7 @@ import { AnyActorSystem } from '../system.ts';
 import { matchesEventDescriptor } from '../utils.ts';
 import {
   ActorLogic,
-  ActorRefFromLogic,
+  ActorRefFrom,
   AnyActor,
   EventObject,
   Snapshot
@@ -40,7 +40,7 @@ export type ListenerActorLogic<
 export type ListenerActorRef<
   TEmitted extends EventObject = EventObject,
   TMappedEvent extends EventObject = EventObject
-> = ActorRefFromLogic<ListenerActorLogic<TEmitted, TMappedEvent>>;
+> = ActorRefFrom<ListenerActorLogic<TEmitted, TMappedEvent>>;
 
 /**
  * Creates actor logic for listening to emitted events from another actor. Used
@@ -74,10 +74,9 @@ export function createListenerLogic<
         );
       });
     },
-    'xstate.listener'
+    '@xstate.listener'
   );
 }
 
-// Singleton logic instance
-/** @public */
+/** @internal The logic of helper actors created by `enq.listen()`. */
 export const listenerLogic = /* #__PURE__ */ createListenerLogic();

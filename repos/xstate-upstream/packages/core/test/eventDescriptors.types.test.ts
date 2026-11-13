@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createMachine, setup } from '../src/index.ts';
+import { createAsyncLogic, createMachine, setup } from '../src/index.ts';
 
 function expectType<T>(_v: T) {}
 
@@ -105,9 +105,10 @@ describe('event descriptor keys in `on`', () => {
         '*': {},
         'xstate.done.actor': {},
         'xstate.error.actor': {},
-        'xstate.error.actor.*': ({ event }) => {
+        'xstate.error.*': ({ event }) => {
           expectType<`xstate.${string}`>(event.type);
         },
+        // @ts-expect-error unknown reserved prefixes are rejected
         'xstate.custom.*': {},
         'xstate.done.state': {},
         'xstate.after': {}
@@ -125,7 +126,7 @@ describe('event descriptor keys in `on`', () => {
   it('checks state configs without rejecting reserved descriptors', () => {
     s.createStateConfig({
       on: {
-        'xstate.error.actor.*': ({ event }) => {
+        'xstate.error.*': ({ event }) => {
           expectType<string>(event.type);
         }
       }
@@ -146,7 +147,7 @@ describe('event descriptor keys in `on`', () => {
     createMachine({
       on: {
         anything: () => {},
-        'xstate.done.actor.child': ({ children, event }, enq) => {
+        'xstate.done.actor': ({ children, event }, enq) => {
           expectType<string>(event.type);
           expectType<unknown>(children);
           expectType<Function>(enq);
@@ -159,4 +160,69 @@ describe('event descriptor keys in `on`', () => {
 
     expect(true).toBe(true);
   });
+});
+
+it('narrows bare reserved descriptors and rejects suffixed descriptors', () => {
+  const s = setup({
+    schemas: { events: { GO: z.object({}) } },
+    actors: {
+      worker: createAsyncLogic({ run: () => Promise.resolve({ ok: true }) })
+    }
+  });
+  // Development builds also reject the suffixed keys below at runtime.
+  expect(() =>
+    s.createMachine({
+      initial: 'working',
+      states: { working: { invoke: { id: 'worker', src: 'worker' } } },
+      on: {
+        'xstate.error.execution': ({ event }) => {
+          expectType<unknown>(event.error);
+          expectType<'xstate.error.execution'>(event.type);
+          // @ts-expect-error execution errors have no child actor ID
+          event.actorId;
+        },
+        'xstate.error.actor': ({ event }) => {
+          expectType<unknown>(event.error);
+          expectType<'xstate.error.actor'>(event.type);
+        },
+        'xstate.done.actor': ({ event }) => {
+          expectType<unknown>(event.output);
+          expectType<string>(event.actorId);
+        },
+        'xstate.snapshot.actor': ({ event }) => {
+          expectType<string>(event.snapshot.status);
+        },
+        'xstate.done.state': ({ event }) => {
+          expectType<string>(event.stateId);
+        },
+        'xstate.after': ({ event }) => {
+          expectType<string | number>(event.delay);
+        },
+        'xstate.timeout.state': ({ event }) => {
+          expectType<string>(event.stateId);
+        },
+        'xstate.timeout.actor': ({ event }) => {
+          expectType<string>(event.actorId);
+        },
+        // @ts-expect-error suffixed lifecycle descriptors are not supported
+        'xstate.done.actor.worker': () => {},
+        // @ts-expect-error suffixed lifecycle descriptors are not supported
+        'xstate.snapshot.child': () => {}
+      }
+    })
+  ).toThrow('never fires');
+  if (false) {
+    s.createMachine({
+      on: {
+        // @ts-expect-error misspelled reserved event descriptor
+        'xstate.eror.actor': () => {}
+      }
+    });
+    s.createMachine({
+      on: {
+        // @ts-expect-error invented reserved event descriptor
+        'xstate.totally.made.up.key': () => {}
+      }
+    });
+  }
 });
