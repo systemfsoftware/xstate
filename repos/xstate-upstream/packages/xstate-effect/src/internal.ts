@@ -1,5 +1,6 @@
-import { Cause, Context, Effect, Exit, Fiber, Scope } from 'effect';
+import { Context, Effect, Exit, Fiber, Scope } from 'effect';
 import type { AnyActor, AnyActorRef } from 'xstate';
+import { EffectFailure } from './errors.ts';
 
 export interface EffectHost {
   /** The Effect context captured by `createEffectActor`, including the actor scope. */
@@ -181,7 +182,8 @@ export function startHostedEffect<A, E>(
   actor: AnyActorRef,
   effect: Effect.Effect<A, E>,
   spanName: string,
-  onExit: (exit: Exit.Exit<A, E>) => void
+  onExit: (exit: Exit.Exit<A, E>) => void,
+  onCancel?: () => void
 ): () => void {
   const host = requireEffectHost(actor);
   let active = true;
@@ -201,14 +203,18 @@ export function startHostedEffect<A, E>(
     }
     active = false;
     untrackEffect(actor, host, cancel);
+    onCancel?.();
     interrupt();
   };
-  const fiber = Fiber.runIn(
-    Effect.runForkWith(host.context)(traced),
-    host.scope
-  );
+  // Register the fiber before its body runs: the body can synchronously
+  // trigger the host's close, which only awaits registered fibers.
+  const registered = Effect.withFiber((fiber) => {
+    Fiber.runIn(fiber, host.scope);
+    host.fibers.add(fiber);
+    return traced;
+  });
+  const fiber = Effect.runForkWith(host.context)(registered);
   const interrupt = () => fiber.interruptUnsafe();
-  host.fibers.add(fiber);
   fiber.addObserver((exit) => {
     host.fibers.delete(fiber);
     if (!active) {
@@ -225,26 +231,26 @@ export function startHostedEffect<A, E>(
   return cancel;
 }
 
-/**
- * Runs an Effect in the actor's host context and settles when it exits.
- * Interruption settles without error; failures and defects reject with the
- * squashed cause so the actor's error handling can observe them.
- */
+/** @internal */
 export function runHostedEffect<A, E>(
   actor: AnyActorRef,
   effect: Effect.Effect<A, E>,
   spanName: string
 ): PromiseLike<void> {
   return new Promise<void>((resolve, reject) => {
-    startHostedEffect(actor, effect, spanName, (exit) => {
-      if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) {
-        resolve();
-      } else {
-        // Effect failures are arbitrary values, not necessarily Errors.
-        // oxlint-disable-next-line typescript/prefer-promise-reject-errors
-        reject(Cause.squash(exit.cause));
-      }
-    });
+    startHostedEffect(
+      actor,
+      effect,
+      spanName,
+      (exit) => {
+        if (Exit.isSuccess(exit)) {
+          resolve();
+        } else {
+          reject(new EffectFailure(exit.cause));
+        }
+      },
+      resolve
+    );
   });
 }
 

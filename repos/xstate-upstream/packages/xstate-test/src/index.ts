@@ -10,7 +10,7 @@
  * generator.
  */
 export {
-  ModelTestFailure,
+  ModelTestFailureError,
   PropertyScenarioRunner,
   ReplayNotReproducedError,
   TestCampaignError,
@@ -26,7 +26,7 @@ export {
   replayTestSuite,
   replayTestSuiteFixture,
   runParallelPropertyCommands,
-  serializeTestSuite,
+  testSuiteToJSON,
   serializeTestTrace,
   testCoverageToJSON,
   type AnyTestEventDescriptor,
@@ -40,8 +40,6 @@ export {
   type LinearizabilityResult,
   type ParallelPropertyCommandsOptions,
   type ParallelPropertyCommandsResult,
-  type PropertyExecutionConfig,
-  type PropertyTargetObservation,
   type ReplayTestSuiteOptions,
   type TestActorOutcome,
   type TestAdapter,
@@ -98,8 +96,8 @@ export {
 } from './adapter.ts';
 export { pick } from './pick.ts';
 export {
-  createFailureDatabase,
-  type FailureDatabaseOptions,
+  createTestFailureStore,
+  type TestFailureStoreOptions,
   type FailuresOption
 } from './failures.ts';
 export {

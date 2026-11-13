@@ -11,7 +11,7 @@ import {
   ActorScope,
   EventObject,
   StateValue,
-  createLogic,
+  createStepLogic,
   createMachine,
   createActor,
   Snapshot,
@@ -313,6 +313,7 @@ describe('invoke', () => {
         waiting: {
           invoke: {
             src: childMachine,
+            input: { userId: 'user-1' },
             onDone: { target: 'received' }
           }
         },
@@ -2700,7 +2701,7 @@ describe('invoke', () => {
       const countMachine = createMachine({
         invoke: {
           id: 'count',
-          src: createLogic({
+          src: createStepLogic({
             context: 0,
             run: ({ context, event }) => ({
               context: countReducer(context, event as any)
@@ -2750,7 +2751,7 @@ describe('invoke', () => {
       const countMachine = createMachine({
         invoke: {
           id: 'count',
-          src: createLogic<number, undefined, CountEvents>({
+          src: createStepLogic<number, undefined, CountEvents>({
             context: 0,
             run: ({ context, event, self }) => ({
               context: countReducer(context, event, { self } as any)
@@ -2778,7 +2779,7 @@ describe('invoke', () => {
 
     it('should emit onSnapshot', async () => {
       const { promise, resolve } = Promise.withResolvers<void>();
-      const doublerLogic = createLogic({
+      const doublerLogic = createStepLogic({
         context: 0,
         run: ({ event }: { event: { type: 'update'; value: number } }) => ({
           context: event.value * 2
@@ -3351,7 +3352,7 @@ describe('invoke', () => {
               // invoke ID should not be 'someSrc'
               expect(event).toMatchObject({
                 type: 'xstate.done.actor',
-                actorId: '0.(machine).a'
+                actorId: 'a:0'
               });
               return { target: 'b' };
             }
@@ -3411,7 +3412,7 @@ describe('invoke', () => {
       );
 
       expect(
-        createActor(machine).getSnapshot().children['0.machine.a']
+        createActor(machine).getSnapshot().children['machine.a:0']
       ).toBeDefined();
     }
   );
@@ -3530,13 +3531,13 @@ describe('invoke', () => {
         {
           type: 'xstate.done.actor',
           output: undefined,
-          actorId: '0.(machine).first.fetch',
+          actorId: 'first.fetch:0',
           sessionId: expect.any(String)
         },
         {
           type: 'xstate.done.actor',
           output: undefined,
-          actorId: '0.(machine).second.fetch',
+          actorId: 'second.fetch:0',
           sessionId: expect.any(String)
         }
       ]);

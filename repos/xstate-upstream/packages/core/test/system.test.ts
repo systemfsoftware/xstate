@@ -6,7 +6,7 @@ import {
   ActorRef,
   Snapshot,
   createActor,
-  createLogic,
+  createStepLogic,
   createMachine,
   createSystem,
   createEventObservableLogic,
@@ -89,7 +89,7 @@ describe('system', () => {
     });
 
     const actor = createActor(machine);
-    const grandchild = actor.getSnapshot().children.child.getSnapshot()
+    const grandchild = actor.getSnapshot().children.child!.getSnapshot()
       .children.grandchild;
 
     expect(actor.system.get('grandchild')).toBe(grandchild);
@@ -105,7 +105,7 @@ describe('system', () => {
       }
     });
     const actor = createActor(machine);
-    const child = createActor(createMachine({}), {
+    const child = actor.system.createActorRef(createMachine({}), {
       parent: actor,
       registryKey: 'child'
     });
@@ -138,6 +138,29 @@ describe('system', () => {
     expect(system.get('root')).toBe(actor);
     expect(system.get('receiver')).toBe(actor.system.get('receiver'));
     expect(system.getAll()).toEqual(actor.system.getAll());
+  });
+
+  it('cancels a pending inspection observer while it is being registered', () => {
+    const system = createSystem();
+    const canceled = vi.fn();
+    const active = vi.fn();
+    const subscription = system.inspect({
+      get next() {
+        subscription.unsubscribe();
+        return canceled;
+      }
+    });
+    system.inspect(active);
+
+    const first = system.createActor(createMachine({})).start();
+    const firstCount = active.mock.calls.length;
+    const second = system.createActor(createMachine({})).start();
+
+    expect(canceled).not.toHaveBeenCalled();
+    expect(firstCount).toBeGreaterThan(0);
+    expect(active.mock.calls.length).toBeGreaterThan(firstCount);
+    first.stop();
+    second.stop();
   });
 
   it('transition functions can access the actor system', () => {
@@ -508,10 +531,10 @@ describe('system', () => {
         },
 
         {
-          src: createLogic({
+          src: createStepLogic({
             context: 0,
             run: ({ event, system }) => {
-              if (event.type === '@xstate.init') {
+              if (event.type === 'xstate.init') {
                 return;
               }
               expect(system.get('test7')).toBeDefined();

@@ -1,5 +1,78 @@
 # @xstate/test
 
+## 2.0.0-beta.1
+
+### Major Changes
+
+- 3cbcc3f: Serialized output no longer uses field names that start with `$` or `_`. Stores such as Convex reject both prefixes, and MongoDB restricts `$`-prefixed field names, so persisted snapshots, `systemTransition` snapshots and effect descriptors could not be stored without rewriting them.
+  
+  | Before                    | After                    | Where                                                                                                      |
+  | ------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------- |
+  | `{ $actor: address, incarnation }` | `{ '@actor': address, incarnation }` | `SerializedActorRef`: persisted context, `systemTransition` snapshots, effect descriptors, `sendTo` targets, dead letters, `@xstate/effect` actor `toJSON()` |
+  | `_nextTimerId`            | `nextTimerId`            | Persisted snapshots, `systemTransition` snapshots                                                          |
+  | `_nextActorIds`           | `nextActorIds`           | Persisted snapshots, `systemTransition` snapshots                                                          |
+  | `_stateInputs`            | `stateInputs`            | `systemTransition` snapshots (persisted snapshots already used `stateInputs`)                              |
+  | `{ $error: name, message }` | `{ '@error': name, message }` | `systemTransition` snapshots, `@xstate/test` traces                                                        |
+  | `{ $stateNode: id }`, `{ $systemMapper: key }` | `{ '@stateNode': id }`, `{ '@systemMapper': key }` | `systemTransition` snapshots                                                                        |
+  
+  ```ts
+  // Before
+  { $actor: 'order/worker', incarnation: 'a:1' }
+  // After
+  { '@actor': 'order/worker', incarnation: 'a:1' }
+  ```
+  
+  `snapshot.toJSON()` no longer includes the private `_nextTimerId` and `_nextActorIds` counters.
+  
+  Snapshots written by `6.0.0-beta.1` with the old field names still restore: `restoreActor`, `restoreMachineSnapshot` and `systemTransition` read both shapes. New snapshots use only the new names. Schemas that validate persisted snapshots (for example with `machineVersions`) must use the new names.
+
+## 2.0.0-beta.0
+
+### Patch Changes
+
+- 6cf6982: XState v6 enters beta. No further breaking changes are planned for APIs tagged `@public`; any that are needed will be called out with a migration path. APIs tagged `@experimental` may still change.
+
+## 2.0.0-alpha.4
+
+### Major Changes
+
+- 5b6df81: `@xstate/test/effect-schema` now requires stable Effect 4 (`effect@^4.0.0`). `fromEffectSchema()` builds fast-check arbitraries from the schema's AST. It supports primitives, literals, enums, unions, arrays, tuples, structs with optional properties, records with string keys, and refinements. Unsupported nodes such as `Schema.Date` throw an error naming the node. Pass `override` to supply an arbitrary for them:
+  
+  ```ts
+  import * as fc from 'fast-check';
+  import * as Schema from 'effect/Schema';
+  import { fromEffectSchema } from '@xstate/test/effect-schema';
+  
+  fromEffectSchema(Schema.Struct({ at: Schema.Date }), {
+    override: (ast) =>
+      ast._tag === 'Declaration' ? fc.date({ noInvalidDate: true }) : undefined
+  });
+  ```
+- 5b6df81: The `@xstate/test` entry point no longer exports the internal types `PropertyExecutionConfig` and `PropertyTargetObservation`.
+  
+  The `vitest` peer dependency now accepts Vitest 3 and Vitest 4.
+
+## 2.0.0-alpha.3
+
+### Major Changes
+
+- d2c518b: Names are consistent:
+  
+  | Before                   | After                     |
+  | ------------------------ | ------------------------- |
+  | `createFailureDatabase`  | `createTestFailureStore`  |
+  | `FailureDatabaseOptions` | `TestFailureStoreOptions` |
+  | `serializeTestSuite`     | `testSuiteToJSON`         |
+  | `ModelTestFailure`       | `ModelTestFailureError`   |
+  
+  `testSuiteToJSON` still returns the JSON string that `parseTestSuite` reads. The error's `name` is now `'ModelTestFailureError'`.
+
+## 2.0.0-alpha.2
+
+### Patch Changes
+
+- dd5eb47: Preserve transition coverage identity when microsteps contain resolved function-target records.
+
 ## 2.0.0-alpha.1
 
 ### Major Changes

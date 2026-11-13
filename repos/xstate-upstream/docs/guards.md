@@ -12,7 +12,7 @@ submit: ({ context }) => {
 }
 ```
 
-When the function returns `undefined`, the transition is not taken, the state does not change, and no effects run.
+When the function returns `undefined`, the transition is not taken, the state does not change, and no effects run, so the event can still match a wildcard or a parent state's transition. This only holds if the function has not called `enq`: any `enq` call selects the transition, even when the function then returns `undefined`. It runs as a targetless transition with the queued effects, `snapshot.can(...)` returns `true`, and the event is not passed on. Check conditions and return before calling `enq`.
 
 ## Choosing between targets
 
@@ -38,7 +38,7 @@ Do not fetch data in a guard. Invoke an actor, store the result in context, then
 
 ## Named guards
 
-Define reusable guards on `setup(...)` or the machine's `guards`. A named guard is a plain predicate function: it receives only the arguments you pass it and knows nothing about the machine. The caller decides what the guard sees — pass values from `context` or the event explicitly.
+Define reusable guards on `setup(...)` or the machine's `guards`. A named guard is a plain predicate function: it receives only the arguments you pass it and knows nothing about the machine. The caller decides what the guard sees: pass values from `context` or the event explicitly.
 
 ```ts
 const orderMachine = createMachine({
@@ -67,19 +67,42 @@ Named guards keep a rule's name visible in the machine and let [`machine.provide
 
 ## Checking other states
 
-Use `checkStateIn(...)` to test whether the machine is currently in another state, such as a sibling region of a parallel state.
+Use `self.getSnapshot().matches(...)` to test whether the machine is currently in another state, such as a sibling region of a parallel state. `self.getSnapshot()` returns the snapshot committed before the current event was processed, so it does not reflect earlier microsteps of the same macrostep (eventless transitions or raised events).
 
 ```ts
-import { checkStateIn } from 'xstate';
-
 approve: ({ context, self }) => {
-  if (context.isAdmin && !checkStateIn(self.getSnapshot(), 'locked')) {
+  if (context.isAdmin && !self.getSnapshot().matches('locked')) {
     return { target: 'approved' };
   }
 }
 ```
 
-`checkStateIn(snapshot, value)` accepts a state id (`'#locked'`), a path (`'security.locked'`), or a state-value object.
+`matches(value)` accepts a path (`'security.locked'`), a state-value object, or a state `id` prefixed with `#`. An `#id` check is true while the state node with that `id` is active, wherever it is nested. The text after `#` is a whole state id (an explicit `id` or an implicit id such as `#security.unlocked`), never an id followed by a path:
+
+```ts
+const machine = createMachine({
+  type: 'parallel',
+  states: {
+    security: {
+      initial: 'unlocked',
+      states: { unlocked: {}, locked: { id: 'locked' } }
+    },
+    review: {
+      on: {
+        approve: ({ self }) => {
+          if (!self.getSnapshot().matches('#locked')) {
+            return { target: '.approved' };
+          }
+        }
+      },
+      initial: 'pending',
+      states: { pending: {}, approved: {} }
+    }
+  }
+});
+```
+
+When the machine's state ids are known to TypeScript, an unknown `#id` is a type error. Unlike state-value checks, an `#id` check does not narrow `context` (see [typestates](typestates.md)).
 
 ## TypeScript
 

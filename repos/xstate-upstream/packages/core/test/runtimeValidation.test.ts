@@ -6,11 +6,11 @@ import {
   createAsyncLogic,
   createCallbackLogic,
   createEventObservableLogic,
-  createLogic,
+  createStepLogic,
   createMachine,
   createSystem,
   createObservableLogic,
-  type DeadLetterExecutableActionObject,
+  type DeadLetterExecutableEffect,
   type EventRejection,
   initialTransition,
   setup,
@@ -33,11 +33,11 @@ function getThrown(fn: () => void): unknown {
 
 function getRejection(
   result: [unknown, ReadonlyArray<{ kind?: string; type?: string }>]
-): DeadLetterExecutableActionObject | undefined {
+): DeadLetterExecutableEffect | undefined {
   return result[1].find(
     (effect) =>
       effect.kind === 'builtin' && effect.type === '@xstate.deadLetter'
-  ) as DeadLetterExecutableActionObject | undefined;
+  ) as DeadLetterExecutableEffect | undefined;
 }
 
 function expectValidationError(
@@ -72,7 +72,7 @@ describe('runtime schema validation', () => {
       subscribe: () => ({ unsubscribe: () => {} })
     };
     const logics = [
-      createLogic({
+      createStepLogic({
         validator,
         schemas: { input },
         context: undefined,
@@ -112,7 +112,7 @@ describe('runtime schema validation', () => {
 
   it('validates generic actor output before returning it', () => {
     const effect = vi.fn();
-    const logic = createLogic({
+    const logic = createStepLogic({
       validator: standardSchemaValidator(),
       schemas: { output: z.number() },
       context: undefined,
@@ -301,6 +301,36 @@ describe('runtime schema validation', () => {
       type: 'UNKNOWN'
     } as any);
     expect(getRejection(openResult)).toBeUndefined();
+  });
+
+  it('validates event and emitted schemas that declare `type` against the complete event', () => {
+    const machine = setup({
+      validator: standardSchemaValidator(),
+      schemas: {
+        events: {
+          GO: z.object({ type: z.literal('GO'), count: z.number() }),
+          PING: z.object({})
+        },
+        emitted: { notice: z.object({ type: z.literal('notice') }) }
+      }
+    }).createMachine({
+      initial: 'idle',
+      on: { PING: (_, enq) => enq.emit({ type: 'notice' }) },
+      states: { idle: { on: { GO: { target: 'done' } } }, done: {} }
+    });
+    const [snapshot] = initialTransition(machine);
+
+    const accepted = transition(machine, snapshot, { type: 'GO', count: 1 });
+    expect(getRejection(accepted)).toBeUndefined();
+    expect(accepted[0].value).toBe('done');
+    expect(() => transition(machine, snapshot, { type: 'PING' })).not.toThrow();
+
+    const rejection = getRejection(
+      transition(machine, snapshot, { type: 'GO', count: 'x' } as any)
+    );
+    expect(rejection!.detail!.issues!.map((issue) => issue.path)).toEqual([
+      ['count']
+    ]);
   });
 
   it('validates stable root context after the macrostep', () => {

@@ -3,7 +3,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   createActor,
-  createLogic,
+  createStepLogic,
   createMachine,
   createCallbackLogic,
   createAsyncLogic,
@@ -15,7 +15,7 @@ import {
   stopActor,
   setup
 } from '../src';
-import { createMachineFromConfig } from '../src/createMachineFromConfig';
+import { machineFromJSON } from '../src/machineFromJSON';
 import z from 'zod';
 
 // mocked reportUnhandledError due to unknown issue with vitest and global error
@@ -107,17 +107,19 @@ describe('error handling', () => {
   it('stops custom-logic children absent from its snapshot after an error', () => {
     const cleanup = vi.fn();
     const actor = createActor(
-      createLogic({
+      createStepLogic({
         context: undefined,
         run: ({ event, self }, enq) => {
           if (event.type === 'FAIL') {
             throw new Error('parent failed');
           }
           enq.effect('child', () => {
-            createActor(
-              createCallbackLogic(() => cleanup),
-              { parent: self as AnyActor }
-            ).start();
+            (self as AnyActor).system
+              .createActorRef(
+                createCallbackLogic(() => cleanup),
+                { parent: self as AnyActor }
+              )
+              .start();
           });
         }
       })
@@ -224,6 +226,138 @@ describe('error handling', () => {
     expect(good!.getSnapshot().status).toBe('stopped');
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledExactlyOnceWith(originalError);
+  });
+
+  // https://github.com/statelyai/xstate/issues/5433
+  describe('unhandled invoked actor errors', () => {
+    const createFailingLogic = (error: unknown) =>
+      createAsyncLogic({ run: () => Promise.reject(error) });
+
+    it('stops sibling invoked actors at the root', async () => {
+      const cleanup = vi.fn();
+      const error = new Error('oops');
+      const { resolve, promise } = Promise.withResolvers<unknown>();
+      const actor = createActor(
+        createMachine({
+          invoke: [
+            { id: 'callback', src: createCallbackLogic(() => cleanup) },
+            { id: 'failing', src: createFailingLogic(error) }
+          ]
+        })
+      );
+      actor.subscribe({ error: resolve });
+      actor.start();
+      const callback = actor.getSnapshot().children.callback!;
+
+      expect(await promise).toBe(error);
+      expect(actor.getSnapshot().status).toBe('error');
+      expect(actor.getSnapshot().error).toBe(error);
+      expect(callback.getSnapshot().status).toBe('stopped');
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(
+        Object.values(actor.getSnapshot().children).map(
+          (child) => child!.getSnapshot().status
+        )
+      ).toEqual(['stopped']);
+    });
+
+    it('stops sibling invoked actors of a state', async () => {
+      const cleanup = vi.fn();
+      const error = new Error('oops');
+      const { resolve, promise } = Promise.withResolvers<unknown>();
+      const actor = createActor(
+        createMachine({
+          initial: 'working',
+          states: {
+            working: {
+              invoke: [
+                { id: 'callback', src: createCallbackLogic(() => cleanup) },
+                { id: 'failing', src: createFailingLogic(error) }
+              ]
+            }
+          }
+        })
+      );
+      actor.subscribe({ error: resolve });
+      actor.start();
+
+      expect(await promise).toBe(error);
+      expect(actor.getSnapshot().status).toBe('error');
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(
+        Object.values(actor.getSnapshot().children).map(
+          (child) => child!.getSnapshot().status
+        )
+      ).toEqual(['stopped']);
+    });
+
+    it('stops spawned actors', async () => {
+      const cleanup = vi.fn();
+      const error = new Error('oops');
+      const { resolve, promise } = Promise.withResolvers<unknown>();
+      const actor = createActor(
+        createMachine({
+          context: ({ spawn }) => ({
+            child: spawn(
+              createCallbackLogic(() => cleanup),
+              { id: 'spawned' }
+            )
+          }),
+          invoke: { src: createFailingLogic(error) }
+        })
+      );
+      actor.subscribe({ error: resolve });
+      actor.start();
+      const child = actor.getSnapshot().context.child;
+      expect(child.getSnapshot().status).toBe('active');
+
+      expect(await promise).toBe(error);
+      expect(actor.getSnapshot().status).toBe('error');
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(child.getSnapshot().status).toBe('stopped');
+      expect(
+        Object.values(actor.getSnapshot().children).map(
+          (child) => child!.getSnapshot().status
+        )
+      ).toEqual(['stopped']);
+    });
+
+    it('stops grandchildren and their timers', async () => {
+      const cleanup = vi.fn();
+      const timer = vi.fn();
+      const error = new Error('oops');
+      const { resolve, promise } = Promise.withResolvers<unknown>();
+      const clock = new SimulatedClock();
+      const childMachine = createMachine({
+        invoke: { id: 'grandchild', src: createCallbackLogic(() => cleanup) },
+        after: {
+          10: (_, enq) => {
+            enq(timer);
+          }
+        }
+      });
+      const actor = createActor(
+        createMachine({
+          invoke: [
+            { id: 'child', src: childMachine },
+            { id: 'failing', src: createFailingLogic(error) }
+          ]
+        }),
+        { clock }
+      );
+      actor.subscribe({ error: resolve });
+      actor.start();
+      const child = actor.getSnapshot().children.child!;
+      const grandchild = child.getSnapshot().children.grandchild!;
+
+      expect(await promise).toBe(error);
+      clock.increment(20);
+      expect(actor.getSnapshot().status).toBe('error');
+      expect(child.getSnapshot().status).toBe('stopped');
+      expect(grandchild.getSnapshot().status).toBe('stopped');
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(timer).not.toHaveBeenCalled();
+    });
   });
 
   // https://github.com/statelyai/xstate/issues/4004
@@ -1105,7 +1239,7 @@ describe('error handling', () => {
   });
 
   it('should error the parent on errored initial state of a child', async () => {
-    const immediateFailure = createLogic({
+    const immediateFailure = createStepLogic({
       context: undefined,
       run: () => undefined
     });

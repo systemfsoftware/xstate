@@ -15,6 +15,7 @@ import {
   ScxmlContentJSON,
   ScxmlDataJSON,
   ScxmlDonedataJSON,
+  ScxmlEventDescriptor,
   ScxmlForeachJSON,
   ScxmlLogJSON,
   ScxmlRaiseJSON,
@@ -25,9 +26,11 @@ import {
 } from './runtime.ts';
 import {
   _parseDelayToMilliseconds as parseDelayToMilliseconds,
-  SpecialTargets,
   type AnyStateMachine
 } from 'xstate';
+
+/** The SCXML `#_internal` send target. */
+const SCXML_INTERNAL_TARGET = '#_internal';
 
 interface XMLElement {
   type?: 'element' | 'text' | 'cdata' | 'comment';
@@ -294,7 +297,7 @@ function mapAction(
         }
       }
 
-      const isInternal = target === String(SpecialTargets.Internal);
+      const isInternal = target === SCXML_INTERNAL_TARGET;
       const resolvedDelay = delay ? delayToMs(delay) : undefined;
 
       // Any send with a special target (except internal), params, or expressions
@@ -428,7 +431,7 @@ function createGuard(cond: string): GuardJSON {
     const inMatch = cond.trim().match(/^In\('(.*)'\)/);
     if (inMatch) {
       return {
-        type: 'xstate.stateIn',
+        type: '@xstate.stateIn',
         params: { stateId: `#${sanitizeStateId(inMatch[1])}` }
       };
     }
@@ -439,10 +442,10 @@ function createGuard(cond: string): GuardJSON {
     const notInMatch = cond.trim().match(/^!In\('(.*)'\)/);
     if (notInMatch) {
       return {
-        type: 'xstate.not',
+        type: '@xstate.not',
         params: {
           guard: {
-            type: 'xstate.stateIn',
+            type: '@xstate.stateIn',
             params: { stateId: `#${sanitizeStateId(notInMatch[1])}` }
           }
         }
@@ -694,15 +697,32 @@ function toStateNodeJSON(
     const targets = getAttribute(value, 'target');
     const internal = getAttribute(value, 'type') === 'internal';
     const hasTarget = targets !== undefined;
-    const eventDescriptors = eventTypes.filter(Boolean).map((eventType) => {
-      if (/^(error|done\.state)(\.|$)/.test(eventType)) {
-        return `xstate.${eventType}`;
-      }
-      if (/^done\.invoke(\.|$)/.test(eventType)) {
-        return eventType.replace(/^done\.invoke/, 'xstate.done.actor');
-      }
-      return eventType;
-    });
+    const eventDescriptors = eventTypes
+      .filter(Boolean)
+      .map((eventType): ScxmlEventDescriptor => {
+        const done = /^done\.(invoke|state)(?:\.(.+?))?(?:\.\*)?$/.exec(
+          eventType
+        );
+        if (done) {
+          const [, kind, id] = done;
+          const type =
+            kind === 'invoke' ? 'xstate.done.actor' : 'xstate.done.state';
+          if (!id || id === '*') {
+            return type;
+          }
+          return {
+            type,
+            matches:
+              kind === 'invoke'
+                ? { actorId: id }
+                : { stateId: sanitizeStateId(id) }
+          };
+        }
+        if (/^error(\.|$)/.test(eventType)) {
+          return `xstate.${eventType}`;
+        }
+        return eventType;
+      });
     const transitionConfig: TransitionJSON = {
       target: getTargets(targets),
       _scxml: {
@@ -966,7 +986,8 @@ function compileScxmlElement(
   const binding =
     machineElement.attributes?.binding === 'late' ? 'late' : 'early';
   const data = collectDataDescriptors(machineElement, options);
-  const machineId = (machineElement.attributes?.name as string) || '(machine)';
+  // Without a `name`, the machine has no id (the empty id).
+  const machineId = (machineElement.attributes?.name as string) || '';
   const stateNodeJSON = toStateNodeJSON(
     machineElement,
     machineId,

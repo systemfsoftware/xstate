@@ -40,6 +40,25 @@ describe('async logic timeout', () => {
       })
     );
   });
+
+  it('clears the timeout timer when run throws synchronously instead of returning a rejected promise', async () => {
+    vi.useFakeTimers();
+
+    const logic = createAsyncLogic({
+      timeout: '30s',
+      run: () => {
+        throw new Error('not configured');
+      }
+    });
+    const actor = createActor(logic);
+    actor.subscribe({ error: () => {} });
+
+    actor.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(actor.getSnapshot().status).toBe('error');
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe('state-level timeout', () => {
@@ -70,8 +89,8 @@ describe('state-level timeout', () => {
     vi.advanceTimersByTime(600);
     expect(actor.getSnapshot().value).toBe('escalated');
     expect(timeoutSpy).toHaveBeenCalledWith({
-      type: 'xstate.timeout',
-      stateId: '(machine).waiting'
+      type: 'xstate.timeout.state',
+      stateId: 'waiting'
     });
   });
 
@@ -508,7 +527,7 @@ describe('invoke-level timeout', () => {
       }
     });
     const [working] = initialTransition(machine);
-    const child = working.children.child;
+    const child = working.children.child!;
 
     const [timedOut] = transition(machine, working, {
       type: 'xstate.timeout.actor',

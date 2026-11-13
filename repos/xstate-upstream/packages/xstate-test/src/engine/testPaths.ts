@@ -12,7 +12,7 @@ import {
 } from './eventDescriptors.ts';
 import { getPropertyEventCaseId, type TestCoverage } from './coverage.ts';
 import {
-  ModelTestFailure,
+  ModelTestFailureError,
   propertyTest,
   type PropertyScenarioRunner,
   type TestAdapter,
@@ -592,8 +592,6 @@ export interface TestPathsResult<
   readonly results: readonly TestPathRunResult<TSnapshot, TEvent>[];
 }
 
-const AFTER_TIMER_PREFIX = 'xstate.after.';
-
 /**
  * Executes model paths against a system under test.
  *
@@ -730,11 +728,18 @@ export async function testPaths<TSource extends ActorLogic<any, any, any>>(
     const timers =
       (
         snapshot as {
-          timers?: Record<string, { readonly delay?: unknown } | undefined>;
+          timers?: ReadonlyArray<{
+            readonly delay?: unknown;
+            readonly event?: {
+              type?: string;
+              delay?: unknown;
+              stateId?: unknown;
+            };
+          }>;
         }
-      ).timers ?? {};
-    for (const timer of Object.values(timers)) {
-      if (timer && !timerScheduledAt.has(timer)) {
+      ).timers ?? [];
+    for (const timer of timers) {
+      if (!timerScheduledAt.has(timer)) {
         timerScheduledAt.set(timer, now);
       }
     }
@@ -743,7 +748,12 @@ export async function testPaths<TSource extends ActorLogic<any, any, any>>(
         delay: number | string;
         stateId: string;
       };
-      const timer = timers[`${AFTER_TIMER_PREFIX}${delay}.${stateId}`];
+      const timer = timers.find(
+        ({ event: timerEvent }) =>
+          timerEvent?.type === 'xstate.after' &&
+          timerEvent.delay === delay &&
+          timerEvent.stateId === stateId
+      );
       const milliseconds =
         typeof timer?.delay === 'number'
           ? timer.delay
@@ -771,11 +781,16 @@ export async function testPaths<TSource extends ActorLogic<any, any, any>>(
     if (typeof (snapshot as { nodes?: unknown }).nodes === 'object') {
       for (const stateNode of (
         snapshot as unknown as {
-          nodes: readonly { invoke?: readonly { id: string; src: string }[] }[];
+          nodes: readonly {
+            invoke?: readonly { id: string; src: string | undefined }[];
+          }[];
         }
       ).nodes) {
         for (const invokeDef of stateNode.invoke ?? []) {
-          invokeSrcById.set(invokeDef.id, invokeDef.src);
+          // Only registered sources have a key to declare outcomes under.
+          if (invokeDef.src !== undefined) {
+            invokeSrcById.set(invokeDef.id, invokeDef.src);
+          }
         }
       }
       for (const event of getAllOwnEvents(snapshot as never)) {
@@ -987,11 +1002,11 @@ export async function testPaths<TSource extends ActorLogic<any, any, any>>(
       results
     };
   } catch (error) {
-    if (error instanceof ModelTestFailure && error.coverage) {
+    if (error instanceof ModelTestFailureError && error.coverage) {
       const failedIndex = results.length - 1;
       const failedPath = results[failedIndex]?.path;
       const detail = error.summary.replace(/^Property /, '');
-      throw new ModelTestFailure(
+      throw new ModelTestFailureError(
         failedPath
           ? `Path ${failedIndex + 1} (${describePath(failedPath)}) failed: ${
               detail.charAt(0).toLowerCase() + detail.slice(1)

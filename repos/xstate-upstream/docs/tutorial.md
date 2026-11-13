@@ -112,7 +112,7 @@ A transition can be a function. It receives `{ context, event }` and returns a p
 
 Run `player.trigger.next()` four times and the index runs off the end of the playlist. A guard prevents that.
 
-In XState v6 a guard is not a separate property. It is a condition inside the transition function: return `undefined` and the event is not handled at all, with no state change, no context change and no effects.
+In XState v6 a guard is not a separate property. It is a condition inside the transition function: return `undefined` before enqueuing anything and the event is not handled, with no state change, context change or effects. Enqueuing effects handles the event even when the function returns `undefined`.
 
 ```ts
 on: {
@@ -430,7 +430,7 @@ Nothing about the machine changes. A UI reads snapshots and sends events.
 
 ```html
 <p id="status">stopped</p>
-<p id="title">—</p>
+<p id="title"></p>
 <button id="play">Play</button> <button id="pause">Pause</button>
 <button id="stop">Stop</button> <button id="previous">Previous</button>
 <button id="next">Next</button> <button id="mute">Mute</button>
@@ -475,7 +475,7 @@ Frameworks work the same way, with a hook or store binding instead of manual sub
 
 You built one machine with context, guards, invoked async logic, hierarchy, parallel regions, delayed events, emitted events and a UI. From here:
 
-- [Statecharts](statecharts.md) — nested, parallel and history states
-- [Actors](actors.md) — spawning, communication and actor systems
-- [Frameworks](frameworks.md) — bindings for React, Vue, Svelte and Solid
-- [Testing](testing.md) — testing machines and the actors that run them
+- [Statecharts](statecharts.md): nested, parallel and history states
+- [Actors](actors.md): spawning, communication and actor systems
+- [Frameworks](frameworks.md): bindings for React, Vue, Svelte and Solid
+- [Testing](testing.md): testing machines and the actors that run them

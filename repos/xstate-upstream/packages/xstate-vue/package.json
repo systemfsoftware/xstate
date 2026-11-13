@@ -1,6 +1,6 @@
 {
   "name": "@xstate/vue",
-  "version": "6.0.0-alpha.3",
+  "version": "6.0.0-beta.0",
   "description": "XState tools for Vue",
   "keywords": [
     "state",
@@ -55,11 +55,6 @@
   "peerDependencies": {
     "vue": "^3.0.0",
     "xstate": "workspace:^"
-  },
-  "peerDependenciesMeta": {
-    "xstate": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@testing-library/vue": "^8.1.0",

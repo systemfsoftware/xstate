@@ -17,41 +17,47 @@ import {
   AfterEvent,
   ActorLogic,
   ActorRef,
-  ActorRefFromLogic,
+  ActorRefFrom,
+  ActorFromLogic,
   ActorSelf,
   AnyActorLogic,
   AnyActorRef,
-  Compute,
   DoneActorEvent,
-  DoNotInfer,
   ErrorFrom,
   ErrorActorEvent,
   EnqueueObject,
   EventDescriptor,
+  ReservedEventDescriptor,
+  ReservedMachineEvent,
+  ReservedEventFromDescriptor,
   ErrorEvent,
   EventObject,
   EventPayloadPattern,
   ExtractEvent,
   InitialContext,
   InputFrom,
-  IsNever,
   MetaObject,
-  NonReducibleUnknown,
   OutputFrom,
-  SingleOrArray,
   SnapshotEvent,
   StateValue,
-  TODO,
   TransitionContextMapper,
   TransitionContextPatch,
   TransitionConfigFunction,
   Values,
   AnyStateNode,
   SystemRegistry,
-  TimeoutEvent
+  TimeoutEvent,
+  RequiredLogicInput
 } from './types';
+import type {
+  Compute,
+  DoNotInfer,
+  IsNever,
+  NonReducibleUnknown,
+  SingleOrArray
+} from './typeUtils.ts';
 import { MachineContext, Mapper } from './types';
-import { LowInfer } from './types';
+import type { LowInfer } from './typeUtils.ts';
 import { DoneStateEvent } from './types';
 
 export type InferOutput<T extends StandardSchemaV1, U> = Compute<
@@ -136,6 +142,71 @@ export type InferChildren<
         TChildrenSchemaMap[K]
       > extends AnyActorRef
         ? NormalizeActorRef<StandardSchemaV1.InferOutput<TChildrenSchemaMap[K]>>
+        : never;
+    };
+
+type InvokeSourceLogic<TSrc, TActors extends Sources['actors']> = [0] extends [
+  1 & TSrc
+]
+  ? never
+  : TSrc extends keyof TActors
+    ? TActors[TSrc]
+    : TSrc extends AnyActorLogic
+      ? TSrc
+      : TSrc extends (...args: any[]) => infer TResult
+        ? InvokeSourceLogic<TResult, TActors>
+        : never;
+
+type InvokedChild<
+  TInvoke,
+  TActors extends Sources['actors']
+> = TInvoke extends readonly (infer TItem)[]
+  ? InvokedChild<TItem, TActors>
+  : TInvoke extends {
+        readonly [createdInvokeConfig]: infer TConfig;
+        src: infer TLogic;
+      }
+    ? TConfig extends { id: infer TId extends string }
+      ? string extends TId
+        ? never
+        : TLogic extends AnyActorLogic
+          ? { id: TId; ref: ActorFromLogic<TLogic> }
+          : never
+      : never
+    : TInvoke extends { id: infer TId extends string; src: infer TSrc }
+      ? string extends TId
+        ? never
+        : InvokeSourceLogic<TSrc, TActors> extends infer TLogic extends
+              AnyActorLogic
+          ? { id: TId; ref: ActorFromLogic<TLogic> }
+          : never
+      : never;
+
+type InvokedChildren<TConfig, TActors extends Sources['actors']> =
+  | (TConfig extends { invoke: infer TInvoke }
+      ? InvokedChild<TInvoke, TActors>
+      : never)
+  | (TConfig extends { states: infer TStates }
+      ? {
+          [K in keyof TStates]: InvokedChildren<TStates[K], TActors>;
+        }[keyof TStates]
+      : never);
+
+/** Type-level plumbing for children inferred from literal invoke IDs. */
+export type InferredInvokeChildren<
+  TConfig,
+  TActors extends Sources['actors'],
+  TChild extends { id: string; ref: AnyActorRef } = InvokedChildren<
+    TConfig,
+    TActors
+  >
+> = [TChild] extends [never]
+  ? {}
+  : {
+      [K in TChild['id']]?: TChild extends { id: string; ref: AnyActorRef }
+        ? K extends TChild['id']
+          ? TChild['ref']
+          : never
         : never;
     };
 
@@ -234,10 +305,12 @@ type DistributiveOmit<T, K extends keyof any> = T extends any
 export interface MachineOptions {
   /**
    * Maximum number of microsteps one macrostep may take before an
-   * `InfiniteTransitionError` is thrown. Raise it for machines that
-   * legitimately take many eventless or raised-event steps per event.
+   * `InfiniteTransitionError` is thrown. Unbounded by default; development
+   * builds warn once per machine when a macrostep passes 1000 microsteps. Set
+   * a bound to turn a runaway cycle of eventless transitions or raised events
+   * into an error instead of a hang.
    *
-   * @default 1000
+   * @default Infinity
    */
   maxIterations?: number;
 }
@@ -347,6 +420,8 @@ export type Next_MachineConfig<
    * being accepted and silently ignored: nothing reads it in v6.
    */
   types?: RemovedTypesKey;
+  /** Declared only so that the removed top-level key is rejected. */
+  internalEvents?: '`internalEvents` moved to `schemas.internalEvents` in v6.';
   schemas?: MachineSchemas<
     TContextSchema,
     TEventSchemaMap,
@@ -453,6 +528,7 @@ type InvokeSrcArgs<
   self: AnyActorRef;
 };
 
+/** @public Arguments passed to an invoked actor input mapper. */
 export type InvokeInputArgs<
   TContext extends MachineContext,
   TEvent extends EventObject,
@@ -471,8 +547,8 @@ export type InvokeInputArgs<
       StateValue,
       string,
       unknown,
-      TODO,
-      TODO
+      MetaObject,
+      any // the machine's state schema is not in scope; `any` keeps every state id indexable
     >,
     TEvent,
     TEmitted
@@ -510,7 +586,7 @@ type ChildIdForLogic<
   HasExplicitChildren<TChildren> extends true
     ? Values<{
         [K in keyof TChildren &
-          string]: ActorRefFromLogic<TLogic> extends NonNullable<TChildren[K]>
+          string]: ActorRefFrom<TLogic> extends NonNullable<TChildren[K]>
           ? K
           : never;
       }>
@@ -554,7 +630,7 @@ type InlineInvokeOnDone<
 > = [keyof TActorMap & string] extends [never]
   ? Next_TransitionConfigOrTarget<
       TContext,
-      DoneActorEvent<any>,
+      DoneActorEvent<unknown>,
       TEvent,
       TEmitted,
       TActionMap,
@@ -811,7 +887,9 @@ export type Next_InvokeConfig<
                     TInput
                   >
                 ) => InputFrom<TActorMap[K]>)
-              | InputFrom<TActorMap[K]>;
+              | ([unknown] extends [InputFrom<TActorMap[K]>]
+                  ? NonReducibleUnknown
+                  : InputFrom<TActorMap[K]>);
           } & (
               | {
                   src: K;
@@ -1024,7 +1102,7 @@ type Next_ChoiceArgs<
  * updating `context` and providing `input`/`reenter`/`meta`).
  *
  * Guard objects/strings on routes are only produced by the JSON layer
- * (`createMachineFromConfig`) — authoring uses the function form.
+ * (`machineFromJSON`) — authoring uses the function form.
  */
 type Next_RouteConfig<
   TContext extends MachineContext,
@@ -1151,7 +1229,6 @@ export interface Next_ChoiceStateNodeConfig<
   TGuardMap extends Sources['guards'],
   TDelayMap extends Sources['delays']
 > {
-  contextSchema?: StandardSchemaV1;
   schemas?: SetupStateSchemas;
   type: 'choice';
   /** Function that resolves this choice state to a target. */
@@ -1218,7 +1295,6 @@ export interface Next_RegularStateNodeConfig<
   TSystemRegistry extends SystemRegistry = SystemRegistry,
   TChildOutput = unknown
 > {
-  contextSchema?: StandardSchemaV1;
   schemas?: SetupStateSchemas;
   /** The initial state transition. */
   initial?:
@@ -1312,9 +1388,12 @@ export interface Next_RegularStateNodeConfig<
   } & (string extends TEvent['type']
     ? unknown
     : {
-        [K in `xstate.${string}`]?: Next_TransitionConfigOrTarget<
+        [K in Exclude<
+          EventDescriptor<ReservedMachineEvent>,
+          EventDescriptor<TEvent>
+        >]?: Next_TransitionConfigOrTarget<
           TContext,
-          { type: K },
+          ReservedEventFromDescriptor<K>,
           TEvent,
           TEmitted,
           TActionMap,
@@ -1421,7 +1500,7 @@ export interface Next_RegularStateNodeConfig<
           TContext,
           AfterEvent,
           TEvent,
-          TODO, // TEmitted
+          TEmitted,
           TActionMap,
           TActorMap,
           TGuardMap,
@@ -1848,7 +1927,7 @@ type UndeclaredEventDescriptorErrors<
 /**
  * @public Rejects `on` keys that match no declared event type. Only applies when the
  * event union is closed (e.g. `schemas.events` is declared); wildcards,
- * partial wildcards and reserved `xstate.*` event types are always allowed.
+ * partial wildcards and known reserved machine descriptors are allowed.
  * The error is reported at the offending key.
  */
 export type ValidateEventDescriptors<
@@ -1859,13 +1938,13 @@ export type ValidateEventDescriptors<
   : [
         UndeclaredEventDescriptors<
           TConfig,
-          EventDescriptor<TEvent> | `xstate.${string}`
+          EventDescriptor<TEvent> | ReservedEventDescriptor
         >
       ] extends [never]
     ? unknown
     : UndeclaredEventDescriptorErrors<
         TConfig,
-        EventDescriptor<TEvent> | `xstate.${string}`
+        EventDescriptor<TEvent> | ReservedEventDescriptor
       >;
 
 type IsHistoryStateConfig<TConfig> = TConfig extends { type: 'history' }
@@ -1899,17 +1978,143 @@ type MissingHistoryDefault<TConfig> = 0 extends 1 & TConfig
 export type ValidateHistoryDefaults<TConfig> =
   MissingHistoryDefault<TConfig> extends never ? unknown : never;
 
+/** @public Error shown on an invoke that omits `input` its actor logic requires. */
+export type MissingInvokeInputError =
+  'This actor logic requires input. Add an `input` to this invoke.';
+
+// Tuple-wrapped `any` checks: a bare `0 extends 1 & T` resolves to `any` when
+// `T` comes from an erroneous expression (e.g. `src: () => actors.missing`).
+type InvokeSrcLogic<TSrc, TActorMap> = [0] extends [1 & TSrc]
+  ? never
+  : TSrc extends AnyActorLogic
+    ? TSrc
+    : TSrc extends string
+      ? TSrc extends keyof TActorMap
+        ? TActorMap[TSrc] extends AnyActorLogic
+          ? TActorMap[TSrc]
+          : never
+        : never
+      : TSrc extends (...args: any[]) => infer TResult
+        ? InvokeSrcLogic<TResult, TActorMap>
+        : never;
+
+// Helper-created invokes (`setup().createInvoke(...)`) carry symbol-keyed
+// phantom data and validate their own input, so they are skipped here.
+type InvokeMissesRequiredInput<TInvoke, TActorMap> = [0] extends [1 & TInvoke]
+  ? false
+  : TInvoke extends { src: infer TSrc }
+    ? 'input' extends keyof TInvoke
+      ? // An `input` that may be `undefined` (or a mapper that may return
+        // it) does not provide required input either.
+        [Extract<keyof TInvoke, symbol>] extends [never]
+        ? [0] extends [1 & InvokeInputValue<TInvoke>]
+          ? false
+          : undefined extends InvokeInputValue<TInvoke>
+            ? RequiresInput<InvokeSrcLogic<TSrc, TActorMap>>
+            : false
+        : false
+      : [Extract<keyof TInvoke, symbol>] extends [never]
+        ? [InvokeSrcLogic<TSrc, TActorMap>] extends [never]
+          ? false
+          : [RequiredLogicInput<InvokeSrcLogic<TSrc, TActorMap>>] extends [
+                never
+              ]
+            ? false
+            : true
+        : false
+    : false;
+
+type InvokeInputValue<TInvoke> = TInvoke extends { input: infer TInput }
+  ? TInput extends (...args: any[]) => infer TResult
+    ? TResult
+    : TInput
+  : undefined;
+
+type RequiresInput<TLogic> = [TLogic] extends [never]
+  ? false
+  : [RequiredLogicInput<TLogic & AnyActorLogic>] extends [never]
+    ? false
+    : true;
+
+type InvokeInputErrors<TInvoke, TActorMap> = TInvoke extends readonly unknown[]
+  ? { [K in keyof TInvoke]: InvokeInputErrors<TInvoke[K], TActorMap> }
+  : InvokeMissesRequiredInput<TInvoke, TActorMap> extends true
+    ? { input: MissingInvokeInputError }
+    : unknown;
+
+type HasMissingInvokeInput<TConfig, TActorMap> = [0] extends [1 & TConfig]
+  ? false
+  :
+      | (TConfig extends { invoke: infer TInvoke }
+          ? TInvoke extends readonly unknown[]
+            ? InvokeMissesRequiredInput<TInvoke[number], TActorMap>
+            : InvokeMissesRequiredInput<TInvoke, TActorMap>
+          : false)
+      | (TConfig extends { states: infer TStates }
+          ? TStates extends Record<string, unknown>
+            ? {
+                [K in keyof TStates]: HasMissingInvokeInput<
+                  TStates[K],
+                  TActorMap
+                >;
+              }[keyof TStates]
+            : false
+          : false);
+
+type MissingInvokeInputErrors<TConfig, TActorMap> = (TConfig extends {
+  invoke: infer TInvoke;
+}
+  ? { invoke: InvokeInputErrors<TInvoke, TActorMap> }
+  : unknown) &
+  (TConfig extends { states: infer TStates }
+    ? TStates extends Record<string, unknown>
+      ? {
+          states: {
+            [K in keyof TStates]: MissingInvokeInputErrors<
+              TStates[K],
+              TActorMap
+            >;
+          };
+        }
+      : unknown
+    : unknown);
+
+/**
+ * @public Requires `input` on invokes whose actor logic requires input (its
+ * input type does not accept `undefined`), like `createActor(logic, { input })`.
+ * `src` may be actor logic, a key of `TActorMap`, or a function returning
+ * either. The error is reported at the invoke that omits `input`.
+ */
+export type ValidateInvokeInputs<
+  TConfig,
+  TActorMap = TConfig extends { actors: infer TActors } ? TActors : {}
+> =
+  true extends HasMissingInvokeInput<TConfig, TActorMap>
+    ? MissingInvokeInputErrors<TConfig, TActorMap>
+    : unknown;
+
+/** @public Error shown on a machine config that has a `version` but no `id`. */
+export type MissingVersionedMachineIdError =
+  'A machine with a `version` must declare an `id`.';
+
+/**
+ * @public Requires an `id` on machine configs that declare a `version`:
+ * persisted snapshots record the machine's `{ id, version }`.
+ */
+export type ValidateVersionedMachineId<TConfig> = [0] extends [1 & TConfig]
+  ? unknown
+  : TConfig extends { version: string }
+    ? TConfig extends { id: string }
+      ? unknown
+      : { id: MissingVersionedMachineIdError }
+    : unknown;
+
 type StatePath = readonly string[];
 
 type AppendStatePath<TPrefix extends StatePath, TKey extends string> = [
   ...TPrefix,
   TKey
 ];
-
-type EscapeStatePathDots<TValue extends string> =
-  TValue extends `${infer THead}.${infer TTail}`
-    ? `${THead}\\.${EscapeStatePathDots<TTail>}`
-    : TValue;
 
 type ProtectEscapedStatePathDots<TValue extends string> =
   TValue extends `${infer THead}\\.${infer TTail}`
@@ -1918,7 +2123,7 @@ type ProtectEscapedStatePathDots<TValue extends string> =
 
 type RestoreEscapedStatePathDots<TValue extends string> =
   TValue extends `${infer THead}__XSTATE_ESCAPED_DOT__${infer TTail}`
-    ? `${THead}.${RestoreEscapedStatePathDots<TTail>}`
+    ? `${THead}\\.${RestoreEscapedStatePathDots<TTail>}`
     : TValue;
 
 type SplitStatePath<TPath extends string> =
@@ -1983,68 +2188,74 @@ type JoinStateTargetString<
   TKey extends string
 > = TPrefix extends '' ? TKey : `${TPrefix}.${TKey}`;
 
-type StateTargetStringsFromStates<TStates, TPrefix extends string = ''> =
+// The id a `#` target names a state node by: its explicit `id`, matched
+// exactly, or its implicit id, the path from the root (keys keep their
+// escaped dots) prefixed by the machine id when it has one. The root of a
+// machine without an id has the empty implicit id, which `#` cannot name. A
+// `#` target is never an id followed by a path.
+type ReferenceIdForNode<TNode, TImplicitId extends string> = TNode extends {
+  id: infer TId extends string;
+}
+  ? string extends TId
+    ? never
+    : TId
+  : TImplicitId extends ''
+    ? never
+    : TImplicitId;
+
+type IdTargetsForNode<TNode, TImplicitId extends string> =
+  ReferenceIdForNode<TNode, TImplicitId> extends infer TRef extends string
+    ? [TRef] extends [never]
+      ? never
+      : `#${TRef}`
+    : never;
+
+type IdTargetsFromStates<TStates, TPrefix extends string> =
   TStates extends Record<string, unknown>
     ? {
         [K in keyof TStates & string]:
-          | JoinStateTargetString<TPrefix, EscapeStatePathDots<K>>
+          | IdTargetsForNode<TStates[K], JoinStateTargetString<TPrefix, K>>
           | (0 extends 1 & TStates[K]
               ? never
               : TStates[K] extends { states: infer TChildren }
-                ? StateTargetStringsFromStates<
+                ? IdTargetsFromStates<
                     TChildren,
-                    JoinStateTargetString<TPrefix, EscapeStatePathDots<K>>
+                    JoinStateTargetString<TPrefix, K>
                   >
                 : never);
       }[keyof TStates & string]
     : never;
 
-type IdTargetsForNode<TNode> = TNode extends { id: infer TId extends string }
+type MachineIdPrefix<TConfig> = TConfig extends { id: infer TId extends string }
   ? string extends TId
     ? never
-    : TNode extends { states: infer TStates }
-      ?
-          | `#${EscapeStatePathDots<TId>}`
-          | `#${EscapeStatePathDots<TId>}.${StateTargetStringsFromStates<TStates>}`
-      : `#${EscapeStatePathDots<TId>}`
-  : never;
-
-type IdTargetsFromStates<TStates> =
-  TStates extends Record<string, unknown>
-    ? {
-        [K in keyof TStates & string]:
-          | IdTargetsForNode<TStates[K]>
-          | (0 extends 1 & TStates[K]
-              ? never
-              : TStates[K] extends { states: infer TChildren }
-                ? IdTargetsFromStates<TChildren>
-                : never);
-      }[keyof TStates & string]
-    : never;
+    : TId
+  : '';
 
 type AuthoredIdTargets<TConfig> =
-  | IdTargetsForNode<TConfig>
+  | IdTargetsForNode<TConfig, MachineIdPrefix<TConfig>>
   | (TConfig extends { states: infer TStates }
-      ? IdTargetsFromStates<TStates>
+      ? IdTargetsFromStates<TStates, MachineIdPrefix<TConfig>>
       : never);
 
 type ResolveIdTargetAtNode<
   TNode,
   TNodePath extends StatePath,
-  TTarget extends string
-> = TNode extends { id: infer TId extends string }
-  ? string extends TId
-    ? never
-    : TTarget extends `#${EscapeStatePathDots<TId>}`
-      ? TNodePath
-      : TTarget extends `#${EscapeStatePathDots<TId>}.${infer TDescendant}`
-        ? [...TNodePath, ...SplitStatePath<TDescendant>]
+  TTarget extends string,
+  TImplicitId extends string
+> =
+  ReferenceIdForNode<TNode, TImplicitId> extends infer TRef extends string
+    ? [TRef] extends [never]
+      ? never
+      : TTarget extends `#${TRef}`
+        ? TNodePath
         : never
-  : never;
+    : never;
 
 type ResolveIdTargetInStates<
   TStates,
   TTarget extends string,
+  TImplicitPrefix extends string,
   TPrefix extends StatePath = []
 > =
   TStates extends Record<string, unknown>
@@ -2053,7 +2264,8 @@ type ResolveIdTargetInStates<
           | ResolveIdTargetAtNode<
               TStates[K],
               AppendStatePath<TPrefix, K>,
-              TTarget
+              TTarget,
+              JoinStateTargetString<TImplicitPrefix, K>
             >
           | (0 extends 1 & TStates[K]
               ? never
@@ -2061,6 +2273,7 @@ type ResolveIdTargetInStates<
                 ? ResolveIdTargetInStates<
                     TChildren,
                     TTarget,
+                    JoinStateTargetString<TImplicitPrefix, K>,
                     AppendStatePath<TPrefix, K>
                   >
                 : never);
@@ -2068,9 +2281,9 @@ type ResolveIdTargetInStates<
     : never;
 
 type ResolveIdTargetPath<TConfig, TTarget extends string> =
-  | ResolveIdTargetAtNode<TConfig, [], TTarget>
+  | ResolveIdTargetAtNode<TConfig, [], TTarget, MachineIdPrefix<TConfig>>
   | (TConfig extends { states: infer TStates }
-      ? ResolveIdTargetInStates<TStates, TTarget>
+      ? ResolveIdTargetInStates<TStates, TTarget, MachineIdPrefix<TConfig>>
       : never);
 
 type ResolveAuthoredTarget<

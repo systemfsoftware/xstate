@@ -5,6 +5,18 @@ description: Test deadlines, recover from failures and supervise workflow actors
 
 Test the workflow with its real machine and provide local Effect services. Use `waitFor` for state assertions and `join` for final output.
 
+## Acknowledging an event
+
+Import `sendAndAwait` from `@xstate/effect` when you need acknowledgment that one particular send was processed. The persistence example also uses it to checkpoint after each request.
+
+It returns that mailbox item's snapshot after its transition is published and its immediate effects have run, including its child actors' handling of events it sent them, if those effects complete. Ignored events succeed with an unchanged snapshot. An event whose action fails also succeeds; the failure is processed afterwards, through `onError` or an error snapshot, unless the actor has stopped by then. Concurrent sends of the same object get independent receipts. An event that completes or errors the actor returns its terminal snapshot; use `join` for its outcome.
+
+Invalid and externally sent internal events fail with `EventRejectedError`. Stop, scope closure or completion before processing a queued send fails it with `ActorStoppedError`. Interrupting the waiter detaches the receipt without retracting the event. A reentrant listener or observer stop rejects the currently processed receipt only when the step leaves the actor active.
+
+This helper does not await invoked tasks, background actions, child replies such as an invoked child's `onDone`, future timers or global quiescence. Keep `waitFor` or a domain-specific completion signal for those conditions.
+
+Existing `@xstate/test` SUT sessions accept async sends. Set their `send` function to an adapter that runs `sendAndAwait` and resolves to void, and `read` to the actor's snapshot projection. The package test suite exercises this through the real `testPaths` API.
+
 ## TestClock
 
 A release approval expires after 30 seconds. `TestClock` drives the same `after` transition without waiting for real time:
@@ -51,16 +63,16 @@ XState's [path generation](../../../docs/model-based-testing.md) works on the ma
 
 ## Retry a task
 
-Use Effect's retry combinators inside `fromEffect` for transient failures within one task. This local publisher succeeds on its third attempt:
+Use Effect's retry combinators inside `createEffectLogic` for transient failures within one task. This local publisher succeeds on its third attempt:
 
 <!-- example from examples/effect-workflows/src/retry.ts -->
 
 ```ts
 import { Effect, Schedule } from 'effect';
-import { createEffectActor, fromEffect, join } from '@xstate/effect';
+import { createEffectActor, createEffectLogic, join } from '@xstate/effect';
 
 let attempts = 0;
-const publish = fromEffect(
+const publish = createEffectLogic(
   Effect.suspend(() => {
     attempts++;
     return attempts < 3
@@ -90,10 +102,10 @@ Retry a scoped unit when a failure should create a fresh actor:
 
 ```ts
 import { Effect, Schedule } from 'effect';
-import { createEffectActor, fromEffect, join } from '@xstate/effect';
+import { createEffectActor, createEffectLogic, join } from '@xstate/effect';
 
 let attempts = 0;
-const worker = fromEffect(
+const worker = createEffectLogic(
   Effect.suspend(() => {
     attempts++;
     return attempts < 3
@@ -129,19 +141,19 @@ Retrying can repeat external operations. Use stable operation IDs or idempotent 
 
 ## Handle typed failures
 
-A `fromEffect` actor preserves its Effect's error type. Handle a domain failure with `Effect.catchTag`:
+A `createEffectLogic` actor preserves its Effect's error type. Handle a domain failure with `Effect.catchTag`:
 
 <!-- example from examples/effect-workflows/src/errors.ts -->
 
 ```ts
 import { Data, Effect } from 'effect';
-import { createEffectActor, fromEffect, join } from '@xstate/effect';
+import { createEffectActor, createEffectLogic, join } from '@xstate/effect';
 
 class PublishFailed extends Data.TaggedError('PublishFailed')<{
   readonly reason: string;
 }> {}
 
-const publish = fromEffect(
+const publish = createEffectLogic(
   Effect.fail(new PublishFailed({ reason: 'Release needs approval' }))
 );
 
@@ -163,13 +175,63 @@ For machine workflows, expected outcomes such as declined or expired can be fina
 | Error | Raised by |
 | --- | --- |
 | `ActorStoppedError` | `waitFor` when the actor stops or errors before matching; `join` when it stops without output. |
-| `EffectInterruptedError` | Effect logic that interrupts itself. |
+| `EffectFailure<E>` | Task, stream or hosted action failure, defect or self-interruption. Its `cause` preserves the full Effect Cause. |
 | `Cause.TimeoutError` | `waitFor` with a timeout, or Effect's timeout combinators. |
 
 - `ActorStoppedError` includes `actorId` and `snapshot`.
-- `EffectInterruptedError` includes its interrupt `cause`.
-- Both package errors are `Data.TaggedError` classes.
-- An actor's own typed failure is available through `snapshot.error` and `join`; `ErrorFrom` names its type.
+- `snapshot.error` and invoked child `onError` events carry `EffectFailure<E>` for Effect logic. `ErrorFrom` reflects that wrapper.
+- `join` and result atoms unwrap genuine `EffectFailure` values and preserve the original Cause. Plain XState actor errors remain ordinary typed failures.
+- `EffectInterruptedError` is deprecated. Inspect `Cause.hasInterruptsOnly(error.cause)` instead.
+
+### Migrating error handlers
+
+Effect child error handlers now receive the Cause wrapper. Replace direct access such as `event.error.code` with inspection of `event.error.cause`.
+
+<!-- example from examples/effect-workflows/src/failure-cause.ts -->
+
+```ts
+import { Cause, Effect, Option } from 'effect';
+import {
+  createEffectActor,
+  createEffectLogic,
+  setupEffect,
+  waitFor
+} from '@xstate/effect';
+
+const request = createEffectLogic(Effect.fail({ code: 'NOT_FOUND' as const }));
+const machine = setupEffect({ actors: { request } }).createMachine({
+  context: { code: '' },
+  initial: 'pending',
+  states: {
+    pending: {
+      invoke: {
+        src: 'request',
+        onError: ({ event }) => {
+          const failure = Cause.findErrorOption(event.error.cause);
+          return {
+            target: 'failed',
+            context: {
+              code: Option.isSome(failure) ? failure.value.code : 'UNEXPECTED'
+            }
+          };
+        }
+      }
+    },
+    failed: {}
+  }
+});
+
+const program = Effect.gen(function* () {
+  const actor = yield* createEffectActor(machine);
+  return (yield* waitFor(actor, (snapshot) => snapshot.matches('failed')))
+    .context.code;
+});
+
+export const result = await Effect.runPromise(Effect.scoped(program));
+console.log(result); // 'NOT_FOUND'
+```
+
+Use `Effect.exit(join(actor))` when defects and interruption must be inspected alongside typed failures. Stopping the actor still makes `join` fail with `ActorStoppedError`.
 
 <details>
 <summary>Observe root actor errors</summary>
@@ -188,9 +250,9 @@ Hosted Effects run inside spans:
 
 | Span | Work |
 | --- | --- |
-| `fromEffect` | A task actor's Effect. |
-| `fromEffectStream` | A stream of snapshot values. |
-| `fromEffectEventStream` | A stream of parent events. |
+| `createEffectLogic` | A task actor's Effect. |
+| `createEffectStreamLogic` | A stream of snapshot values. |
+| `createEffectEventStreamLogic` | A stream of parent events. |
 | `action.<name>` | A declared Effect action. |
 
 Spans carry `xstate.actor.id` and `xstate.actor.address`. The address is the actor's `/`-joined path from the root, identifying its place in the actor tree.

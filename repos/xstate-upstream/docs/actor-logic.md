@@ -12,7 +12,7 @@ Actor logic defines how an actor processes events and produces snapshots.
 | `createCallbackLogic(...)` | Event listeners and callback APIs. |
 | `createObservableLogic(...)` | Observable values. |
 | `createEventObservableLogic(...)` | Observable events. |
-| `createLogic(...)` | Custom transition logic. |
+| `createStepLogic(...)` | Custom transition logic. |
 | `createListenerLogic(...)` | Emitted events from another actor. |
 | `createSubscriptionLogic(...)` | Snapshots and outcomes of another actor. |
 | `createEmptyActor(...)` | A placeholder actor. |
@@ -30,7 +30,7 @@ const loadUser = createAsyncLogic({
 
 Async logic receives an `AbortSignal`. XState aborts the operation when its actor stops.
 
-Async logic also accepts an `id` and a `timeout`. The `id` identifies the logic, not an actor instance. The `timeout` accepts milliseconds or an ISO 8601 duration; when it elapses, XState aborts the signal and the actor errors with the exported `TimeoutError`.
+Async logic also accepts an `id` and a `timeout`. The `id` identifies the logic, not an actor instance. The `timeout` accepts milliseconds or a [duration string](timeouts.md#duration-formats); when it elapses, XState aborts the signal and the actor errors with the exported `TimeoutError`.
 
 ```ts
 import { createAsyncLogic } from 'xstate';
@@ -84,12 +84,12 @@ const socketLogic = createCallbackLogic<{
 
 ## Custom logic
 
-`createLogic(...)` creates a stateful actor without states or transitions. It holds context, receives events and produces effects.
+`createStepLogic(...)` creates a stateful actor without states or transitions. It holds context, receives events and produces effects.
 
 ```ts
-import { createLogic, createActor } from 'xstate';
+import { createStepLogic, createActor } from 'xstate';
 
-const counterLogic = createLogic({
+const counterLogic = createStepLogic({
   id: 'counter',
   context: { count: 0 },
   run: ({ context, event }, enq) => {
@@ -159,7 +159,7 @@ Do not wrap a machine by spreading it into a new object:
 const wrapped = { ...checkoutMachine, transition: myTransition };
 ```
 
-A machine is a `StateMachine` class instance. The spread copies only its own properties. `transition`, `initialTransition`, `getInitialSnapshot`, `getPersistedSnapshot`, `restoreSnapshot` and `start` are own properties bound to the original machine, so they are copied. The prototype methods are dropped: `provide`, `resolveState`, `microstep`, `getTransitionData`, `getStateNodeById`, `getExecutionErrorEvent` and `isInternalEventType`. An actor running the copy cannot read `getExecutionErrorEvent` from it, and snapshots the copy produces still reference the original machine. The result is not a machine, and XState does not support running it.
+A machine is a `StateMachine` class instance. The spread copies only its own properties. `transition`, `initialTransition`, `getInitialSnapshot`, `getPersistedSnapshot` and `start` are own properties bound to the original machine, so they are copied. The prototype methods are dropped: `provide`, `resolveState`, `microstep`, `getTransitionData`, `getStateNodeById`, `getExecutionErrorEvent` and `isInternalEventType`. An actor running the copy cannot read `getExecutionErrorEvent` from it, and snapshots the copy produces still reference the original machine. The result is not a machine, and XState does not support running it.
 
 Use one of these instead.
 
@@ -197,10 +197,10 @@ const checkoutFlow = setup({ actors: { checkout: checkoutMachine } }).createMach
 });
 ```
 
-Logic created with `createLogic(...)` or `createAsyncLogic(...)` is a plain object. Compose a new logic object whose `transition` delegates to the inner logic. `withEventLog` returns the same logic type it receives, so the wrapped logic keeps its snapshot and event types.
+Logic created with `createStepLogic(...)` or `createAsyncLogic(...)` is a plain object. Compose a new logic object whose `transition` delegates to the inner logic. `withEventLog` returns the same logic type it receives, so the wrapped logic keeps its snapshot and event types.
 
 ```ts
-import { type AnyActorLogic, createActor, createLogic } from 'xstate';
+import { type AnyActorLogic, createActor, createStepLogic } from 'xstate';
 
 function withEventLog<TLogic extends AnyActorLogic>(logic: TLogic): TLogic {
   return {
@@ -212,7 +212,7 @@ function withEventLog<TLogic extends AnyActorLogic>(logic: TLogic): TLogic {
   };
 }
 
-const counterLogic = createLogic({
+const counterLogic = createStepLogic({
   context: { count: 0 },
   run: ({ context, event }) => {
     if (event.type !== 'inc') return;
@@ -238,7 +238,7 @@ createAsyncLogic({ id, timeout, run });
 createCallbackLogic(callback);
 createObservableLogic(factory);
 createEventObservableLogic(factory);
-createLogic({ id, context, run });
+createStepLogic({ id, context, run });
 enq.emit(event);
 enq.raise(event);
 enq.sendBack(event);

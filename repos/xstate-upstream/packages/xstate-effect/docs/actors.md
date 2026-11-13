@@ -5,6 +5,14 @@ description: Create actors whose lifetime and dependencies belong to an Effect a
 
 `createEffectActor(logic, options?)` starts an actor and returns its handle as a scoped Effect.
 
+The actor processes events through one FIFO mailbox. Events sent by a child
+keep their send order, including when each send runs in a separate promise
+continuation while the parent executes transition effects.
+
+Observers see each step in the order that `createActor` uses. The events that
+the transition emits come first. Then an active step gives `next`, a `done`
+step gives `next` and then `complete`, and an `error` step gives `error`.
+
 - Pass `options.input` when the logic requires input.
 - Pass `options.snapshot` to resume an actor from a persisted snapshot. See [persisting and restoring](#persisting-and-restoring).
 - Provide the services required by its declared actions and child actors.
@@ -17,8 +25,8 @@ The [quick start](quick-start.md) shows an actor with input and a deployment ser
 The enclosing scope owns the actor. When that scope closes, the actor stops and its hosted Effects are interrupted.
 
 - `Effect.scoped(program)` closes the scope when `program` finishes.
-- `actor.stop()` stops the actor explicitly.
-- Tasks created with `fromEffect`, `fromEffectStream` and `fromEffectEventStream` have their own scopes. Their resources are released when the task completes, fails or is interrupted.
+- `actor.stop()` stops the actor explicitly. Called synchronously by an `on` listener or an observer while the actor delivers a step to it, it takes effect when that step ends. Called from anywhere else, it stops the actor at once.
+- Tasks created with `createEffectLogic`, `createEffectStreamLogic` and `createEffectEventStreamLogic` have their own scopes. Their resources are released when the task completes, fails or is interrupted.
 - Background Effect actions use the owning actor's scope. Their resources are released when that actor stops.
 - Use `withActorScope` around a resource acquisition to keep it until the owning actor stops.
 - The enclosing scope waits for the actor's finalizers before finishing its own cleanup.
@@ -35,14 +43,14 @@ This release task owns a temporary workspace and opens a cache for the rest of t
 import { Effect } from 'effect';
 import {
   createEffectActor,
-  fromEffect,
+  createEffectLogic,
   waitFor,
   withActorScope
 } from '@xstate/effect';
 import { setup } from 'xstate';
 
 const events: string[] = [];
-const prepareRelease = fromEffect(
+const prepareRelease = createEffectLogic(
   Effect.gen(function* () {
     // Keep the shared cache open for the rest of the release workflow.
     yield* Effect.acquireRelease(
@@ -156,7 +164,7 @@ An actor can outlive its process. Save `actor.getPersistedSnapshot()` after an e
 
 ```ts
 import { Effect } from 'effect';
-import { createEffectActor, waitFor } from '@xstate/effect';
+import { createEffectActor, sendAndAwait } from '@xstate/effect';
 import { createMachine, type Snapshot } from 'xstate';
 
 const review = createMachine({
@@ -177,9 +185,7 @@ const handle = (
   Effect.scoped(
     Effect.gen(function* () {
       const actor = yield* createEffectActor(review, { snapshot: stored });
-      const before = actor.getSnapshot();
-      actor.send(event);
-      yield* waitFor(actor, (snapshot) => snapshot !== before);
+      yield* sendAndAwait(actor, event);
       return JSON.parse(JSON.stringify(actor.getPersistedSnapshot()));
     })
   );
@@ -200,9 +206,71 @@ Restoring resumes the persisted state and context without running entry actions 
 - A pending `after` transition or delayed send keeps its original deadline, measured on Effect's `Clock`. A deadline that passed while the snapshot was stored fires as soon as the actor starts.
 - State-machine children resume their persisted state and context.
 - Completed children do not restart.
-- Running Effect tasks and streams restart from the beginning: a `fromEffect` task runs its Effect again, and a `fromEffectStream` or `fromEffectEventStream` stream starts again from its first item. A half-finished Effect cannot be persisted, so this matches how XState restarts running async and callback actors. Make that work safe to repeat, for example with an idempotency key.
+- Running Effect tasks and streams restart from the beginning: a `createEffectLogic` task runs its Effect again, and a `createEffectStreamLogic` or `createEffectEventStreamLogic` stream starts again from its first item. A half-finished Effect cannot be persisted, so this matches how XState restarts running async and callback actors. Make that work safe to repeat, for example with an idempotency key.
 - A snapshot-only restore does not need `input`, even when the logic requires it.
 - The restored actor belongs to the enclosing scope like any other: closing the scope stops it, its children and its timers.
+
+## Validated JSON snapshots
+
+`createSnapshotCodec(machine, schema)` binds a full bidirectional Effect schema to a versioned machine. The schema below is a reusable starting point for a leaf machine. Extend it with the actual output, children, state inputs and actor counters used by your workflow.
+
+<!-- example from examples/effect-workflows/src/persistence-codec.ts -->
+
+```ts
+import { Effect, Schema } from 'effect';
+import { createEffectActor, createSnapshotCodec } from '@xstate/effect';
+import { createMachine } from 'xstate';
+
+const review = createMachine({
+  id: 'review',
+  version: '1',
+  context: { submittedAt: new Date('2026-01-01T00:00:00Z'), amount: 42n },
+  initial: 'pending',
+  states: { pending: {} }
+});
+
+const Snapshot = Schema.Struct({
+  status: Schema.Literals(['active', 'stopped']),
+  value: Schema.Literal('pending'),
+  context: Schema.Struct({
+    submittedAt: Schema.DateFromString,
+    amount: Schema.BigIntFromString
+  }),
+  machine: Schema.Struct({
+    id: Schema.Literal('review'),
+    version: Schema.Literal('1')
+  }),
+  children: Schema.Record(Schema.String, Schema.Never),
+  timers: Schema.Array(Schema.Unknown),
+  historyValue: Schema.Record(Schema.String, Schema.Unknown),
+  nextTimerId: Schema.Number
+});
+const codec = createSnapshotCodec(review, Snapshot);
+
+const program = Effect.gen(function* () {
+  const actor = yield* createEffectActor(review);
+  const json = yield* codec.encode(actor.getPersistedSnapshot());
+  const snapshot = yield* codec.decode(json);
+  const restored = yield* createEffectActor(review, { snapshot });
+  const context = restored.getSnapshot().context;
+  return {
+    submittedAt: context.submittedAt.toISOString(),
+    amount: String(context.amount)
+  };
+});
+
+export const result = await Effect.runPromise(Effect.scoped(program));
+console.log(result); // { submittedAt: '2026-01-01T00:00:00.000Z', amount: '42' }
+```
+
+- The transport has its own format version and stable machine ID. It preserves the source machine version. A schema can explicitly support historical versions, for example with a union.
+- The supplied schema owns every rich value, including nested child snapshots and child input. Use reversible schemas for Date, bigint, Map, Set and application classes. The codec does not derive child schemas or revive constructors.
+- Include all existing core metadata. Omitting or changing children, timers, history, actor counters or state input owners fails with `SnapshotCodecError`. Unknown defined metadata must also survive. Optional undefined fields such as an active snapshot's output can be deliberately omitted by the schema.
+- Encoded values must be lossless plain JSON. Undefined, nonfinite numbers, negative zero, cycles, holes, functions, symbols, accessor properties and unsupported object prototypes are rejected. Schema validation errors retain `Schema.SchemaError` and the schema's service requirements.
+- Errored snapshots, including failed embedded children, are rejected. Recover or project their outcome before persisting. JSON cannot preserve a live Effect Cause or the genuine `EffectFailure` brand; direct restoration of a serialized failed task or stream is rejected too.
+- Decoding does not run migrations or start actors. Use the existing `machineVersions(...).migrateSnapshot` before restoration, or the machine's configured `migrate` during restoration. Choose one migration owner. Decoding a historical snapshot alone does not prove its restoration will succeed.
+
+A caller schema can still discard application data inside context or output. Verify its round trips for your domain. The codec checks transport and persistence metadata; it cannot prove arbitrary user transformations reversible.
 
 ## Actor handle
 

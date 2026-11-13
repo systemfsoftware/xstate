@@ -37,17 +37,21 @@ const actor = createActor(machine, { input: { userId: 'u_1' } });
 | --- | --- | --- |
 | `id` | `string` | Custom identifier for this actor. |
 | `input` | input of the logic | [Input](input-output.md) passed to the logic when it starts. |
-| `snapshot` | persisted snapshot | Starts the actor from a [persisted snapshot](persistence.md). Actions are not re-executed; invocations restart and children are restored. |
-| `inspect` | function or observer | Receives [inspection](inspection.md) events. |
+| `inspect` | function or observer | Receives [inspection](inspection.md) events for the whole system. Ignored on child actors. |
 | `onRejectedEvent` | `(rejection) => void` | Dead-letter hook for events rejected at the delivery boundary. Registers a `system.onRejectedEvent` listener; see [dead letters](systems.md#dead-letters). Ignored on child actors. |
-| `onUnhandledEvent` | `(event, snapshot) => void` | Called when this state machine actor receives an event that no transition handles. Internal `xstate.*` events are not reported. See [unhandled events](transitions.md#unhandled-events). |
+| `onUnhandledEvent` | `(event, snapshot) => void` | Called when this state machine actor receives an event that no transition handles. Internal lifecycle and actor stop events are not reported. Unhandled public sends are reported even with `xstate.*` names. Applies to this actor only, including a child actor; children do not inherit it. See [unhandled events](transitions.md#unhandled-events). |
 | `clock` | `{ setTimeout, clearTimeout, now? }` | Controls [delays](delays.md) and [timeouts](timeouts.md). Use `SimulatedClock` in [tests](testing.md). |
 | `logger` | `(...args) => void` | Used by `log(...)` actions. Defaults to `console.log`. |
 | `registryKey` | `string` | Registers the actor in the [system](systems.md) under this key. |
 | `src` | `string` or actor logic | The source of the logic, used by inspectors and persistence. |
-| `parent` | actor | Parent actor. Set by XState when invoking or spawning; rarely passed by hand. |
+
+`inspect` and `onRejectedEvent` are system-wide: only the options of the root actor (an actor created without `parent`) apply. Passing them to an actor created with `parent` has no effect; the root's inspector and rejection listeners already observe every child. `onUnhandledEvent` is per actor and works on a child actor.
+
+To start an actor from a [persisted snapshot](persistence.md), use `restoreActor(logic, persistedSnapshot, options?)` from `xstate/persist` instead of `createActor`. It accepts the same options except `input`.
 
 There is no `systemId` option in v6. Use `registryKey`, which is typed against the machine's system registry.
+
+The `parent` option was removed. Passing it to `createActor` throws. Create child actors through `invoke`, `spawn`, or `enq.spawn`.
 
 ## Custom clocks
 
@@ -117,7 +121,7 @@ actor.subscribe({
 });
 ```
 
-If a root actor errors while no observer provides an `error` handler, the error is rethrown in a separate macrotask so global error handlers and error reporting services see it. Child actors report their errors to their parent instead.
+An unrecovered root error is reported to the host's unhandled error channel if any non-passive subscriber lacks an `error` handler, or if there are no such subscribers. Having another subscriber with an `error` handler does not suppress a report caused by a subscriber without one. The report is deferred by one macrotask; a new subscription with an `error` handler before then suppresses it. Child actors report their errors to their parent instead. See [error precedence](lifecycle-and-errors.md#error-precedence).
 
 ## TypeScript
 
@@ -135,7 +139,6 @@ type MachineActor = ActorRefFrom<typeof machine>;
 const actor = createActor(logic, {
   id: 'checkout',
   input: { userId },
-  snapshot: restored,
   inspect: (event) => console.log(event),
   registryKey: 'checkout'
 });

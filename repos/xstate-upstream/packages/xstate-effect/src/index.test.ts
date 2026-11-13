@@ -1,4 +1,5 @@
 import {
+  Cause,
   Context,
   Effect,
   Exit,
@@ -14,15 +15,17 @@ import {
   createMachine,
   initialTransition,
   setup,
+  transition,
   types,
   type StandardSchemaV1
 } from 'xstate';
 import { standardSchemaValidator } from 'xstate/validation';
 import {
+  EffectFailure,
   createEffectActor,
-  fromEffect,
-  fromEffectEventStream,
-  fromEffectStream,
+  createEffectLogic,
+  createEffectEventStreamLogic,
+  createEffectStreamLogic,
   setupEffect
 } from './index.ts';
 
@@ -72,6 +75,30 @@ const runScoped = async <A, E>(
 };
 
 describe('@xstate/effect', () => {
+  it('uses registered Effect action keys in transition descriptors', () => {
+    const machine = setupEffect({
+      actions: {
+        track: () => Effect.void,
+        'record-metric': () => Effect.void
+      }
+    }).createMachine({
+      on: {
+        Ping: ({ actions }, enq) => {
+          enq(actions.track);
+          enq(actions['record-metric']);
+        }
+      }
+    });
+    const [snapshot] = initialTransition(machine);
+    const [, effects] = transition(machine, snapshot, { type: 'Ping' });
+
+    expect(
+      effects
+        .filter((effect) => effect.kind === 'action')
+        .map((effect) => effect.type)
+    ).toEqual(['track', 'record-metric']);
+  });
+
   it('accepts Effect schemas in setupEffect with full type inference', async () => {
     const effectSetup = setupEffect({
       schemas: {
@@ -374,7 +401,7 @@ describe('@xstate/effect', () => {
         }
       });
     const invalidLogic = () =>
-      fromEffect({
+      createEffectLogic({
         // @ts-expect-error -- XState validation asserts values but does not transform them
         validator: standardSchemaValidator(),
         schemas: {
@@ -387,8 +414,8 @@ describe('@xstate/effect', () => {
     void invalidLogic;
   });
 
-  it('accepts Effect schemas for fromEffect input and output', async () => {
-    const logic = fromEffect({
+  it('accepts Effect schemas for createEffectLogic input and output', async () => {
+    const logic = createEffectLogic({
       schemas: {
         input: Schema.Struct({ id: Schema.String }),
         output: Schema.Struct({ greeting: Schema.String })
@@ -413,8 +440,8 @@ describe('@xstate/effect', () => {
     expect(actor.getSnapshot().output).toEqual({ greeting: 'Hello 42' });
   });
 
-  it('rejects invalid fromEffect input with XState runtime validation', () => {
-    const logic = fromEffect({
+  it('rejects invalid createEffectLogic input with XState runtime validation', () => {
+    const logic = createEffectLogic({
       validator: standardSchemaValidator(),
       schemas: {
         input: Schema.Struct({ id: Schema.String }),
@@ -428,9 +455,9 @@ describe('@xstate/effect', () => {
     );
   });
 
-  it('checks fromEffect results against the output schema', () => {
+  it('checks createEffectLogic results against the output schema', () => {
     const invalidLogic = () =>
-      fromEffect({
+      createEffectLogic({
         // @ts-expect-error -- the Effect result must match the output schema
         schemas: { output: Schema.String },
         effect: Effect.succeed(42)
@@ -442,7 +469,7 @@ describe('@xstate/effect', () => {
   it('preserves failures and requirements with input and output schemas', () => {
     const Service = Context.Service<{ name: string }>('Service');
     const failure = { code: 'NOT_FOUND' as const };
-    const logic = fromEffect({
+    const logic = createEffectLogic({
       schemas: {
         input: Schema.Struct({ id: Schema.String }),
         output: Schema.Struct({ name: Schema.String })
@@ -459,7 +486,10 @@ describe('@xstate/effect', () => {
         src: 'logic',
         input: { id: '42' },
         onError: ({ event }) => {
-          event.error.code satisfies 'NOT_FOUND';
+          event.error satisfies EffectFailure<typeof failure>;
+          for (const reason of event.error.cause.reasons) {
+            if (reason._tag === 'Fail') reason.error.code satisfies 'NOT_FOUND';
+          }
           return {};
         }
       }
@@ -474,9 +504,9 @@ describe('@xstate/effect', () => {
     void runWithoutService;
   });
 
-  it('infers fromEffect output and requirements with only an input schema', () => {
+  it('infers createEffectLogic output and requirements with only an input schema', () => {
     const Service = Context.Service<{ prefix: string }>('Service');
-    const logic = fromEffect({
+    const logic = createEffectLogic({
       schemas: {
         input: Schema.Struct({ id: Schema.String })
       },
@@ -492,7 +522,7 @@ describe('@xstate/effect', () => {
   });
 
   it('accepts a constant Effect with only an input schema', async () => {
-    const logic = fromEffect({
+    const logic = createEffectLogic({
       schemas: {
         input: Schema.Struct({ id: Schema.String })
       },
@@ -507,7 +537,7 @@ describe('@xstate/effect', () => {
   });
 
   it('accepts an output-only Effect schema', async () => {
-    const logic = fromEffect({
+    const logic = createEffectLogic({
       schemas: { output: Schema.String },
       effect: Effect.succeed('ok')
     });
@@ -519,7 +549,7 @@ describe('@xstate/effect', () => {
   });
 
   it('infers actor input with only an output schema', async () => {
-    const logic = fromEffect({
+    const logic = createEffectLogic({
       schemas: { output: Schema.String },
       effect: ({ input }: { input: number }) => Effect.succeed(String(input))
     });
@@ -529,8 +559,8 @@ describe('@xstate/effect', () => {
     expect(actor.getSnapshot().output).toBe('42');
   });
 
-  it('validates fromEffect schemas when a validator is provided', async () => {
-    const logic = fromEffect({
+  it('validates createEffectLogic schemas when a validator is provided', async () => {
+    const logic = createEffectLogic({
       validator: standardSchemaValidator(),
       schemas: { output: Schema.String },
       effect: Effect.succeed('ok')
@@ -541,12 +571,12 @@ describe('@xstate/effect', () => {
     expect(actor.getSnapshot().status).toBe('done');
   });
 
-  it('rejects invalid fromEffect output with XState runtime validation', async () => {
+  it('rejects invalid createEffectLogic output with XState runtime validation', async () => {
     let resolve!: (value: number) => void;
     const output = new Promise<number>((done) => {
       resolve = done;
     });
-    const logic = fromEffect({
+    const logic = createEffectLogic({
       validator: standardSchemaValidator(),
       schemas: { output: Schema.String },
       effect: Effect.promise(() => output) as Effect.Effect<any>
@@ -558,6 +588,8 @@ describe('@xstate/effect', () => {
     await until(() => actor.getSnapshot().status === 'error');
 
     expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(EffectFailure);
+    expect(Cause.hasDies(actor.getSnapshot().error!.cause)).toBe(true);
   });
 
   it('runs setupEffect actions inside the host Effect context', async () => {
@@ -568,6 +600,7 @@ describe('@xstate/effect', () => {
     const recorded: number[] = [];
 
     const effectSetup = setupEffect({
+      schemas: { context: Schema.Struct({ count: Schema.Number }) },
       actions: {
         audit: ({ context }) =>
           Audit.use((audit) => Effect.sync(() => audit.record(context.count)))
@@ -602,6 +635,39 @@ describe('@xstate/effect', () => {
     await until(() => recorded.length === 1);
 
     expect(recorded).toEqual([1]);
+  });
+
+  it('hosts actions with schema-defined arguments in the owning actor', async () => {
+    const Audit = Context.Service<{ record: (message: string) => void }>(
+      'Audit'
+    );
+    const recorded: string[] = [];
+    const machine = setupEffect({
+      schemas: {
+        actions: {
+          audit: { params: Schema.Struct({ message: Schema.String }) }
+        }
+      },
+      actions: {
+        audit: ({ message }) =>
+          Audit.use((audit) => Effect.sync(() => audit.record(message)))
+      }
+    }).createMachine({
+      on: {
+        AUDIT: (args, enq) =>
+          enq(args.actions.audit, { self: args.self, message: 'saved' })
+      }
+    });
+    const actor = await runScoped(
+      createEffectActor(machine).pipe(
+        Effect.provideService(Audit, {
+          record: (message) => recorded.push(message)
+        })
+      )
+    );
+    actor.send({ type: 'AUDIT' });
+    await until(() => recorded.length === 1);
+    expect(recorded).toEqual(['saved']);
   });
 
   it('uses scoped Layer services while the caller-owned runtime is alive', async () => {
@@ -688,11 +754,14 @@ describe('@xstate/effect', () => {
     actor.send({ type: 'FAIL' });
     await until(() => actor.getSnapshot().value === 'failed');
 
-    expect(received).toEqual(failure);
+    expect(received).toBeInstanceOf(EffectFailure);
+    expect(
+      Cause.squash((received as EffectFailure<typeof failure>).cause)
+    ).toEqual(failure);
   });
 
   it('invokes an Effect actor and routes success to onDone', async () => {
-    const logic = fromEffect(Effect.succeed('ok'));
+    const logic = createEffectLogic(Effect.succeed('ok'));
     const machine = createMachine({
       initial: 'pending',
       states: {
@@ -719,7 +788,9 @@ describe('@xstate/effect', () => {
     const directEffect = Object.assign(Effect.succeed('direct'), {
       effect: Effect.succeed('nested')
     });
-    const actor = await runScoped(createEffectActor(fromEffect(directEffect)));
+    const actor = await runScoped(
+      createEffectActor(createEffectLogic(directEffect))
+    );
     await until(() => actor.getSnapshot().status === 'done');
 
     expect(actor.getSnapshot().output).toBe('direct');
@@ -727,7 +798,7 @@ describe('@xstate/effect', () => {
 
   it('routes typed Effect failures to onError', async () => {
     const failure = { code: 'NOT_FOUND' as const };
-    const logic = fromEffect(Effect.fail(failure));
+    const logic = createEffectLogic(Effect.fail(failure));
     const machine = createMachine({
       initial: 'pending',
       states: {
@@ -747,12 +818,15 @@ describe('@xstate/effect', () => {
     const actor = await runScoped(createEffectActor(machine));
     await until(() => actor.getSnapshot().value === 'failed');
 
-    expect(actor.getSnapshot().context).toEqual({ error: failure });
+    expect(actor.getSnapshot().context.error).toBeInstanceOf(EffectFailure);
+    expect(Cause.squash(actor.getSnapshot().context.error.cause)).toEqual(
+      failure
+    );
   });
 
   it('preserves typed Effect errors through registered v6 actors', () => {
     const failure = { code: 'NOT_FOUND' as const };
-    const request = fromEffect(Effect.fail(failure));
+    const request = createEffectLogic(Effect.fail(failure));
     const effectSetup = setupEffect({ actors: { request } });
     const machine = effectSetup.createMachine({
       initial: 'pending',
@@ -761,7 +835,9 @@ describe('@xstate/effect', () => {
           invoke: {
             src: 'request',
             onError: ({ event }) => {
-              const code: 'NOT_FOUND' = event.error.code;
+              const code: 'NOT_FOUND' = Option.getOrThrow(
+                Cause.findErrorOption(event.error.cause)
+              ).code;
               // @ts-expect-error -- the Effect failure is discriminated
               const other: 'OTHER' = code;
               void other;
@@ -778,7 +854,7 @@ describe('@xstate/effect', () => {
 
   it('collects requirements from registered Effect actors', () => {
     const Service = Context.Service<{ value: number }>('Service');
-    const logic = fromEffect(
+    const logic = createEffectLogic(
       Service.use((service) => Effect.succeed(service.value))
     );
     const runWithoutService = () => {
@@ -803,7 +879,7 @@ describe('@xstate/effect', () => {
   });
 
   it('rejects running Effect logic through ordinary createActor', () => {
-    const actor = createActor(fromEffect(Effect.succeed('ok')));
+    const actor = createActor(createEffectLogic(Effect.succeed('ok')));
     actor.subscribe({ error: () => {} });
     actor.start();
 
@@ -812,15 +888,15 @@ describe('@xstate/effect', () => {
 
   it('exposes the latest item from an Effect stream and completes', async () => {
     const actor = await runScoped(
-      createEffectActor(fromEffectStream(Stream.make(1, 2, 3)))
+      createEffectActor(createEffectStreamLogic(Stream.make(1, 2, 3)))
     );
     await until(() => actor.getSnapshot().status === 'done');
 
     expect(actor.getSnapshot().context).toBe(3);
   });
 
-  it('infers stream input from the fromEffectStream config form', async () => {
-    const logic = fromEffectStream({
+  it('infers stream input from the createEffectStreamLogic config form', async () => {
+    const logic = createEffectStreamLogic({
       schemas: { input: Schema.Struct({ n: Schema.Number }) },
       stream: ({ input }) => {
         input satisfies { readonly n: number };
@@ -837,7 +913,7 @@ describe('@xstate/effect', () => {
   });
 
   it('relays a configured Effect event stream to its parent', async () => {
-    const relay = fromEffectEventStream({
+    const relay = createEffectEventStreamLogic({
       schemas: { input: Schema.Struct({ n: Schema.Number }) },
       stream: ({ input }) => {
         input satisfies { readonly n: number };

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { assert } from 'vitest';
 import {
   createMachine,
   createActor,
@@ -7,6 +8,7 @@ import {
   transition
 } from '../src/index.ts';
 import { trackEntries } from './utils.ts';
+import { restoreActor } from '../src/persist/index.ts';
 
 describe('final states', () => {
   it('status of a machine with a root state being final should be done', () => {
@@ -30,7 +32,7 @@ describe('final states', () => {
         [
           {
             "output": undefined,
-            "stateId": "(machine)",
+            "stateId": "",
             "type": "xstate.done.state",
           },
         ],
@@ -400,9 +402,7 @@ describe('final states', () => {
 
     expect(persistedSnapshot.output).toBe('persisted output');
 
-    const restoredActorRef = createActor(machine, {
-      snapshot: persistedSnapshot
-    }).start();
+    const restoredActorRef = restoreActor(machine, persistedSnapshot).start();
 
     expect(restoredActorRef.getSnapshot().output).toBe('persisted output');
   });
@@ -834,7 +834,7 @@ describe('final states', () => {
             "output": {
               "a": undefined,
             },
-            "stateId": "(machine)",
+            "stateId": "",
             "type": "xstate.done.state",
           },
         ],
@@ -870,7 +870,7 @@ describe('final states', () => {
             "output": {
               "a": undefined,
             },
-            "stateId": "(machine)",
+            "stateId": "",
             "type": "xstate.done.state",
           },
         ],
@@ -913,7 +913,7 @@ describe('final states', () => {
                 "b": undefined,
               },
             },
-            "stateId": "(machine)",
+            "stateId": "",
             "type": "xstate.done.state",
           },
         ],
@@ -958,7 +958,7 @@ describe('final states', () => {
                 "c": undefined,
               },
             },
-            "stateId": "(machine).a",
+            "stateId": "a",
             "type": "xstate.done.state",
           },
         ],
@@ -1428,7 +1428,9 @@ describe('final states', () => {
 
     const actorRef = createActor(parent).start();
 
-    actorRef.getSnapshot().children.child.send({
+    const invokedChild = actorRef.getSnapshot().children.child;
+    assert.isDefined(invokedChild);
+    invokedChild.send({
       type: 'CANCEL'
     });
 
@@ -1471,7 +1473,9 @@ describe('final states', () => {
 
     const actorRef = createActor(parent).start();
 
-    actorRef.getSnapshot().children.child.send({
+    const invokedChild = actorRef.getSnapshot().children.child;
+    assert.isDefined(invokedChild);
+    invokedChild.send({
       type: 'CANCEL'
     });
 
@@ -1517,7 +1521,9 @@ describe('final states', () => {
 
     const actorRef = createActor(parent).start();
 
-    actorRef.getSnapshot().children.child.send({
+    const invokedChild = actorRef.getSnapshot().children.child;
+    assert.isDefined(invokedChild);
+    invokedChild.send({
       type: 'CANCEL'
     });
 
