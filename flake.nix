@@ -9,8 +9,6 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # The release manifest (`nix/release-hashes.json`) rides in this input, so
-    # Dependabot's bump of it is also the version and digest bump.
     comment-checker = {
       url = "github:systemfsoftware/comment-checker";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -74,9 +72,7 @@
             pnpm = pkgs.pnpm_12;
             files.".deps" = producerTarballs;
           }) [ "pnpm-store" ];
-          unwrapped = pkgs.callPackage ./nix/comment-checker.nix {
-            hashes = "${comment-checker}/nix/release-hashes.json";
-          };
+          unwrapped = comment-checker.packages.${system}.comment-checker;
           sandbox-source = pkgs.applyPatches {
             name = "sandbox-source";
             src = "${pnpm-release-management-sandbox}/nix/sandbox";
