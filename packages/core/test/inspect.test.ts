@@ -9,6 +9,7 @@ import {
   isMachineSnapshot
 } from '../src';
 import { XSTATE_INIT } from '../src/constants';
+import { restoreActor } from '../src/persist/index.ts';
 // import removed: action events are unified under '@xstate.transition'
 
 function simplifyEvents(
@@ -115,17 +116,15 @@ describe('inspect', () => {
     original.stop();
     const events: InspectionEvent[] = [];
 
-    const restoredA = createActor(machine, {
-      snapshot,
+    const restoredA = restoreActor(machine, snapshot, {
       inspect: (event) => events.push(event)
     });
-    const restoredB = createActor(machine, {
-      snapshot,
+    const restoredB = restoreActor(machine, snapshot, {
       inspect: (event) => events.push(event)
     });
 
-    expect(restoredA.getSnapshot().children.child.sessionId).not.toBe(
-      restoredB.getSnapshot().children.child.sessionId
+    expect(restoredA.getSnapshot().children.child!.sessionId).not.toBe(
+      restoredB.getSnapshot().children.child!.sessionId
     );
     expect(
       new Set(
@@ -172,7 +171,7 @@ describe('inspect', () => {
       (ev) => ev.type === '@xstate.transition'
     ) as any[];
     expect(simplified.map((e) => e.event.type)).toEqual([
-      '@xstate.init',
+      'xstate.init',
       'NEXT',
       'NEXT'
     ]);
@@ -342,7 +341,7 @@ describe('inspect', () => {
     const actor = createActor(machine, {
       inspect: (event) => events.push(event)
     });
-    const parent = actor.getSnapshot().children.parent;
+    const parent = actor.getSnapshot().children.parent!;
     const child = parent.getSnapshot().children.child;
 
     actor.start();
@@ -601,7 +600,9 @@ describe('inspect', () => {
 
   it('clears a pre-start event source before inspecting initialization', () => {
     const actor = createActor(createMachine({}));
-    const sender = createActor(createMachine({}), { parent: actor });
+    const sender = actor.system.createActorRef(createMachine({}), {
+      parent: actor
+    });
     const events: InspectionEvent[] = [];
 
     actor.system._relay(sender, actor, { type: 'QUEUED' });

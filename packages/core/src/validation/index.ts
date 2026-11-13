@@ -8,7 +8,7 @@ import type {
   AnyActorLogic,
   AnyMachineSnapshot,
   AnyStateMachine,
-  ExecutableActionObject
+  ExecutableEffect
 } from '../types.ts';
 import { matchesEventDescriptor } from '../utils.ts';
 
@@ -149,6 +149,20 @@ export function standardSchemaValidator(
     return undefined;
   };
 
+  // Event schemas describe the payload, so `type` is removed before
+  // validation. A schema that reports an issue at `type` declares the key
+  // itself (e.g. one reused from a discriminated union), so it is checked
+  // against the complete event instead.
+  const checkEventTarget = (
+    target: Omit<ValidationTarget, 'value'>,
+    event: { type: string; [key: string]: unknown }
+  ) => {
+    const error = checkTarget({ ...target, value: getPayload(event) });
+    return error?.issues?.some(isTypeIssue)
+      ? checkTarget({ ...target, value: event })
+      : error;
+  };
+
   const checkEvent = (
     logic: AnyActorLogic,
     event: { type: string; [key: string]: unknown },
@@ -166,19 +180,21 @@ export function standardSchemaValidator(
     if (!eventSchemas && !internalEventSchemas) {
       return undefined;
     }
-    return checkTarget({
-      schema,
-      value: getPayload(event),
-      boundary: 'event',
-      logicId: getLogicId(logic),
-      eventType: event.type,
-      eventOrigin
-    });
+    return checkEventTarget(
+      {
+        schema,
+        boundary: 'event',
+        logicId: getLogicId(logic),
+        eventType: event.type,
+        eventOrigin
+      },
+      event
+    );
   };
 
   const checkEmitted = (
     logic: AnyActorLogic,
-    effects: readonly ExecutableActionObject[]
+    effects: readonly ExecutableEffect[]
   ) => {
     const schemas = getSchemas(logic);
     if (!schemas?.emitted) {
@@ -188,13 +204,15 @@ export function standardSchemaValidator(
       if (effect.kind !== 'emit') {
         continue;
       }
-      const error = checkTarget({
-        schema: schemas.emitted[effect.event.type],
-        value: getPayload(effect.event),
-        boundary: 'emitted',
-        logicId: getLogicId(logic),
-        eventType: effect.event.type
-      });
+      const error = checkEventTarget(
+        {
+          schema: schemas.emitted[effect.event.type],
+          boundary: 'emitted',
+          logicId: getLogicId(logic),
+          eventType: effect.event.type
+        },
+        effect.event
+      );
       if (error) {
         return error;
       }
@@ -262,7 +280,7 @@ export function standardSchemaValidator(
       }
     }
 
-    for (const timer of Object.values(snapshot.timers)) {
+    for (const timer of snapshot.timers) {
       if (timer.type === '@xstate.raise') {
         error = checkEvent(machine, timer.event, 'raised');
         if (error) {
@@ -381,6 +399,11 @@ function getPayload(event: {
 }): Record<string, unknown> {
   const { type: _, ...payload } = event;
   return payload;
+}
+
+function isTypeIssue(issue: StandardSchemaV1.Issue): boolean {
+  const segment = issue.path?.[0];
+  return (typeof segment === 'object' ? segment.key : segment) === 'type';
 }
 
 function getMessage(options: ActorValidationErrorOptions): string {

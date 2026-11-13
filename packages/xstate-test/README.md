@@ -15,7 +15,7 @@ Two functions generate the sequences:
   minimal counterexample.
 
 Both take the same options, return the same coverage object, and throw the
-same `ModelTestFailure`.
+same `ModelTestFailureError`.
 [`examples/property-testing-cart`](../../examples/property-testing-cart) is the
 complete worked example.
 
@@ -30,7 +30,7 @@ complete worked example.
 ## Installation
 
 ```bash
-pnpm add -D @xstate/test fast-check xstate
+pnpm add -D @xstate/test@beta fast-check xstate@beta
 ```
 
 `xstate` and `fast-check` are required peer dependencies. The other peer
@@ -236,7 +236,7 @@ the cart to a state that is already reachable, so the default `'shortest'`
 generator never takes it.
 
 When the cart and the machine disagree, both functions throw a
-`ModelTestFailure` that shows the failing sequence step by step. See
+`ModelTestFailureError` that shows the failing sequence step by step. See
 [What a failure looks like](../../examples/property-testing-cart#what-a-failure-looks-like)
 in the cart example.
 
@@ -503,6 +503,21 @@ await propertyTest(counterMachine, {
     }),
     RESET: Schema.Struct({})
   })
+});
+```
+
+The Effect Schema conversion generates the schema's type (decoded) side. It
+supports literals, enums, unions, primitives, arrays, tuples (with optional and
+rest elements), structs (with optional properties), records with string keys,
+and refinements such as `isInt`, `isBetween`, `isMinLength`, and `isPattern`.
+Every check also filters the generated values. Other AST nodes, such as
+`Schema.Date` or recursive schemas, throw an error naming the node. Pass
+`override` to supply an arbitrary for them:
+
+```ts
+fromEffectSchema(Schema.Struct({ at: Schema.Date }), {
+  override: (ast) =>
+    ast._tag === 'Declaration' ? fc.date({ noInvalidDate: true }) : undefined
 });
 ```
 
@@ -984,17 +999,17 @@ them.
 
 ### Replay a failure
 
-A `ModelTestFailure` carries a `fixture`: a JSON-safe record of the sequence
+A `ModelTestFailureError` carries a `fixture`: a JSON-safe record of the sequence
 that failed. Save it, and replay it with `replayTest()`:
 
 ```ts
-import { ModelTestFailure, replayTest, type TestFixture } from '@xstate/test';
+import { ModelTestFailureError, replayTest, type TestFixture } from '@xstate/test';
 import fixture from './cart-failure.json';
 
 test('regression: removing an item', async () => {
   await expect(
     replayTest(cartMachine, fixture as TestFixture, { sut: cartSut })
-  ).rejects.toBeInstanceOf(ModelTestFailure);
+  ).rejects.toBeInstanceOf(ModelTestFailureError);
 });
 ```
 
@@ -1071,7 +1086,7 @@ Add `.xstate-test/` to `.gitignore` to keep failures local, or commit it so
 CI replays the failures found on developer machines first. A run that
 starts from a `start` snapshot is not saved.
 
-`createFailureDatabase(options)` returns the store `failures` creates. Any
+`createTestFailureStore(options)` returns the store `failures` creates. Any
 object with `load(key)`, `onFailure(fixture, key, failure)`, and optionally
 `remove(stored, key)` works as a store, such as one backed by a database;
 this is the `TestFailureStore` interface.
@@ -1083,7 +1098,7 @@ that preserves the covered transitions and state nodes:
 
 ```ts
 import { writeFile } from 'node:fs/promises';
-import { generateTestSuite, serializeTestSuite } from '@xstate/test';
+import { generateTestSuite, testSuiteToJSON } from '@xstate/test';
 
 const suite = await generateTestSuite(cartMachine, {
   seed: 1,
@@ -1091,7 +1106,7 @@ const suite = await generateTestSuite(cartMachine, {
   events,
   sut: cartSut
 });
-await writeFile('cart.suite.json', serializeTestSuite(suite));
+await writeFile('cart.suite.json', testSuiteToJSON(suite));
 ```
 
 Replaying generates nothing, so the suite runs the same way every time:
@@ -1221,6 +1236,8 @@ events: {
 `frontiers` starts runs from paths that reach a state of interest. The prefix
 is replayed as-is, and shrinking only shortens the generated continuation:
 
+<!-- graph frontier samples from packages/core/src/graph/types.ts and the cart event schema above -->
+
 ```ts
 import { getShortestPaths } from 'xstate/graph';
 
@@ -1228,6 +1245,10 @@ await propertyTest(cartMachine, {
   events,
   frontiers: {
     paths: getShortestPaths(cartMachine, {
+      events: {
+        ADD: [{ sku: 'apple' }],
+        REMOVE: [{ sku: 'apple' }]
+      },
       toState: (snapshot) => Object.keys(snapshot.context.items).length > 0,
       stopWhen: (snapshot) =>
         Object.values(snapshot.context.items).some((qty) => qty >= 2)
@@ -1316,7 +1337,7 @@ The fast-check-backed entry points and helpers:
 | `testPaths(source, options?)` | Runs generated paths. Resolves with `{ coverage, results }`. |
 | `generateTestSuite(source, options)` | Records an offline suite from a passing campaign. |
 | `pick(select, toPayload?)` | An event case that picks its payload from the current snapshot, with a fast-check index. |
-| `createFailureDatabase(options?)` | The file-system store behind the `failures` option. |
+| `createTestFailureStore(options?)` | The file-system store behind the `failures` option. |
 | `fastCheckAdapter(options?)` | The fast-check `TestAdapter`. |
 | `extractReplayPath(counterexample)` | Reads `replayPath` from a raw `fc.commands()` counterexample. |
 | `eventsFromSchemas(machine, options?)` | Derives the `events` map from `schemas.events`. |
@@ -1334,13 +1355,13 @@ Replay, reporting, suites, and linearizability:
 | Export | Description |
 | --- | --- |
 | `replayTest(source, fixture, options)` | Replays a `TestFixture`. |
-| `ModelTestFailure`, `ReplayNotReproducedError` | Error classes. |
+| `ModelTestFailureError`, `ReplayNotReproducedError` | Error classes. |
 | `serializeTestTrace(trace)` | Renders a trace as JSON-safe data. |
 | `formatTestCoverage`, `formatTestCoverageJUnit`, `formatTestCoverageHTML`, `testCoverageToJSON` | Coverage reports. |
 | `formatTestStatistics(coverage)` | The event-case and label distribution `statistics: true` prints. |
 | `TestCampaignError` | Thrown when a `sometimes` property or a `reachable` target is never satisfied. |
 | `assertTestCoverage(coverage, thresholds)` | Throws when coverage is below thresholds. |
-| `replayTestSuite`, `replayTestSuiteFixture`, `describeTestSuite`, `serializeTestSuite`, `parseTestSuite` | Offline suites. |
+| `replayTestSuite`, `replayTestSuiteFixture`, `describeTestSuite`, `testSuiteToJSON`, `parseTestSuite` | Offline suites. |
 | `checkLinearizable(history, model, options?)` | Linearizability check. |
 | `runParallelPropertyCommands(machine, options)` | Concurrent branches checked for linearizability. |
 
@@ -1484,7 +1505,7 @@ options to fast-check:
 | `checkpoint(label?)` | Handles a `checkpoint` command. |
 | `stop()` | Handles a `stop` command. |
 | `check()` | Runs after every stable step, after the comparison. Throws to fail the step with `SUT check failed after N steps`. |
-| `dispose({ passed, failure })` | Tears the session down at the end of the run. `failure` is the run's `ModelTestFailure`, when an oracle failed. |
+| `dispose({ passed, failure })` | Tears the session down at the end of the run. `failure` is the run's `ModelTestFailureError`, when an oracle failed. |
 
 `reference` has the same structure: `create()` returns
 `{ transition(event), read(), stop?, dispose? }`, and `projectModel` is
@@ -1544,7 +1565,7 @@ Add requirement ids with `meta.requirements` (a string or an array) on state
 nodes and transitions. A requirement is covered when any state node or
 transition that declares it is covered.
 
-### `ModelTestFailure`
+### `ModelTestFailureError`
 
 | Field | Description |
 | --- | --- |
@@ -1588,7 +1609,7 @@ interface TestFixture {
 ```
 
 Errors in commands and outcomes are recorded as
-`{ xstate$$error: true, name, message }`, since `JSON.stringify()` turns an
+`{ "@error": name, message }`, since `JSON.stringify()` turns an
 `Error` into `{}`. `replayTest()` turns them back into `Error` objects.
 
 A `TestCommand` is `{ type: 'event', event, phase, origin, caseId? }`,
@@ -1760,7 +1781,7 @@ Other changes:
 | `createTestMachine(config)` | `createMachine(config)` |
 | `path.testSync(params)` | `await testPaths(machine, { paths: [path], sut })` |
 | `model.testState(state, params)`, `model.testTransition(step, params)` | The `states` option, checked on every stable step. |
-| `TestPathResult`, `TestStepResult` | `TestPathRunResult`: `{ path, passed, error }`. Use `ModelTestFailure.trace` for step detail. |
+| `TestPathResult`, `TestStepResult` | `TestPathRunResult`: `{ path, passed, error }`. Use `ModelTestFailureError.trace` for step detail. |
 | `meta.test(testContext, state)` | `meta.test(session, snapshot)`: the first argument is the SUT session. |
 
 ### From 0.x
@@ -1808,6 +1829,6 @@ await testPaths(machine, {
 | Shrinking | Yes, with `propertyTest()` | Yes | No | No |
 | Oracles | SUT comparison, invariants, temporal properties, state assertions, reference | Assertions in each command | Assertions in each test | State assertions |
 | Coverage | States, transitions, pairs, requirements, event cases | None | None | State nodes |
-| Replay | Portable JSON fixtures, a failure database replayed first, and fast-check seeds | Seeds and paths | Traces | None |
+| Replay | Portable JSON fixtures, a failure store replayed first, and fast-check seeds | Seeds and paths | Traces | None |
 | Invoked actors and delays | `mode: 'executed'` with stubbed outcomes and a simulated clock | Hand-written | Real services and `page.clock` | Not modeled |
 | UI | `@xstate/test/playwright` | Manual | Native | Manual executors |

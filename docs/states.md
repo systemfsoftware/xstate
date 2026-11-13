@@ -27,6 +27,10 @@ const machine = createMachine({
 
 See [machine configuration](configuration.md) for every property a state node accepts.
 
+## State keys
+
+A `.` in a state key separates path segments, so a key cannot contain an unescaped `.`; creating such a machine throws. To use a literal dot, escape it: `'foo\\.bar'`. The escaped form is the key everywhere: in state values (`snapshot.value === 'foo\\.bar'`), implicit ids (`#foo\\.bar`), `matches('foo\\.bar')`, targets and persisted snapshots. It never collides with a nested `foo` → `bar` (`'foo.bar'`).
+
 ## State snapshots
 
 `actor.getSnapshot()` returns a machine snapshot: an immutable description of the machine at one point in time.
@@ -42,7 +46,7 @@ See [machine configuration](configuration.md) for every property a state node ac
 | `tags` | `Set<string>` | Tags of all active state nodes. |
 | `nodes` | `StateNode[]` | Active state nodes represented by `value`. |
 | `historyValue` | `object` | Remembered values for [history states](history-states.md). |
-| `timers` | `Record<string, LogicalTimer>` | Pending [delayed](delays.md) and [timeout](timeouts.md) timers. |
+| `timers` | `readonly LogicalTimer[]` | Pending [delayed](delays.md) and [timeout](timeouts.md) timers. |
 | `machine` | `StateMachine` | The machine that produced this snapshot. |
 
 | Method | Returns | Description |
@@ -81,7 +85,9 @@ snapshot.matches({ player: { playback: 'playing' } }); // true
 snapshot.can({ type: 'submit' });
 ```
 
-Because v6 conditions live inside transition functions, `can(...)` calls those functions to see whether they return a transition. It does not execute their effects: enqueued actions, raised events and sent events are discarded. Keep transition functions free of side effects outside `enq(...)` so that `can(...)` stays safe to call during rendering.
+Because v6 conditions live inside transition functions, `can(...)` calls those functions to see whether they return a transition or call `enq`. It does not execute their effects: enqueued actions, raised events and sent events are discarded. Keep transition functions free of side effects outside `enq(...)` so that `can(...)` stays safe to call during rendering.
+
+`can(...)` returns `false` on a `done`, `error`, or `stopped` snapshot without evaluating transitions. On an active snapshot it propagates errors thrown by guards, transition functions, or context mappers. This dry run does not execute state `onError` recovery or change the actor; sending the event runs the normal error-handling path. Handle a thrown error at the call site when using incomplete or fallible guards during rendering.
 
 A checkout button can be disabled with `can({ type: 'submit' })` instead of duplicating the machine's rules.
 
@@ -128,12 +134,19 @@ State nodes without `meta` are omitted. Metadata must match `schemas.meta`.
 
 ## TypeScript
 
-Literal state keys are inferred from the machine configuration, so `matches(...)` rejects unknown values. Use `SnapshotFrom<typeof machine>` for the snapshot type.
+Literal state keys are inferred from the machine configuration. `matches(...)` narrows known state values and their [typestates](typestates.md), and rejects unknown literal state values at compile time. Use `SnapshotFrom<typeof machine>` for the snapshot type.
 
 ```ts
 import type { SnapshotFrom } from 'xstate';
 
 type UploadSnapshot = SnapshotFrom<typeof machine>;
+```
+
+A child state name known only at runtime, typed `string`, is accepted at its own position. The keys around it are still checked:
+
+```ts
+const step: string = readStepFromUrl();
+snapshot.matches({ checkout: step }); // `checkout` must still be a state
 ```
 
 ## States cheatsheet

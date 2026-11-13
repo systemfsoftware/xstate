@@ -1,6 +1,6 @@
 // Packed-package consumer check.
 //
-// Packs `xstate` and `@xstate/react` with `pnpm pack`, unpacks the real
+// Packs `xstate`, `@xstate/react` and `@xstate/effect` with `pnpm pack`, unpacks the real
 // tarballs into a fresh consumer project (no workspace links), then:
 //   - verifies every file referenced by `main`/`module`/`types`/`exports`
 //     is present in the tarball,
@@ -31,20 +31,28 @@ import {
   writeFileSync
 } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const rootRequire = createRequire(join(root, 'package.json'));
-const tsManifest = rootRequire('typescript/package.json');
-const tsc = join(
-  dirname(rootRequire.resolve('typescript/package.json')),
-  tsManifest.bin.tsc ?? tsManifest.bin.tsc6
-);
+const ts = rootRequire('typescript');
+const compilers = ['typescript', '@typescript/native'].map((name) => {
+  const manifest = rootRequire(`${name}/package.json`);
+  return {
+    version: rootRequire(name).version ?? manifest.version,
+    path: join(
+      dirname(rootRequire.resolve(`${name}/package.json`)),
+      manifest.bin.tsc ?? manifest.bin.tsc6
+    )
+  };
+});
 
 const PACKAGES = [
   { name: 'xstate', dir: 'core' },
-  { name: '@xstate/react', dir: 'xstate-react' }
+  { name: '@xstate/react', dir: 'xstate-react' },
+  { name: '@xstate/effect', dir: 'xstate-effect' }
 ];
 
 const results = [];
@@ -81,7 +89,7 @@ for (const { dir } of PACKAGES) {
   }
 }
 
-const cache = join(root, 'node_modules', '.cache');
+const cache = tmpdir();
 mkdirSync(cache, { recursive: true });
 const work = mkdtempSync(join(cache, 'xstate-packed-'));
 const tarballs = join(work, 'tarballs');
@@ -109,6 +117,36 @@ function exportTargets(value) {
 }
 
 try {
+  step('source README links resolve to tracked files', () => {
+    const tracked = new Set(run('git', ['ls-files', '-z'], root).split('\0'));
+    const file = 'packages/core/README.md';
+    const source = readFileSync(join(root, file), 'utf8');
+    for (const [, link] of source.matchAll(/(?:\]\(|href=["'])([^\s)"']+)/g)) {
+      const github = link.match(
+        /^https:\/\/github\.com\/statelyai\/xstate\/(blob|tree)\/next\/([^?#]+)/
+      );
+      let target;
+      if (github) {
+        target = decodeURIComponent(github[2]);
+        if (
+          github[1] === 'tree' &&
+          [...tracked].some((path) => path.startsWith(`${target}/`))
+        ) {
+          continue;
+        }
+      } else {
+        if (/^(?:[a-z][a-z\d+.-]*:|#|\/)/i.test(link)) continue;
+        target = relative(
+          root,
+          join(root, dirname(file), link.split(/[?#]/)[0])
+        );
+      }
+      if (!tracked.has(target)) {
+        throw new Error(`${file}: documentation link is not tracked: ${link}`);
+      }
+    }
+  });
+
   step('pack + unpack tarballs', () => {
     for (const { name, dir } of PACKAGES) {
       const packageDir = join(root, 'packages', dir);
@@ -134,6 +172,7 @@ try {
         ...Object.keys(manifest.peerDependencies ?? {})
       ]) {
         if (PACKAGES.some((pkg) => pkg.name === dependency)) continue;
+        if (manifest.peerDependenciesMeta?.[dependency]?.optional) continue;
         linkDependency(dependency, packageDir);
       }
     }
@@ -164,6 +203,48 @@ try {
     }
     if (missing.length) throw new Error(`Missing:\n  ${missing.join('\n  ')}`);
   });
+
+  step(
+    'tarball contains version-matched documentation and working local links',
+    () => {
+      const packageDir = join(nodeModules, 'xstate');
+      const { version } = JSON.parse(
+        readFileSync(join(packageDir, 'package.json'), 'utf8')
+      );
+      const { pages } = JSON.parse(
+        readFileSync(join(root, 'docs/meta.json'), 'utf8')
+      );
+      const index = readFileSync(join(packageDir, 'docs/index.md'), 'utf8');
+      if (!index.startsWith(`# XState ${version}\n`)) {
+        throw new Error(
+          'Bundled documentation version does not match the package'
+        );
+      }
+      for (const page of pages) {
+        if (!index.includes(`](${page}.md)`)) {
+          throw new Error(`Bundled documentation index is missing ${page}`);
+        }
+      }
+      for (const file of [
+        'README.md',
+        'docs/index.md',
+        ...pages.map((page) => `docs/${page}.md`)
+      ]) {
+        const source = readFileSync(join(packageDir, file), 'utf8');
+        for (const [, link] of source.matchAll(
+          /(?:\]\(|href=["'])([^\s)"']+)/g
+        )) {
+          if (/^(?:[a-z][a-z\d+.-]*:|#|\/)/i.test(link)) continue;
+          const target = join(packageDir, dirname(file), link.split(/[?#]/)[0]);
+          if (!existsSync(target)) {
+            throw new Error(
+              `${file}: local documentation link is missing: ${link}`
+            );
+          }
+        }
+      }
+    }
+  );
 
   step('no process.env.NODE_ENV in production dist', () => {
     const offenders = [];
@@ -274,8 +355,8 @@ export const userActor = createActor(userMachine);
 const machine = createMachine({
   initial: 'inactive',
   states: {
-    inactive: { on: { toggle: 'active' } },
-    active: { on: { toggle: 'inactive' } }
+    inactive: { on: { toggle: { target: 'active' } } },
+    active: { on: { toggle: { target: 'inactive' } } }
   }
 });
 const actor = createActor(machine).start();
@@ -294,8 +375,40 @@ console.log('ok');
     JSON.stringify({ name: 'packed-consumer', private: true, type: 'module' })
   );
   writeFileSync(join(consumer, 'machine.ts'), machineSource);
+  // Inferred setupEffect() exports must name only public types (#5832).
+  writeFileSync(
+    join(consumer, 'effect.ts'),
+    `import { Effect, Schema } from 'effect';
+import { createEffectActor, sendAndAwait, setupEffect } from '@xstate/effect';
+
+export { sendAndAwait as compatibilitySendAndAwait } from '@xstate/effect/test';
+
+export const effectMachine = setupEffect({
+  schemas: { events: { PING: Schema.Struct({}) } },
+  actions: { audit: (_args) => Effect.void }
+}).createMachine({});
+
+export const acknowledge = Effect.gen(function* () {
+  const actor = yield* createEffectActor(effectMachine);
+  // @ts-expect-error Only declared events are accepted by the packed signature.
+  sendAndAwait(actor, { type: 'UNKNOWN' });
+  return yield* sendAndAwait(actor, { type: 'PING' });
+});
+
+export const effectSetup = setupEffect({
+  actions: {
+    audit: (args: { context: { label: string } }) =>
+      Effect.log(args.context.label)
+  }
+});
+`
+  );
   // Same source compiled as CommonJS under node16 to exercise `require` types.
   writeFileSync(join(consumer, 'machine.cts'), machineSource);
+  const readme = readFileSync(join(nodeModules, 'xstate/README.md'), 'utf8');
+  const readmeExample = readme.match(/```ts\n([\s\S]*?)\n```/)?.[1];
+  if (!readmeExample) throw new Error('README quick start example is missing');
+  writeFileSync(join(consumer, 'readme.ts'), readmeExample);
   writeFileSync(
     join(consumer, 'react.tsx'),
     `import { useActorRef, useSelector } from '@xstate/react';
@@ -310,7 +423,30 @@ export function useUserState() {
     join(consumer, 'esm.mjs'),
     smoke(`import { createMachine, createActor } from 'xstate';
 import { createAsyncLogic } from 'xstate/actors';
-import { useActorRef } from '@xstate/react';`)
+import { useActorRef } from '@xstate/react';
+import { Effect } from 'effect';
+import { createEffectActor, sendAndAwait, setupEffect } from '@xstate/effect';
+import { sendAndAwait as compatibilitySendAndAwait } from '@xstate/effect/test';
+if (compatibilitySendAndAwait !== sendAndAwait) {
+  throw new Error('@xstate/effect/test: sendAndAwait is not the main export');
+}
+if (typeof setupEffect !== 'function' || typeof createEffectActor !== 'function' || typeof sendAndAwait !== 'function') {
+  throw new Error('@xstate/effect: setupEffect, createEffectActor or sendAndAwait missing');
+}
+const effectMachine = setupEffect({}).createMachine({
+  context: { count: 0 },
+  on: { PING: ({ context }) => ({ context: { count: context.count + 1 } }) }
+});
+await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const effectActor = yield* createEffectActor(effectMachine);
+  const snapshot = yield* sendAndAwait(effectActor, { type: 'PING' });
+  if (snapshot.context.count !== 1) {
+    throw new Error('Expected packed acknowledgment snapshot count 1');
+  }
+  if (effectActor.getSnapshot().context.count !== 1) {
+    throw new Error('Expected packed Effect actor count 1 after acknowledgment');
+  }
+})));`)
   );
   writeFileSync(
     join(consumer, 'cjs.cjs'),
@@ -323,45 +459,137 @@ const { useActorRef } = require('@xstate/react');`)
     bundler: {
       module: 'ESNext',
       moduleResolution: 'bundler',
-      files: ['machine.ts', 'react.tsx']
+      files: ['machine.ts', 'effect.ts', 'react.tsx', 'readme.ts']
     },
     node16: {
       module: 'node16',
       moduleResolution: 'node16',
-      files: ['machine.ts', 'machine.cts', 'react.tsx']
+      files: [
+        'machine.ts',
+        'machine.cts',
+        'effect.ts',
+        'react.tsx',
+        'readme.ts'
+      ]
+    },
+    'bundler-exact': {
+      module: 'ESNext',
+      moduleResolution: 'bundler',
+      exactOptionalPropertyTypes: true,
+      files: ['machine.ts', 'effect.ts', 'react.tsx', 'readme.ts']
+    },
+    'node16-exact': {
+      module: 'node16',
+      moduleResolution: 'node16',
+      exactOptionalPropertyTypes: true,
+      files: [
+        'machine.ts',
+        'machine.cts',
+        'effect.ts',
+        'react.tsx',
+        'readme.ts'
+      ]
     }
   };
-  for (const [label, { files, ...options }] of Object.entries(configs)) {
-    step(`tsc declaration emit (moduleResolution: ${label})`, () => {
-      const configPath = join(consumer, `tsconfig.${label}.json`);
-      writeFileSync(
-        configPath,
-        JSON.stringify({
-          compilerOptions: {
-            ...options,
-            target: 'ES2022',
-            strict: true,
-            jsx: 'react-jsx',
-            declaration: true,
-            emitDeclarationOnly: true,
-            skipLibCheck: false,
-            types: [],
-            lib: ['ES2022', 'DOM'],
-            outDir: `out-${label}`
-          },
-          files
-        })
+  for (const compiler of compilers) {
+    for (const [label, { files, ...options }] of Object.entries(configs)) {
+      step(
+        `TypeScript ${compiler.version} declaration emit (moduleResolution: ${label})`,
+        () => {
+          const configPath = join(consumer, `tsconfig.${label}.json`);
+          writeFileSync(
+            configPath,
+            JSON.stringify({
+              compilerOptions: {
+                ...options,
+                target: 'ES2022',
+                strict: true,
+                jsx: 'react-jsx',
+                declaration: true,
+                emitDeclarationOnly: true,
+                skipLibCheck: false,
+                types: [],
+                lib: ['ES2022', 'DOM'],
+                outDir: `out-${label}`
+              },
+              files
+            })
+          );
+          run(
+            process.execPath,
+            [compiler.path, '-p', configPath, '--pretty', 'false'],
+            consumer
+          );
+        }
       );
-      run(
-        process.execPath,
-        [tsc, '-p', configPath, '--pretty', 'false'],
-        consumer
-      );
-    });
+    }
   }
 
+  step('packed agent CLI and version-matched docs', () => {
+    const cli = join(nodeModules, 'xstate/bin/xstate.js');
+    const invoke = (command, ...args) => {
+      const response = JSON.parse(
+        run(process.execPath, [cli, command, ...args, '--json'], consumer)
+      );
+      if (!response.ok) throw new Error(JSON.stringify(response.error));
+      return response;
+    };
+    const docs = invoke('docs');
+    if (
+      docs.result.stability.xstateVersion !== docs.xstateVersion ||
+      !existsSync(docs.result.agentGuide)
+    ) {
+      throw new Error('Packed agent docs must match the installed package.');
+    }
+    const machine = join(consumer, 'agent-machine.json');
+    const events = join(consumer, 'agent-events.json');
+    writeFileSync(
+      machine,
+      JSON.stringify({
+        initial: 'idle',
+        states: {
+          idle: { on: { GO: { target: 'done' } } },
+          done: { type: 'final' }
+        }
+      })
+    );
+    writeFileSync(events, JSON.stringify([{ type: 'GO' }]));
+    invoke('validate', machine);
+    const inspection = invoke('inspect', machine);
+    if (!inspection.result.graph.analysis.transitionTargetsComplete)
+      throw new Error('Static graph was incomplete.');
+    const simulation = invoke('simulate', machine, events);
+    if (
+      simulation.result.trace.at(-1).snapshot.value !== 'done' ||
+      simulation.result.effectsExecuted !== false
+    ) {
+      throw new Error('Packed CLI simulation did not reach its final state.');
+    }
+  });
   step('node esm.mjs', () => run(process.execPath, ['esm.mjs'], consumer));
   step('node cjs.cjs', () => run(process.execPath, ['cjs.cjs'], consumer));
+  step('README quick start runs with the packed package', () => {
+    const source = `${readmeExample}
+if (toggleActor.getSnapshot().value !== 'inactive' || toggleActor.getSnapshot().context.count !== 1) {
+  throw new Error('README quick start produced an unexpected snapshot');
+}
+toggleActor.send({ type: 'TOGGLE' });
+if (toggleActor.getSnapshot().value !== 'active' || toggleActor.getSnapshot().context.count !== 2) {
+  throw new Error('README quick start did not update context on re-entry');
+}
+toggleActor.stop();
+`;
+    writeFileSync(
+      join(consumer, 'readme.mjs'),
+      ts.transpileModule(source, {
+        compilerOptions: {
+          module: ts.ModuleKind.ESNext,
+          target: ts.ScriptTarget.ES2022
+        }
+      }).outputText
+    );
+    run(process.execPath, ['readme.mjs'], consumer);
+  });
 } finally {
   // Set PACKED_CONSUMER_KEEP=1 to inspect the consumer project afterwards.
   if (process.env.PACKED_CONSUMER_KEEP) console.log(`Kept ${work}`);

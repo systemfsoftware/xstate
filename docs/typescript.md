@@ -29,23 +29,31 @@ const machine = setup({
 });
 ```
 
-A declared input schema makes `input` required: `createActor(machine)` is a type error until you pass `{ input }` (or restore a `snapshot`). Framework hooks such as `useActor`, `useActorRef` and `useMachine` inherit the same requirement. `createActorContext` from `@xstate/react` is the exception: `input` stays optional because its options are merged from the context defaults and the `<Provider options>` prop, so a missing input surfaces at runtime as an initialization error instead.
+A declared input schema whose inferred type does not accept `undefined` makes `input` required: `createActor(machine)` is a type error until you pass `{ input }` (or restore a snapshot with `restoreActor(...)`). Framework hooks such as `useActor`, `useActorRef` and `useMachine` inherit the same requirement. `createActorContext` from `@xstate/react` is the exception: `input` stays optional because its options are merged from the context defaults and the `<Provider options>` prop, so a missing input surfaces at runtime as an initialization error instead.
 
 <!-- state-contract typing and declaration emit from packages/core/src/setup.ts and packages/core/test/declarations.test.ts -->
 
 Structural state contracts are checked only when declared. For example,
 `type: 'parallel'` forbids `initial`, while `type: 'compound'` requires one.
 `setup(...)` can supply those defaults, so the machine config may omit them.
-Existing setups that declare only schemas keep their permissive machine-config
-typing. A state-level `schemas.context` is intersected with the root context
+Setups that declare only schemas do not impose these structural checks.
+A state-level `schemas.context` is intersected with the root context
 schema, so it can declare only the fields that state narrows.
 
-Machines created with `setup(...).createMachine(...)` can be exported with
-TypeScript declaration generation enabled, including machines with state-level
-context schemas and function-form transitions. No explicit machine type
-annotation is required.
+XState infers `snapshot.value` and valid `snapshot.matches(...)` patterns
+from nested and parallel states. Match a nested state with an object such as
+`{ b: 'x' }` or a dot path such as `'b.x'`.
+
+You can export machines and state configs with their inferred types, without
+adding explicit type annotations.
 
 For an actor used in one state, `invoke: s.createInvoke({ src, input, onDone })` infers input and completion output from `src`. Keep the helper inline in `s.createMachine(...)` to also infer that state's narrowed context, ancestor context, state input and transition target requirements. The helper works alongside named actor sources. See [typed inline invokes](invoke.md#typed-inline-invokes).
+
+A bare inline `invoke: { src: logic, onDone }` cannot correlate its source with
+the output; with no registered actor sources it has `event.output: unknown`.
+Use `s.createInvoke(...)` or a source registered in `setup({ actors })` when
+reading the output. This is especially important for generated machine code:
+the bare form cannot infer the output type from `src`.
 
 An async function can be used directly as `src`. Declare `schemas.input`, `schemas.output`, and `schemas.error` on the invoke to type the function and its lifecycle handlers together. Without `schemas.output`, `onDone.event.output` infers from the async return value.
 
@@ -68,11 +76,22 @@ on: {
 
 Use `assertEvent(...)` only when shared code must narrow a union to one or more known event types.
 
+## Typestates
+
+State-level `schemas.context` declarations describe the context valid in each
+state. State functions receive the narrowed type, transitions into a state
+must satisfy its context contract, and `snapshot.matches(...)` narrows context
+when reading a snapshot. See [Typestates](typestates.md) for declaration,
+transition and runtime validation examples.
+
 ## Checked event keys
 
 When `schemas.events` is declared, each key in an `on` map must match a
-declared event type. Wildcards (`'*'`, `'user.*'`) and reserved `xstate.*`
-event types are always allowed. Without `schemas.events`, any key is accepted.
+declared event type. Matching wildcards (`'*'`, `'user.*'`) and known reserved
+machine descriptors are allowed; misspelled or invented reserved prefixes are rejected. Without `schemas.events`, any key is accepted.
+
+An empty `schemas.events: {}` means the machine has no public events. Final
+state output callbacks still receive the declared context and input types.
 
 ```ts
 on: {
@@ -81,17 +100,7 @@ on: {
 }
 ```
 
-Machines returned by `setup(...).createMachine(...)` can be exported with their
-inferred types, including when registered actors are used in inline transitions
-or invokes. Declaration output retains event, state, input and child-actor
-contracts without exposing each inline callback's full contextual type.
-
-Reserved `xstate.*` event keys are accepted in `on`, including partial wildcard
-descriptors such as `xstate.error.actor.*`. Exact declared descriptors preserve
-their event payload types; undeclared reserved descriptors expose only an event
-`type`. Runtime wildcards match event-type prefixes, not `actorId`: use
-`xstate.error.actor` to handle the stable actor-error event, and inspect
-`event.actorId` when filtering by child.
+Known reserved descriptors in `on` carry their actual event payloads: actor completion, error and snapshot events; execution errors; state completion; delayed events; and state or actor timeouts. Bare `xstate.error.actor` handlers receive `event.error` and `event.actorId`. Suffixed v5 descriptors such as `xstate.done.actor.fetchUser` never match, because v6 lifecycle event types carry the id in a payload field; `createMachine` throws when `on` uses one. Wildcards over a category type, such as `xstate.done.actor.*`, still match. Use `xstate.error.actor` and filter `event.actorId` explicitly when handling a particular child.
 
 ## Child completion events
 
@@ -144,6 +153,8 @@ after: {
 
 <!-- runtime validation API and boundaries from packages/core/src/validation.types.ts, packages/core/src/validation/index.ts, and packages/core/src/setup.ts -->
 
+> **Experimental:** `standardSchemaValidator()`, `ActorValidationError` and the other `xstate/validation` exports may change in a minor release.
+
 Runtime validation is opt-in. Install the Standard Schema validator from the
 separate `xstate/validation` entry point:
 
@@ -171,12 +182,18 @@ const machine = setup({
 
 The validator checks input and public or internal events before calculation, then checks
 stable context, active state schemas, child slots, delayed raised events,
-emitted events and final output before effects run. Invalid values throw an
-`ActorValidationError`.
+emitted events and final output before effects run. Invalid actor-produced
+values error the actor; pure calculations throw an
+`ActorValidationError`. Invalid incoming events are rejected without changing
+or erroring the actor and reported through `onRejectedEvent`. See
+[validation failures](setup-and-provide.md#validation-failures).
 
-Validation is synchronous and assertion-only: schema transformations and async
-validation are rejected. Unknown events and emitted events are errors when a
-corresponding schema map exists; use `unknownEvents: 'ignore'` or
+Validation is synchronous and assertion-only: async validation is rejected.
+Parsed schema results are discarded. Type-changing transformations are rejected
+by the types, but same-type transformations cannot be detected statically;
+normalize values before sending them. Unknown incoming events are rejected, and
+unknown emitted events error the actor, when a corresponding schema map exists; use
+`unknownEvents: 'ignore'` or
 `unknownEmitted: 'ignore'` for open protocols.
 
 Derived setups inherit the validator. Replace it or use `validator: undefined`

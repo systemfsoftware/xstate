@@ -1,8 +1,13 @@
-import { Cause, Context, Effect, Layer, Schema } from 'effect';
+import { Cause, Context, Effect, Layer, Schema, Stream } from 'effect';
 import { AsyncResult, Atom, AtomRegistry } from 'effect/reactivity';
 import { createMachine, setup } from 'xstate';
 import { createActorAtoms } from './atom.ts';
-import { fromEffect, setupEffect, withActorScope } from './index.ts';
+import {
+  createEffectStreamLogic,
+  createEffectLogic,
+  setupEffect,
+  withActorScope
+} from './index.ts';
 import { NotReadyError } from './atom.ts';
 
 const until = async (predicate: () => boolean, timeoutMs = 1000) => {
@@ -34,8 +39,8 @@ describe('createActorAtoms', () => {
       );
       const logic =
         lifetime === 'actor'
-          ? fromEffect(acquire.pipe(withActorScope))
-          : fromEffect(acquire);
+          ? createEffectLogic(acquire.pipe(withActorScope))
+          : createEffectLogic(acquire);
       const registry = AtomRegistry.make();
       const atoms = createActorAtoms(Atom.runtime(Layer.empty), logic);
       const unmount = registry.mount(atoms.snapshot);
@@ -60,7 +65,7 @@ describe('createActorAtoms', () => {
   );
 
   it('requires and passes the input declared by the logic', async () => {
-    const logic = fromEffect({
+    const logic = createEffectLogic({
       schemas: { input: Schema.Struct({ id: Schema.String }) },
       effect: ({ input }) => Effect.succeed(input.id)
     });
@@ -137,7 +142,7 @@ describe('createActorAtoms', () => {
     class Greeting extends Context.Service<Greeting, { value: string }>()(
       'Greeting'
     ) {}
-    const greet = fromEffect(
+    const greet = createEffectLogic(
       Greeting.use((greeting) => Effect.succeed(greeting.value))
     );
     const machine = setup({ actors: { greet } }).createMachine({
@@ -250,7 +255,10 @@ describe('createActorAtoms', () => {
     const failure = { code: 'BOOM' as const };
     const registry = AtomRegistry.make();
     const runtime = Atom.runtime(Layer.empty);
-    const atoms = createActorAtoms(runtime, fromEffect(Effect.fail(failure)));
+    const atoms = createActorAtoms(
+      runtime,
+      createEffectLogic(Effect.fail(failure))
+    );
 
     const unmount = registry.mount(atoms.result);
     await until(() => AsyncResult.isFailure(registry.get(atoms.result)));
@@ -261,4 +269,47 @@ describe('createActorAtoms', () => {
     );
     unmount();
   });
+});
+
+it('offers state only for machines, including unions', () => {
+  const runtime = Atom.runtime(Layer.empty);
+  const task = createEffectLogic(Effect.never);
+  const stream = createEffectStreamLogic(Stream.never);
+  const taskAtoms = createActorAtoms(runtime, task);
+  const streamAtoms = createActorAtoms(runtime, stream);
+  // @ts-expect-error -- tasks have no machine states
+  taskAtoms.state;
+  // @ts-expect-error -- streams have no machine states
+  streamAtoms.state;
+  const mixed = createActorAtoms(
+    runtime,
+    Math.random() > 0.5 ? task : counterMachine
+  );
+  // @ts-expect-error -- every member must be a machine
+  mixed.state;
+  expect(taskAtoms).not.toHaveProperty('state');
+  expect(streamAtoms).not.toHaveProperty('state');
+  expect(createActorAtoms(runtime, counterMachine)).toHaveProperty('state');
+});
+
+it('keeps defects in result atoms as defects', async () => {
+  const cause = Cause.combine(Cause.fail('domain'), Cause.die('defect'));
+  const registry = AtomRegistry.make();
+  const atoms = createActorAtoms(
+    Atom.runtime(Layer.empty),
+    createEffectLogic(Effect.failCause(cause))
+  );
+  const unmount = registry.mount(atoms.result);
+  try {
+    await until(() => AsyncResult.isFailure(registry.get(atoms.result)));
+    const result = registry.get(atoms.result);
+    const actor = registry.get(atoms.actor);
+    expect(AsyncResult.isSuccess(actor)).toBe(true);
+    expect(AsyncResult.isFailure(result) && result.cause).toBe(
+      AsyncResult.isSuccess(actor) && actor.value.getSnapshot().error!.cause
+    );
+  } finally {
+    unmount();
+    registry.dispose();
+  }
 });

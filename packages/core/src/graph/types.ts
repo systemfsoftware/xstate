@@ -3,7 +3,15 @@ import {
   StateNode,
   TransitionDefinition,
   Snapshot,
-  ActorLogic
+  ActorLogic,
+  AnyMachineSnapshot,
+  DoneActorEvent,
+  ErrorActorEvent,
+  AfterEvent,
+  AnyActorLogic,
+  SnapshotFrom,
+  EventFromLogic,
+  InputFrom
 } from '..';
 
 /** @public */
@@ -40,17 +48,40 @@ export type DirectedGraphEdge = JSONSerializable<
 
 // Based on https://www.eclipse.org/elk/documentation/tooldevelopers/graphdatastructure/jsonformat.html
 /** @public */
+export interface DirectedGraphDiagnostic {
+  code: 'dynamic-target';
+  stateId: string;
+  eventType: string;
+  transitionId: string;
+  message: string;
+}
+
+/**
+ * Completeness of static transition destinations in this subtree. This does
+ * not establish guard reachability or include invoked actors' own graphs.
+ *
+ * @public
+ */
+export interface DirectedGraphAnalysis {
+  transitionTargetsComplete: boolean;
+  diagnostics: DirectedGraphDiagnostic[];
+}
+
+/** @public */
 export type DirectedGraphNode = JSONSerializable<
   {
     id: string;
     stateNode: StateNode;
     children: DirectedGraphNode[];
-    /** The edges representing all transitions from this `stateNode`. */
+    /** Statically known event and eventless transition edges. */
     edges: DirectedGraphEdge[];
+    analysis: DirectedGraphAnalysis;
   },
   {
     id: string;
     children: DirectedGraphNode[];
+    edges: DirectedGraphEdge[];
+    analysis: DirectedGraphAnalysis;
   }
 >;
 
@@ -142,19 +173,134 @@ export type TraversalOptions<
   TInput
 > = {
   input?: TInput;
+  /**
+   * Payload cases keyed by event type augment the machine's own events.
+   * Each configured type needs a nonempty array, or a snapshot callback
+   * returning one. Omit `type` from payloads. Unconfigured payload-free
+   * events and synthetic invoke/delay events retain their defaults.
+   * An event array or callback returning events replaces all defaults.
+   */
+  events?:
+    | EventCases<TSnapshot, TEvent>
+    | readonly TraversalEvent<TSnapshot, TEvent>[]
+    | ((state: TSnapshot) => readonly TraversalEvent<TSnapshot, TEvent>[]);
 } & SerializationOptions<TSnapshot, TEvent> &
   Partial<
     Pick<
       TraversalConfig<TSnapshot, TEvent>,
-      'events' | 'filterEvents' | 'limit' | 'fromState' | 'stopWhen' | 'toState'
+      'filterEvents' | 'limit' | 'fromState' | 'stopWhen' | 'toState'
     >
   >;
+
+/** @public */
+export type TraversalEvent<TSnapshot, TEvent> =
+  | TEvent
+  | (TSnapshot extends AnyMachineSnapshot
+      ?
+          | (Omit<DoneActorEvent, 'output' | 'sessionId'> &
+              Partial<Pick<DoneActorEvent, 'output' | 'sessionId'>>)
+          | (Omit<ErrorActorEvent, 'error' | 'sessionId'> &
+              Partial<Pick<ErrorActorEvent, 'error' | 'sessionId'>>)
+          | AfterEvent
+      : never);
+
+type RequiredEventTypes<TEvent extends EventObject> =
+  string extends TEvent['type']
+    ? never
+    : {
+        [TType in TEvent['type']]: { type: TType } extends TEvent & {
+          type: TType;
+        }
+          ? never
+          : TType;
+      }[TEvent['type']];
+
+type EventPayload<TEvent> = TEvent extends EventObject
+  ? Omit<TEvent, 'type'>
+  : never;
+
+type EventCase<TSnapshot, TEvent> =
+  | readonly [EventPayload<TEvent>, ...EventPayload<TEvent>[]]
+  | ((
+      state: TSnapshot
+    ) => readonly [EventPayload<TEvent>, ...EventPayload<TEvent>[]]);
+
+/**
+ * Payload samples keyed by event type. Required payloads need at least one case.
+ *
+ * @public
+ */
+export type EventCases<TSnapshot, TEvent extends EventObject> = {
+  [TType in TEvent['type']]?: EventCase<TSnapshot, TEvent & { type: TType }>;
+} & {
+  [TType in RequiredEventTypes<TEvent>]-?: EventCase<
+    TSnapshot,
+    TEvent & { type: TType }
+  >;
+};
+
+/** @public */
+export type EventCaseOptions<TLogic extends AnyActorLogic> = Omit<
+  TraversalOptions<
+    SnapshotFrom<TLogic>,
+    EventFromLogic<TLogic>,
+    InputFrom<TLogic>
+  >,
+  'events'
+> & { events?: EventCases<SnapshotFrom<TLogic>, EventFromLogic<TLogic>> };
+
+/** @public */
+export type EventCaseOptionsArgs<TLogic extends AnyActorLogic> = [
+  RequiredEventTypes<EventFromLogic<TLogic>>
+] extends [never]
+  ? [options?: EventCaseOptions<TLogic>]
+  : [
+      options: EventCaseOptions<TLogic> & {
+        events: EventCases<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>;
+      }
+    ];
+
+/** @public */
+export type EventListOptions<
+  TLogic extends AnyActorLogic,
+  TEvents extends readonly TraversalEvent<
+    SnapshotFrom<TLogic>,
+    EventFromLogic<TLogic>
+  >[]
+> = Omit<EventCaseOptions<TLogic>, 'events'> & {
+  events: TEvents | ((state: SnapshotFrom<TLogic>) => TEvents);
+} & ([
+    Exclude<RequiredEventTypes<EventFromLogic<TLogic>>, TEvents[number]['type']>
+  ] extends [never]
+    ? unknown
+    : {
+        [TType in Exclude<
+          RequiredEventTypes<EventFromLogic<TLogic>>,
+          TEvents[number]['type']
+        > as `Missing event cases: ${TType}`]: never;
+      });
 
 /** @public */
 export interface TraversalConfig<
   TSnapshot extends Snapshot<unknown>,
   TEvent extends EventObject
 > extends SerializationConfig<TSnapshot, TEvent> {
+  /**
+   * The events to send from each state, as a list or as a function of the
+   * state. Defaults to the machine's own events for that state (see
+   * `getAllOwnEvents`). A given value replaces the default, so invoke results
+   * (`xstate.done.actor`, `xstate.error.actor`) and delays (`xstate.after`)
+   * are traversed only if it includes them:
+   *
+   * ```ts
+   * getShortestPaths(machine, {
+   *   events: (snapshot) =>
+   *     getAllOwnEvents(snapshot).map((event) =>
+   *       event.type === 'SUBMIT' ? { type: 'SUBMIT', value: 'hello' } : event
+   *     )
+   * });
+   * ```
+   */
   events: readonly TEvent[] | ((state: TSnapshot) => readonly TEvent[]);
   filterEvents: ((snapshot: TSnapshot, event: TEvent) => boolean) | undefined;
   /**
@@ -182,10 +328,30 @@ export type PathGenerator<
   TSnapshot extends Snapshot<unknown>,
   TEvent extends EventObject,
   TInput
-> = (
-  behavior: ActorLogic<TSnapshot, TEvent, TInput>,
-  options: TraversalOptions<TSnapshot, TEvent, TInput>
-) => Array<StatePath<TSnapshot, TEvent>>;
+> = {
+  <
+    TLogic extends ActorLogic<TSnapshot, TEvent, TInput>,
+    const _TEvents extends readonly TraversalEvent<
+      SnapshotFrom<NoInfer<TLogic>>,
+      EventFromLogic<NoInfer<TLogic>>
+    >[]
+  >(
+    behavior: TLogic,
+    options: Exclude<EventCaseOptionsArgs<NoInfer<TLogic>>[0], undefined> &
+      TraversalOptions<TSnapshot, TEvent, TInput>
+  ): Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>;
+  <
+    TLogic extends ActorLogic<TSnapshot, TEvent, TInput>,
+    const TEvents extends readonly TraversalEvent<
+      SnapshotFrom<NoInfer<TLogic>>,
+      EventFromLogic<NoInfer<TLogic>>
+    >[]
+  >(
+    behavior: TLogic,
+    options: EventListOptions<NoInfer<TLogic>, TEvents> &
+      TraversalOptions<TSnapshot, TEvent, TInput>
+  ): Array<StatePath<SnapshotFrom<TLogic>, EventFromLogic<TLogic>>>;
+};
 
 /** @public */
 export interface AdjacencyValue<TState, TEvent> {

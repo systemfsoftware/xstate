@@ -2,6 +2,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createMachine, createActor, setup } from '../src/index.ts';
 import { builtInActions } from '../src/actions.ts';
 import z from 'zod';
+import { restoreActor } from '../src/persist/index.ts';
 
 const lightMachine = createMachine({
   schemas: {
@@ -104,16 +105,16 @@ describe('delayed transitions', () => {
 
     expect(order).toEqual(['entry', 'first', 'second']);
     expect(effect).toHaveBeenCalledOnce();
-    expect(
-      Object.values(actor.getSnapshot().timers).map((timer) => timer.delay)
-    ).toEqual([320, 620]);
+    expect(actor.getSnapshot().timers.map((timer) => timer.delay)).toEqual([
+      320, 620
+    ]);
 
     vi.advanceTimersByTime(319);
     expect(actor.getSnapshot().value).toBe('waiting');
 
     vi.advanceTimersByTime(1);
     expect(actor.getSnapshot().value).toBe('done');
-    expect(actor.getSnapshot().timers).toEqual({});
+    expect(actor.getSnapshot().timers).toEqual([]);
     actor.stop();
   });
 
@@ -121,18 +122,25 @@ describe('delayed transitions', () => {
     'schedules after entry cancellation and honors later cancellation (cancel after entry: %s)',
     (cancelAfterEntry) => {
       vi.useFakeTimers();
-      const timerId = 'xstate.after.100.(machine).waiting';
+      // Built-in timers have no id; cancel one by its event.
+      const timerKey = {
+        event: {
+          type: 'xstate.after',
+          stateId: 'waiting',
+          delay: 100
+        }
+      };
       const machine = createMachine({
         initial: 'waiting',
         states: {
           waiting: {
             entry: (_, enq) => {
-              enq.cancel(timerId);
+              enq.cancel(timerKey);
             },
             after: { 100: { target: 'done' } },
             on: {
               cancel: (_, enq) => {
-                enq.cancel(timerId);
+                enq.cancel(timerKey);
               }
             }
           },
@@ -141,13 +149,16 @@ describe('delayed transitions', () => {
       });
       const actor = createActor(machine).start();
 
-      expect(actor.getSnapshot().timers[timerId]).toMatchObject({ delay: 100 });
+      expect(actor.getSnapshot().timers).toMatchObject([
+        { event: timerKey.event, delay: 100 }
+      ]);
+      expect(actor.getSnapshot().timers[0]).not.toHaveProperty('id');
       vi.advanceTimersByTime(50);
       expect(actor.getSnapshot().value).toBe('waiting');
 
       if (cancelAfterEntry) {
         actor.send({ type: 'cancel' });
-        expect(actor.getSnapshot().timers).toEqual({});
+        expect(actor.getSnapshot().timers).toEqual([]);
       }
 
       vi.advanceTimersByTime(100);
@@ -493,7 +504,7 @@ describe('delayed transitions', () => {
     actorRef1.send({ type: 'next' });
     const withAfterState = actorRef1.getPersistedSnapshot();
 
-    const actorRef2 = createActor(machine, { snapshot: withAfterState });
+    const actorRef2 = restoreActor(machine, withAfterState);
     actorRef2.subscribe({ complete: () => resolve() });
     actorRef2.start();
 
@@ -526,9 +537,7 @@ describe('delayed transitions', () => {
 
     const persistedSnapshot = JSON.parse(JSON.stringify(service.getSnapshot()));
 
-    service = createActor(createMyMachine(), {
-      snapshot: persistedSnapshot
-    }).start();
+    service = restoreActor(createMyMachine(), persistedSnapshot).start();
 
     service.send({ type: 'NEXT' });
 

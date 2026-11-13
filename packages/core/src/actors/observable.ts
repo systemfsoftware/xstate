@@ -1,4 +1,5 @@
 import { XSTATE_INIT, XSTATE_STOP } from '../constants';
+import { publishEmittedEvent } from '../runtimeHelpers.ts';
 import { StandardSchemaV1 } from '../schema.types.ts';
 import { AnyActorSystem } from '../system.ts';
 import { assertValid } from '../validation.ts';
@@ -6,16 +7,16 @@ import type { ActorLogicValidator } from '../validation.types.ts';
 import {
   ActorLogic,
   ActorFromLogic,
-  ActorRefFromLogic,
+  ActorRefFrom,
   AnyActor,
   AnyEventObject,
   EventObject,
-  NonReducibleUnknown,
   Snapshot,
   Subscribable,
   Subscription
 } from '../types';
-import { createLogic as createBaseLogic } from './logic.ts';
+import type { NonReducibleUnknown } from '../typeUtils.ts';
+import { createStepLogic as createBaseLogic } from './logic.ts';
 import { finalizeTransitionResult } from '../transitionActions.ts';
 
 const XSTATE_OBSERVABLE_NEXT = 'xstate.observable.next';
@@ -87,7 +88,7 @@ export type ObservableActorLogic<
  * @see {@link createEventObservableLogic}
  * @public
  */
-export type ObservableActorRef<TContext> = ActorRefFromLogic<
+export type ObservableActorRef<TContext> = ActorRefFrom<
   ObservableActorLogic<TContext, any>
 >;
 
@@ -308,7 +309,7 @@ export function createObservableLogic<
           system,
           self: self as any,
           emit: ((event: TEmitted) =>
-            void runtime.emitEvent!(actorSelf, event)) as (
+            void publishEmittedEvent(actorSelf, event, runtime)) as (
             emitted: TEmitted
           ) => void
         }).subscribe({

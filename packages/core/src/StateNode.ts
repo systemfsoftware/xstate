@@ -1,13 +1,12 @@
 import isDevelopment from '#is-development';
+import { xstateError } from './xstateError.ts';
 import { NULL_EVENT, STATE_DELIMITER } from './constants.ts';
 import type { SetupStateSchemas } from './schema.types.ts';
-import { createInvokeTimeoutEventId } from './eventUtils.ts';
 import { memo } from './memo.ts';
 import {
   evaluateCandidate,
   formatTransition,
   getCandidates,
-  getEventDescriptorKey,
   getDelayedTransitions,
   matchesActorSession,
   type TransitionSelectionResults
@@ -15,6 +14,7 @@ import {
 import type {
   DelayedTransitionDefinition,
   EventObject,
+  TimerKey,
   InitialTransitionDefinition,
   MachineContext,
   Mapper,
@@ -22,7 +22,6 @@ import type {
   TransitionDefinitionMap,
   AnyStateMachine,
   AnyStateNodeConfig,
-  NonReducibleUnknown,
   EventDescriptor,
   AnyActorScope,
   AnyStateNode,
@@ -35,8 +34,10 @@ import type {
   InvokeDefinition,
   MetaObject
 } from './types.ts';
+import type { NonReducibleUnknown } from './typeUtils.ts';
 import {
   createInvokeId,
+  hasUnescapedDot,
   mapValues,
   toArray,
   toTransitionConfigArray
@@ -168,12 +169,25 @@ export class StateNode<
     this.parent = options._parent;
     this.key = options._key;
     this.machine = options._machine;
+    if (this.parent && hasUnescapedDot(this.key)) {
+      throw new Error(
+        isDevelopment
+          ? // The suggestion is written as a JS string literal.
+            `State key "${this.key}" contains ".". Nest the states or escape it as "${this.key.replaceAll(/(?<!\\)\./g, '\\\\.')}".`
+          : xstateError(57, this.key)
+      );
+    }
     this.path = this.parent ? this.parent.path.concat(this.key) : [];
     const firstStateKey = this.config.states
       ? Object.keys(this.config.states)[0]
       : undefined;
+    // The implicit id is the path from the root, prefixed by the machine id
+    // when it has one: `shop.checkout`, or `checkout` without a machine id.
     this.id =
-      this.config.id || [this.machine.id, ...this.path].join(STATE_DELIMITER);
+      this.config.id ||
+      (this.machine.id ? [this.machine.id, ...this.path] : this.path).join(
+        STATE_DELIMITER
+      );
     this.type =
       this.config.type ||
       (firstStateKey !== undefined
@@ -189,6 +203,16 @@ export class StateNode<
       warnOnFinalStateBehavior(this);
     }
 
+    const existing = this.machine.idMap.get(this.id);
+    // Valid keys escape their dots, so two implicit ids cannot coincide; an
+    // explicit id that equals another id would make `#id` ambiguous.
+    if (existing) {
+      throw new Error(
+        isDevelopment
+          ? `Duplicate state id '${this.id}': the states at '${existing.path.join(STATE_DELIMITER)}' and '${this.path.join(STATE_DELIMITER)}' both have it. State ids must be unique; rename the explicit \`id\`.`
+          : xstateError(58, this.id)
+      );
+    }
     this.order = this.machine.idMap.size;
     this.machine.idMap.set(this.id, this);
 
@@ -219,7 +243,7 @@ export class StateNode<
           ? `No initial state specified for compound state node "#${
               this.id
             }". Try adding { initial: "${firstStateKey}" } to the state config.`
-          : `No initial state specified for compound state node "#${this.id}".`
+          : xstateError(59, this.id)
       );
     }
 
@@ -230,16 +254,6 @@ export class StateNode<
     this.entry = this.config.entry as AnyAction | undefined;
     this.exit = this.config.exit as AnyAction | undefined;
 
-    if (this.entry) {
-      // @ts-expect-error _special is an internal marker not on the Action type
-      this.entry._special = true;
-    }
-
-    if (this.exit) {
-      // @ts-expect-error _special is an internal marker not on the Action type
-      this.exit._special = true;
-    }
-
     this.meta = this.config.meta;
     this.output =
       this.type === 'final' || !this.parent ? this.config.output : undefined;
@@ -248,15 +262,12 @@ export class StateNode<
       const { src, registryKey } = invokeConfig;
       const invokeId = createInvokeId(this.id, i);
       const resolvedId = invokeConfig.id ?? invokeId;
-      // Referenced (string) actors keep their logical name so persisted
-      // snapshots reference `src: 'fetchUser'` rather than a positional id;
-      // only inline logic gets the synthetic source name.
-      const sourceName =
-        typeof src === 'string' ? src : `xstate.invoke.${invokeId}`;
 
       return {
         ...invokeConfig,
-        src: sourceName,
+        // Registered (string) sources persist by key; inline logic has no
+        // source key and restores through this invoke definition's id.
+        src: typeof src === 'string' ? src : undefined,
         logic: src,
         id: resolvedId,
         registryKey
@@ -271,8 +282,11 @@ export class StateNode<
     if (this.type === 'choice') {
       this.always = formatChoiceTransitions(this) as typeof this.always;
     } else if (this.config.always) {
-      this.always = mapTransitionConfigs(this.config.always, (transition) =>
-        formatTransition(this, NULL_EVENT, transition)
+      this.always = mapTransitionConfigs(
+        this,
+        'always',
+        this.config.always,
+        (transition) => formatTransition(this, NULL_EVENT, transition)
       ) as typeof this.always;
     }
 
@@ -327,11 +341,10 @@ export class StateNode<
     if (this.type === 'final') {
       return undefined;
     }
-    const descriptorKey = getEventDescriptorKey(event);
-    let candidates = this._candidateCache?.get(descriptorKey);
+    let candidates = this._candidateCache?.get(event.type);
     if (!candidates) {
       candidates = getCandidates(this, event);
-      (this._candidateCache ??= new Map()).set(descriptorKey, candidates);
+      (this._candidateCache ??= new Map()).set(event.type, candidates);
     }
 
     for (const candidate of candidates) {
@@ -371,7 +384,7 @@ function validateStateNodeConfig(stateNode: AnyStateNode) {
     throw new Error(
       isDevelopment
         ? `History state "${stateNode.id}" must declare a non-empty \`target\`.`
-        : `Missing history target on "${stateNode.id}"`
+        : xstateError(60, stateNode.id)
     );
   }
 
@@ -388,7 +401,7 @@ function validateStateNodeConfig(stateNode: AnyStateNode) {
     throw new Error(
       isDevelopment
         ? `Choice state "${stateNode.id}" must declare a \`choice\` function.`
-        : `Missing \`choice\` function on "${stateNode.id}"`
+        : xstateError(61, stateNode.id)
     );
   }
 
@@ -435,7 +448,7 @@ function formatChoiceTransitions(
       throw new Error(
         isDevelopment
           ? `Choice state "${stateNode.id}" must resolve to a target.`
-          : `Choice "${stateNode.id}" has no target`
+          : xstateError(62, stateNode.id)
       );
     }
     if (isDevelopment) {
@@ -458,10 +471,16 @@ function formatChoiceTransitions(
 }
 
 function mapTransitionConfigs<T>(
+  stateNode: AnyStateNode,
+  name: string,
   transitionsConfig: unknown,
   mapper: (transition: AnyTransitionConfig) => T
 ): T[] {
-  const transitionConfigs = toTransitionConfigArray(transitionsConfig as any);
+  const transitionConfigs = toTransitionConfigArray(
+    transitionsConfig as any,
+    name,
+    stateNode.id
+  );
   const transitions = new Array<T>(transitionConfigs.length);
 
   for (let i = 0; i < transitionConfigs.length; i++) {
@@ -496,14 +515,17 @@ function formatTransitions<
         throw new Error(
           isDevelopment
             ? 'Null events ("") cannot be specified as a transition key. Use `always: { ... }` instead.'
-            : 'Null event transition key'
+            : xstateError(63, stateNode.id)
         );
       }
       const transitionsConfig = stateNode.config.on[descriptor];
       transitions.set(
         descriptor,
-        mapTransitionConfigs(transitionsConfig, (transition) =>
-          formatTransition(stateNode, descriptor, transition)
+        mapTransitionConfigs(
+          stateNode,
+          descriptor,
+          transitionsConfig,
+          (transition) => formatTransition(stateNode, descriptor, transition)
         )
       );
     }
@@ -512,11 +534,15 @@ function formatTransitions<
     const descriptor = 'xstate.done.state';
     addTransitions(
       descriptor,
-      mapTransitionConfigs(stateNode.config.onDone, (transition) =>
-        formatTransition(stateNode, descriptor, {
-          ...transition,
-          matches: { ...transition.matches, stateId: stateNode.id }
-        })
+      mapTransitionConfigs(
+        stateNode,
+        'onDone',
+        stateNode.config.onDone,
+        (transition) =>
+          formatTransition(stateNode, descriptor, {
+            ...transition,
+            matches: { ...transition.matches, stateId: stateNode.id }
+          })
       )
     );
   }
@@ -524,14 +550,17 @@ function formatTransitions<
     const descriptor = 'xstate.error.*';
     transitions.set(
       descriptor,
-      mapTransitionConfigs(stateNode.config.onError, (transition) =>
-        formatTransition(stateNode, descriptor, transition)
+      mapTransitionConfigs(
+        stateNode,
+        'onError',
+        stateNode.config.onError,
+        (transition) => formatTransition(stateNode, descriptor, transition)
       )
     );
   }
   const createCancelInvokeTimeoutTransition = (
     descriptor: string,
-    timeoutEventId: string,
+    timeoutKey: TimerKey,
     actorId: string
   ): AnyTransitionDefinition =>
     formatTransition(stateNode, descriptor, {
@@ -539,14 +568,14 @@ function formatTransitions<
       _eventMatcher: (event: EventObject, snapshot: AnyMachineSnapshot) =>
         matchesActorSession(event, snapshot, actorId),
       to: (_args: any, enq: any) => {
-        enq.cancel(timeoutEventId);
+        enq.cancel(timeoutKey);
         return {};
       }
     } as AnyTransitionConfig);
   const formatInvokeCompletionTransition = (
     descriptor: string,
     transitionConfig: AnyTransitionConfig,
-    timeoutEventId: string
+    timeoutKey: TimerKey
   ): AnyTransitionDefinition => {
     const { target, to, reenter, ...rest } = transitionConfig;
 
@@ -577,13 +606,13 @@ function formatTransitions<
           const result = to(args, trackingEnqueue);
 
           if (result !== undefined || didEnqueue) {
-            enq.cancel(timeoutEventId);
+            enq.cancel(timeoutKey);
           }
 
           return result;
         }
 
-        enq.cancel(timeoutEventId);
+        enq.cancel(timeoutKey);
         return {
           target,
           reenter
@@ -598,44 +627,52 @@ function formatTransitions<
       _eventMatcher: (event: EventObject, snapshot: AnyMachineSnapshot) =>
         matchesActorSession(event, snapshot, invokeDef.id)
     });
-    const invokeTimeoutEventId =
+    // Built-in timers have no id; the invoke timeout is keyed by its event.
+    const invokeTimeoutKey: TimerKey | undefined =
       invokeDef.timeout !== undefined
-        ? createInvokeTimeoutEventId(invokeDef.id)
+        ? {
+            event: {
+              type: 'xstate.timeout.actor',
+              actorId: invokeDef.id
+            } as EventObject
+          }
         : undefined;
 
     if (invokeDef.onDone) {
       const descriptor = 'xstate.done.actor';
       const invokeDoneTransitions = mapTransitionConfigs(
+        stateNode,
+        'invoke.onDone',
         invokeDef.onDone,
         (rawTransition) => {
           const transition = withInvokeMatch(rawTransition);
-          return invokeTimeoutEventId
+          return invokeTimeoutKey
             ? formatInvokeCompletionTransition(
                 descriptor,
                 transition,
-                invokeTimeoutEventId
+                invokeTimeoutKey
               )
             : formatTransition(stateNode, descriptor, transition);
         }
       );
 
-      if (invokeTimeoutEventId) {
+      if (invokeTimeoutKey) {
         invokeDoneTransitions.push(
           createCancelInvokeTimeoutTransition(
             descriptor,
-            invokeTimeoutEventId,
+            invokeTimeoutKey,
             invokeDef.id
           )
         );
       }
 
       addTransitions(descriptor, invokeDoneTransitions);
-    } else if (invokeTimeoutEventId) {
+    } else if (invokeTimeoutKey) {
       const descriptor = 'xstate.done.actor';
       addTransitions(descriptor, [
         createCancelInvokeTimeoutTransition(
           descriptor,
-          invokeTimeoutEventId,
+          invokeTimeoutKey,
           invokeDef.id
         )
       ]);
@@ -644,24 +681,33 @@ function formatTransitions<
       const descriptor = 'xstate.error.actor';
       addTransitions(
         descriptor,
-        mapTransitionConfigs(invokeDef.onError, (rawTransition) => {
-          const transition = withInvokeMatch(rawTransition);
-          return invokeTimeoutEventId
-            ? formatInvokeCompletionTransition(
-                descriptor,
-                transition,
-                invokeTimeoutEventId
-              )
-            : formatTransition(stateNode, descriptor, transition);
-        })
+        mapTransitionConfigs(
+          stateNode,
+          'invoke.onError',
+          invokeDef.onError,
+          (rawTransition) => {
+            const transition = withInvokeMatch(rawTransition);
+            return invokeTimeoutKey
+              ? formatInvokeCompletionTransition(
+                  descriptor,
+                  transition,
+                  invokeTimeoutKey
+                )
+              : formatTransition(stateNode, descriptor, transition);
+          }
+        )
       );
     }
     if (invokeDef.onSnapshot) {
       const descriptor = 'xstate.snapshot.actor';
       addTransitions(
         descriptor,
-        mapTransitionConfigs(invokeDef.onSnapshot, (transition) =>
-          formatTransition(stateNode, descriptor, withInvokeMatch(transition))
+        mapTransitionConfigs(
+          stateNode,
+          'invoke.onSnapshot',
+          invokeDef.onSnapshot,
+          (transition) =>
+            formatTransition(stateNode, descriptor, withInvokeMatch(transition))
         )
       );
     }
@@ -718,7 +764,11 @@ function formatInitialTransition(
     throw new Error(
       isDevelopment
         ? `Initial state node "${targetStrings.find((_, index) => !resolvedTargets[index])}" not found on parent state node #${stateNode.id}`
-        : `Initial state not found on "#${stateNode.id}"`
+        : xstateError(
+            64,
+            targetStrings.find((_, index) => !resolvedTargets[index]),
+            stateNode.id
+          )
     );
   }
   const transition: InitialTransitionDefinition = {

@@ -1,9 +1,12 @@
 import isDevelopment from '#is-development';
+import { xstateError } from './xstateError.ts';
+import { getTimerKey } from './timerKey.ts';
 import {
   type ActorTermination,
   AnyActor,
   AnyActorScope,
-  EventObject
+  EventObject,
+  TimerKey
 } from './types';
 
 export function assertSendToEvent(event: EventObject): void {
@@ -12,7 +15,7 @@ export function assertSendToEvent(event: EventObject): void {
       isDevelopment
         ? // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
           `Only event objects may be used with sendTo; use sendTo({ type: "${event}" }) instead`
-        : `Only event objects may be used with sendTo`
+        : xstateError(70, event)
     );
   }
 }
@@ -28,12 +31,12 @@ export const builtInActions = {
   },
   ['@xstate.raise']: (
     actorScope: AnyActorScope,
-    _event: EventObject,
-    options: { id?: string; delay?: number }
+    event: EventObject,
+    options: { id?: string; seq?: number; delay?: number }
   ) => {
     return actorScope.system.scheduleTimer(
       actorScope.self,
-      options.id!,
+      getTimerKey({ id: options.id, seq: options.seq, event }),
       options?.delay ?? 0
     );
   },
@@ -41,21 +44,21 @@ export const builtInActions = {
     actorScope: AnyActorScope,
     actor: AnyActor,
     event: EventObject,
-    options: { id?: string; delay?: number }
+    options: { id?: string; seq?: number; delay?: number }
   ) => {
     assertSendToEvent(event);
     if (options?.delay !== undefined) {
       return actorScope.system.scheduleTimer(
         actorScope.self,
-        options.id!,
+        getTimerKey({ id: options.id, seq: options.seq, event }),
         options?.delay ?? 0
       );
     } else {
       return actorScope.system._relay(actorScope.self, actor, event);
     }
   },
-  ['@xstate.cancel']: (actorScope: AnyActorScope, sendId: string) => {
-    return actorScope.system.cancelTimer(actorScope.self, sendId);
+  ['@xstate.cancel']: (actorScope: AnyActorScope, key: TimerKey) => {
+    return actorScope.system.cancelTimer(actorScope.self, key);
   },
   ['@xstate.stop']: (actorScope: AnyActorScope, actor: AnyActor) => {
     return actorScope.system.stopActor(actor);

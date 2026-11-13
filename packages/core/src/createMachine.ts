@@ -1,28 +1,30 @@
 import isDevelopment from '#is-development';
 import { diagnoseAuthorConfig } from './devDiagnostics.ts';
+import { xstateError } from './xstateError.ts';
 import { StandardSchemaV1 } from './schema.types.ts';
 import { StateMachine } from './StateMachine.ts';
+import type { Spawner } from './spawn.ts';
+import type { ActorLogicValidator } from './validation.types.ts';
 import {
   AnyActorRef,
   AnyStateMachine,
   EventObject,
   AnyEventObject,
-  Cast,
   MachineContext,
   ProvidedActor,
   StateValueFromStateSchema,
   ToChildren,
   MetaObject,
   StateSchema,
-  DoNotInfer,
-  RoutableStateId,
-  Compute
+  RoutableStateId
 } from './types.ts';
+import type { Cast, DoNotInfer, Compute } from './typeUtils.ts';
 import {
   ChildCompletionEvents,
   Sources,
   DelayMapFromNames,
   InferChildren,
+  InferredInvokeChildren,
   InferMachineInput,
   InferOutput,
   SchemaOrConfigOutput,
@@ -33,6 +35,8 @@ import {
   ValidateDelayReferences,
   ValidateEventDescriptors,
   ValidateHistoryDefaults,
+  ValidateInvokeInputs,
+  ValidateVersionedMachineId,
   ValidateStateTargets,
   ValidateTopLevelFinalOutputs,
   WidenLiterals,
@@ -46,10 +50,15 @@ type MergeChildren<
   ? Compute<ToChildren<TActor>>
   : Compute<TChildren>;
 
+type ConfigActors<
+  TConfig,
+  TActorMap extends Sources['actors']
+> = TConfig extends { actors: infer TActors extends Sources['actors'] }
+  ? TActors
+  : TActorMap;
+
 type MachineIdentity<TConfig> = {
-  readonly id: TConfig extends { id: infer TId extends string }
-    ? TId
-    : '(machine)';
+  readonly id: TConfig extends { id: infer TId extends string } ? TId : '';
   readonly version: TConfig extends { version: infer TVersion extends string }
     ? TVersion
     : undefined;
@@ -144,6 +153,8 @@ export function createMachine<
   config: TSS &
     ValidateDelayReferences<TSS> &
     ValidateHistoryDefaults<TSS> &
+    ValidateInvokeInputs<TSS> &
+    ValidateVersionedMachineId<TSS> &
     ValidateStateTargets<TSS> &
     ValidateEventDescriptors<
       TSS,
@@ -205,7 +216,8 @@ export function createMachine<
               to: RoutableStateId<TSS>;
             }),
       Cast<
-        MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>,
+        MergeChildren<InferChildren<TChildrenSchemaMap>, TActor> &
+          InferredInvokeChildren<TSS, ConfigActors<TSS, TActorMap>>,
         Record<string, AnyActorRef | undefined>
       >,
       StateValueFromStateSchema<TSS>,
@@ -261,6 +273,8 @@ export function createMachine<
   config: TSS &
     ValidateDelayReferences<TSS> &
     ValidateHistoryDefaults<TSS> &
+    ValidateInvokeInputs<TSS> &
+    ValidateVersionedMachineId<TSS> &
     ValidateStateTargets<TSS> &
     ValidateEventDescriptors<
       TSS,
@@ -269,46 +283,55 @@ export function createMachine<
         | InferInternalEvents<TInternalEventSchemaMap>
       >
     > &
-    Next_MachineConfig<
-      StandardSchemaV1,
-      TEventSchemaMap,
-      TInternalEventSchemaMap,
-      TEmittedSchemaMap,
-      TInputSchema,
-      TOutputSchema,
-      TMetaSchema,
-      TTransitionMetaSchema,
-      TTagSchema,
-      TChildrenSchemaMap,
-      WidenLiterals<TContext>,
-      | InferEvents<TEventSchemaMap>
-      | InferInternalEvents<TInternalEventSchemaMap>
-      | ChildCompletionEvents<
-          Cast<
-            MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>,
-            Record<string, AnyActorRef | undefined>
-          >
+    Omit<
+      Next_MachineConfig<
+        StandardSchemaV1,
+        TEventSchemaMap,
+        TInternalEventSchemaMap,
+        TEmittedSchemaMap,
+        TInputSchema,
+        TOutputSchema,
+        TMetaSchema,
+        TTransitionMetaSchema,
+        TTagSchema,
+        TChildrenSchemaMap,
+        WidenLiterals<TContext>,
+        | InferEvents<TEventSchemaMap>
+        | InferInternalEvents<TInternalEventSchemaMap>
+        | ChildCompletionEvents<
+            Cast<
+              MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>,
+              Record<string, AnyActorRef | undefined>
+            >
+          >,
+        Cast<
+          MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>,
+          Record<string, AnyActorRef | undefined>
         >,
-      Cast<
-        MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>,
-        Record<string, AnyActorRef | undefined>
+        TDelays,
+        TTag,
+        TActionMap,
+        TActorMap,
+        TGuardMap,
+        TDelayMap,
+        false
       >,
-      TDelays,
-      TTag,
-      TActionMap,
-      TActorMap,
-      TGuardMap,
-      TDelayMap,
-      false
+      'context'
     > & {
       schemas?: { context?: never };
       // TContext inference site: the `const` state-schema inference above
       // suppresses literal widening, so context is widened explicitly via
       // WidenLiterals before being consumed by handlers and the snapshot.
+      // It must be the only `context` member, and its argument type must not
+      // mention TContext: typing a context function's parameter fixes every
+      // type parameter in it. `Next_MachineConfig`'s `ContextFactory` types
+      // `self` from TContext, which fixed TContext to `never` before the
+      // function's return value was seen, and its value branch let
+      // TypeScript 5.9 and 6.0 infer the function itself as the context.
       context?:
         | TContext
         | ((_: {
-            spawn: any;
+            spawn: Spawner;
             actors: TActorMap;
             input: InferOutput<TInputSchema, unknown>;
             self: any;
@@ -334,7 +357,8 @@ export function createMachine<
               to: RoutableStateId<TSS>;
             }),
       Cast<
-        MergeChildren<InferChildren<TChildrenSchemaMap>, TActor>,
+        MergeChildren<InferChildren<TChildrenSchemaMap>, TActor> &
+          InferredInvokeChildren<TSS, ConfigActors<TSS, TActorMap>>,
         Record<string, AnyActorRef | undefined>
       >,
       StateValueFromStateSchema<TSS>,
@@ -355,10 +379,15 @@ export function createMachine<
     } & MachineIdentity<TSS>;
 
 // Implementation
-export function createMachine(config: any): any {
-  if (isDevelopment) {
-    diagnoseAuthorConfig(config);
+export function createMachine(config: any, ...rest: unknown[]): any {
+  if (rest[0] !== undefined) {
+    throw new Error(
+      isDevelopment
+        ? 'createMachine(config) takes one argument; the second argument (implementations) was removed. Declare implementations with setup({ actions, guards, actors, delays }).createMachine(config), or pass them to machine.provide({ ... }).'
+        : xstateError(71)
+    );
   }
+  diagnoseAuthorConfig(config);
   return new StateMachine(config) as any;
 }
 
@@ -368,8 +397,11 @@ export function createMachine(config: any): any {
  *
  * @experimental Used by `@xstate/scxml`; not part of the stable API.
  */
-export function createMachineFromCompiledConfig(config: any): any {
-  return new StateMachine(config) as any;
+export function createMachineFromCompiledConfig(
+  config: any,
+  validator?: ActorLogicValidator
+): any {
+  return new StateMachine(config, undefined, validator) as any;
 }
 
 /** @public */

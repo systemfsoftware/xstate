@@ -7,9 +7,6 @@ Use `xstate/fsm` when a plain switch statement would work, but you want a
 declarative transition table, type-safe events, and a machine definition that
 can be visualized or upgraded to a full XState machine later.
 
-The `xstate/fsm` entry typechecks independently: importing it does not require
-importing `xstate` or loading the full statechart type definitions.
-
 <!-- public exports from packages/core/src/fsm/index.ts; configuration surface from packages/core/src/fsm.ts -->
 
 Without schemas, the API is a pure transition table:
@@ -136,8 +133,8 @@ actor.send({ type: 'toggle' }); // logs 'active'
 
 The pure `transition(logic, snapshot, event)` and `initialTransition(logic)`
 functions from `xstate` also accept an FSM. `actor.getPersistedSnapshot()`
-returns the FSM snapshot as is, and `createActor(machine, { snapshot })`
-restores it.
+returns the FSM snapshot as is, and `restoreActor(machine, persisted)` from
+`xstate/persist` restores it.
 
 `xstate/fsm` itself does not import the actor runtime. Importing `createActor`
 from `xstate` adds the runtime to your bundle.
@@ -156,7 +153,8 @@ from `xstate` adds the runtime to your bundle.
 - A transition can be a state name, `{ target, context }`, or a function that
   receives `{ context, event }` and returns `{ target, context }`. Return
   `undefined` from a function for no transition.
-- Context updates are shallow patches.
+- Only own entries in `states` and `on` define transitions. A state inherited from the `states` prototype has no outgoing transitions, like an undeclared state. Transition targets are not validated.
+- Context updates are shallow patches. A patch adds its own enumerable string and symbol keys even when a new value is `undefined` or matches an inherited value. If the target is unchanged, a patch whose keys already exist with `Object.is`-equal values keeps the current snapshot.
 - `types<T>()` adds types without runtime validation. Setup schema values are
   ignored by the FSM runtime; state `schemas.input` is accepted for upgrade
   compatibility but no input is consumed by this pure API.

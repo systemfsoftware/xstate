@@ -42,6 +42,46 @@ const c = fromEventObservable(obs2);`;
     expect(output).toContain('const c = createEventObservableLogic(obs2);');
   });
 
+  it('renames ActorRefFromLogic → ActorRefFrom', () => {
+    const input = `import type { ActorRefFromLogic } from 'xstate';
+let a: ActorRefFromLogic<typeof machine>;`;
+    const { output, changed } = applyTransform(renameImports, input);
+    expect(changed).toBe(true);
+    expect(output).toContain(`import type { ActorRefFrom } from 'xstate';`);
+    expect(output).toContain('let a: ActorRefFrom<typeof machine>;');
+  });
+
+  it('merges ActorRefFromLogic into an existing ActorRefFrom import', () => {
+    const input = `import type { ActorRefFrom, ActorRefFromLogic } from 'xstate';
+let a: ActorRefFrom<typeof machine>;
+let b: ActorRefFromLogic<typeof machine>;`;
+    const { output, changed } = applyTransform(renameImports, input);
+    expect(changed).toBe(true);
+    expect(output).toContain(`import type { ActorRefFrom } from 'xstate';`);
+    expect(output).toContain('let b: ActorRefFrom<typeof machine>;');
+  });
+
+  it('renames the executable action types to executable effect types', () => {
+    const input = `import type { ExecutableActionObject, ExecutableActionsFrom, ExecutableSpawnAction, SpecialExecutableAction, ToExecutableAction } from 'xstate';
+let a: ExecutableActionObject;
+let b: ExecutableActionsFrom<typeof machine>;
+let c: ExecutableSpawnAction;
+let d: SpecialExecutableAction;
+let e: ToExecutableAction<{ type: 'x'; params: undefined }>;`;
+    const { output, changed } = applyTransform(renameImports, input);
+    expect(changed).toBe(true);
+    expect(output).toContain(
+      `import type { ExecutableEffect, ExecutableEffectFrom, SpawnExecutableEffect, SpecialExecutableEffect, ToExecutableEffect } from 'xstate';`
+    );
+    expect(output).toContain('let a: ExecutableEffect;');
+    expect(output).toContain('let b: ExecutableEffectFrom<typeof machine>;');
+    expect(output).toContain('let c: SpawnExecutableEffect;');
+    expect(output).toContain('let d: SpecialExecutableEffect;');
+    expect(output).toContain(
+      "let e: ToExecutableEffect<{ type: 'x'; params: undefined }>;"
+    );
+  });
+
   it('preserves aliases (renames the source binding, keeps the alias)', () => {
     const input = `import { interpret as run } from 'xstate';
 const a = run(machine);`;

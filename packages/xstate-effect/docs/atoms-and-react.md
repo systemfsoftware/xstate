@@ -9,7 +9,7 @@ Use `@xstate/effect/atom` to expose an actor through Effect's reactive atoms. Th
 
 ## Create actor atoms
 
-`createActorAtoms(runtime, logic, options?)` takes an `Atom.runtime` whose Layer provides the logic's services. When the logic requires input, pass `{ input }`; TypeScript rejects missing or mismatched input, just as it does with `createEffectActor`.
+`createActorAtoms(runtime, logic, options?)` takes an `Atom.runtime` whose Layer provides the logic's services. When the logic requires input, pass `{ input }`; TypeScript rejects missing or mismatched input, as it does with `createEffectActor`.
 
 This complete example waits for the runtime, sends an approval and reads a selector:
 
@@ -71,7 +71,7 @@ try {
 | `select(f)` | Derived `AsyncResult<T>` from the snapshot. |
 | `state` | The snapshot as a [tagged union](matching-states.md). |
 
-The runtime Layer's error type is included in the atoms' error channels. `result` also includes the actor's `ErrorFrom<TLogic>`.
+The runtime Layer's error type is included in the atoms' error channels. `result` includes the underlying Effect failure type and preserves its original Cause. Plain XState actor errors keep their ordinary error type. The `state` atom exists only for state machine logic; tasks and streams expose `snapshot`, `result`, `select`, `send` and `actor`.
 
 <details>
 <summary>Sending before the runtime is ready</summary>
@@ -101,11 +101,11 @@ import {
   useAtomSet,
   useAtomSuspense
 } from '@effect/atom-react';
-import { fromEffect, setupEffect } from '@xstate/effect';
+import { createEffectLogic, setupEffect } from '@xstate/effect';
 import { createActorAtoms } from '@xstate/effect/atom';
 
 const reviewMachine = setupEffect({
-  actors: { publish: fromEffect(Effect.sleep('10 millis')) }
+  actors: { publish: createEffectLogic(Effect.sleep('10 millis')) }
 }).createMachine({
   initial: 'pending',
   states: {
@@ -219,10 +219,10 @@ Pass the actor's input when creating its atoms:
 ```ts
 import { Effect, Layer, Schema } from 'effect';
 import { Atom, AtomRegistry } from 'effect/reactivity';
-import { fromEffect, join } from '@xstate/effect';
+import { createEffectLogic, join } from '@xstate/effect';
 import { createActorAtoms } from '@xstate/effect/atom';
 
-const prepare = fromEffect({
+const prepare = createEffectLogic({
   schemas: { input: Schema.Struct({ release: Schema.String }) },
   effect: ({ input }) => Effect.succeed(`Prepared ${input.release}`)
 });

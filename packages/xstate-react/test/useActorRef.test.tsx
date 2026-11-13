@@ -6,12 +6,14 @@ import {
 import * as React from 'react';
 import {
   ActorRefFrom,
+  createActor,
   createAsyncLogic,
-  createLogic,
+  createStepLogic,
   createMachine
 } from 'xstate';
 import { useActorRef, useMachine, useSelector } from '../src/index.ts';
 import { describeEachReactMode } from './utils.tsx';
+import { restoreActor } from 'xstate/persist';
 import { z } from 'zod';
 
 afterEach(() => {
@@ -19,6 +21,39 @@ afterEach(() => {
 });
 
 describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
+  it('uses a ready actor as is, starting it on mount and stopping it on unmount', async () => {
+    const machine = createMachine({
+      initial: 'a',
+      states: { a: { on: { NEXT: { target: 'b' } } }, b: {} }
+    });
+    const source = createActor(machine).start();
+    source.send({ type: 'NEXT' });
+    const persisted = source.getPersistedSnapshot();
+    source.stop();
+
+    let actor: ActorRefFrom<typeof machine> | undefined;
+    let ref: ActorRefFrom<typeof machine> | undefined;
+    const App = () => {
+      const [restored] = React.useState(() => restoreActor(machine, persisted));
+      actor = restored;
+      ref = useActorRef(restored);
+      return (
+        <div data-testid="value">
+          {String(useSelector(ref, (s) => s.value))}
+        </div>
+      );
+    };
+
+    const { unmount } = render(<App />);
+    expect(ref).toBe(actor);
+    expect(screen.getByTestId('value').textContent).toBe('b');
+    expect(ref!.getSnapshot().status).toBe('active');
+
+    unmount();
+    await Promise.resolve();
+    expect(ref!.getSnapshot().status).toBe('stopped');
+  });
+
   it('rebinds a stable observer before a replacement actor starts', () => {
     const first = createMachine({ on: { PING: {} } });
     const second = createMachine({ on: { PING: {} } });
@@ -371,7 +406,7 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
   });
 
   it('should work with custom logic', () => {
-    const someLogic = createLogic({
+    const someLogic = createStepLogic({
       context: 0,
       run: ({ context, event }) => {
         if (event.type === 'inc') {
@@ -587,6 +622,56 @@ describeEachReactMode('useActorRef (%s)', ({ suiteKey, render }) => {
 
     expect(button.textContent).toBe('3');
     expect(renders).toBeLessThan(20);
+  });
+
+  it('does not leak sources provided on rerender into a shared module-level machine', () => {
+    const original = vi.fn();
+    const leaked = vi.fn();
+    const machine = createMachine({
+      actions: {
+        stuff: original
+      },
+      on: {
+        DO: ({ actions }, enq) => enq(actions.stuff)
+      }
+    });
+
+    let providingActor!: ActorRefFrom<typeof machine>;
+    let otherActor!: ActorRefFrom<typeof machine>;
+
+    const Providing = ({ provide }: { provide: boolean }) => {
+      providingActor = useActorRef(
+        provide ? machine.provide({ actions: { stuff: leaked } }) : machine
+      );
+      return null;
+    };
+    const Other = () => {
+      otherActor = useActorRef(machine);
+      return null;
+    };
+    const App = ({ provide }: { provide: boolean }) => (
+      <>
+        <Providing provide={provide} />
+        <Other />
+      </>
+    );
+
+    const { rerender } = render(<App provide={false} />);
+    rerender(<App provide={true} />);
+
+    expect(machine.sources.actions.stuff).toBe(original);
+
+    otherActor.send({ type: 'DO' });
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(leaked).not.toHaveBeenCalled();
+
+    providingActor.send({ type: 'DO' });
+    expect(leaked).toHaveBeenCalledTimes(1);
+
+    const fresh = createActor(machine).start();
+    fresh.send({ type: 'DO' });
+    expect(original).toHaveBeenCalledTimes(2);
+    expect(leaked).toHaveBeenCalledTimes(1);
   });
 
   it("should execute action bound to a specific machine's instance when the action is provided in render", () => {

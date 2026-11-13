@@ -22,14 +22,14 @@ The root of a machine is a state node. It accepts everything a [state node](#sta
 
 | Property | Type | Description |
 | --- | --- | --- |
-| `id` | `string` | Stable identifier for the root state node. Used by `#id` targets and in state node ids. |
+| `id` | `string` | Stable identifier for the root state node. Prefixes implicit state node ids (`shop.checkout`) and lets `#shop` target the root. Without it, implicit ids are plain paths (`checkout`) and the root has no `#id`. |
 | `description` | `string` | Human-readable description. |
 | `context` | value or `({ input, spawn, actors, self }) => value` | Initial [context](context.md). Required when the context type is not `never`. |
 | `initial` | `string` or `{ target, input }` | Initial child state. The object form passes [state input](state-input.md). |
 | `states` | `Record<string, StateNodeConfig>` | Child [state nodes](states.md). |
 | `on` | `Record<EventType, TransitionConfigOrTarget>` | [Transitions](transitions.md) available in every child state. |
-| `entry` | transition function or named action | Runs when the machine starts. |
-| `exit` | transition function or named action | Runs when the machine stops. |
+| `entry` | single function | Runs when the machine starts. |
+| `exit` | single function | Runs when the machine completes or the root is re-entered. `actor.stop()` does not run exit functions. |
 | `invoke` | `InvokeConfig` or `InvokeConfig[]` | [Actor logic](invoke.md) invoked for the machine's lifetime. |
 | `always` | transition | Eventless [transition](transitions.md) checked after every microstep. |
 | `after` | `Record<delay, transition>` | [Delayed transitions](delays.md). |
@@ -38,16 +38,16 @@ The root of a machine is a state node. It accepts everything a [state node](#sta
 | `onDone` | transition | Taken when a final child state is reached. See [final states](final-states.md). |
 | `onError` | transition | Taken on `xstate.error.*` raised below this node. See [errors](lifecycle-and-errors.md). |
 | `output` | value or `({ context, event }) => value` | [Output](input-output.md) produced on completion. |
-| `schemas` | `{ context, events, internalEvents, emitted, input, output, meta, tags, children, actions, guards }` | Standard Schema definitions. See [TypeScript](typescript.md). |
+| `schemas` | `{ context, events, internalEvents, emitted, input, output, meta, transitionMeta, tags, children, actions, guards }` | Standard Schema definitions. See [TypeScript](typescript.md). |
 | `actions` | `Record<string, (...params) => void>` | Named action sources. See [setup and provide](setup-and-provide.md). |
 | `guards` | `Record<string, (...params) => boolean>` | Named guard sources. See [guards](guards.md). |
 | `actors` | `Record<string, ActorLogic>` | Named actor logic sources. See [invoke](invoke.md). |
 | `delays` | `Record<string, number \| (args) => number>` | Named delay sources. See [delays](delays.md). |
-| `version` | `string` | The machine's own version, stamped onto persisted snapshots. See [persistence](persistence.md). |
+| `version` | `string` | The machine's own version, stamped onto persisted snapshots with the machine `id`. Requires `id`. See [persistence](persistence.md). |
 | `migrate` | `(persistedSnapshot, fromVersion) => unknown` | Upgrades a persisted snapshot whose `version` does not match. Restoring a mismatched snapshot without it throws. |
 | `meta` | `object` | Metadata for the root state node. Must match `schemas.meta`. |
 | `tags` | `string[]` | Tags for the root state node. Must match `schemas.tags`. |
-| `options` | `{ maxIterations }` | Microsteps one event may take before `InfiniteTransitionError` is thrown. Defaults to `1000`. |
+| `options` | `{ maxIterations }` | Microsteps one event may take before `InfiniteTransitionError` is thrown. Unbounded by default. |
 
 Named actions take their params as the first argument, so they can be called directly or enqueued:
 
@@ -83,8 +83,8 @@ Every non-root state node accepts the following. All are optional.
 | `history` | `'shallow' \| 'deep' \| boolean` | History kind for a history state node. |
 | `target` | `string \| string[]` | Default target of a history state node. |
 | `on` | `Record<EventType, TransitionConfigOrTarget>` | Event [transitions](transitions.md). |
-| `entry` | transition function or named action | Runs on entering this state. |
-| `exit` | transition function or named action | Runs on exiting this state. |
+| `entry` | single function | Runs on entering this state. |
+| `exit` | single function | Runs on exiting this state. |
 | `invoke` | `InvokeConfig` or `InvokeConfig[]` | [Actors](invoke.md) started on entry and stopped on exit. |
 | `after` | `Record<delay, transition>` | [Delayed transitions](delays.md) scheduled on entry. |
 | `timeout` / `onTimeout` | see above | State deadline and its transition. See [timeouts](timeouts.md). |
@@ -92,7 +92,7 @@ Every non-root state node accepts the following. All are optional.
 | `onDone` | transition | Taken when a final child state is reached. |
 | `onError` | transition | Taken on an error raised at or below this state. |
 | `output` | value or mapper | [Output](input-output.md) of a final state node. |
-| `id` | `string` | Unique id, targetable as `#id`. |
+| `id` | `string` | Unique id, targetable as `#id`. `#` targets match the whole id exactly; dots in an explicit id need no escaping. Defaults to the state's path from the root joined by `.`, prefixed by the machine `id` when there is one. An explicit id that equals another state's id throws. |
 | `route` | `RouteConfig` | Enables `{ type: 'xstate.route', to: '#id' }`. Requires an explicit `id`. See [route states](route-states.md). |
 | `meta` | `object` | Metadata read with `snapshot.getMeta()`. See [states](states.md). |
 | `tags` | `string[]` | Tags read with `snapshot.hasTag(...)`. |

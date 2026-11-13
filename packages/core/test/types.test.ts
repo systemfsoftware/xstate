@@ -8,45 +8,50 @@ import {
 } from '../src/actors';
 import {
   ActorRefFrom,
-  ActorRefFromLogic,
   ActorOptions,
   AnyActorLogic,
   AnyActorRef,
   AnyMachineSnapshot,
   AnyStateMachine,
-  BuiltInExecutableActionObject,
-  CustomExecutableActionObject,
-  ExecutableActionObject,
+  BuiltInExecutableEffect,
+  CustomExecutableEffect,
+  ExecutableEffect,
   InputFrom,
   OutputFrom,
   type SnapshotFrom,
+  type StateFrom,
   StateMachine,
   type StateValue,
-  SpecialExecutableAction,
+  SpecialExecutableEffect,
   type AnySetupConfig,
   type SetupReturnFromConfig,
   type StandardSchemaV1,
   UnknownActorRef,
   createActor,
-  createLogic,
+  createStepLogic,
   createMachine,
   createSystem,
   type EventRejection,
   initialTransition,
-  isBuiltInExecutableAction,
+  isBuiltInExecutableEffect,
   setup,
   types,
   toPromise
 } from '../src/index';
 import { createInertActorScope } from '../src/inertActorScope';
 import type {
+  ActorLogic,
+  ActorLogicTransitionResult,
   DoneActorEvent,
   EventObject,
+  Snapshot,
   TransitionConfigFunction
 } from '../src/types';
 import type { Next_StateNodeConfig } from '../src/types.v6';
+import { standardSchemaValidator } from '../src/validation/index.ts';
 import z from 'zod';
 import * as z4 from 'zod/v4';
+import { restoreActor } from '../src/persist/index.ts';
 
 function noop(_x: unknown) {
   return;
@@ -67,9 +72,9 @@ type AnyNextStateNodeConfig = Next_StateNodeConfig<
   any
 >;
 
-describe('SpecialExecutableAction', () => {
-  it('narrows built-in executable action fields by type', () => {
-    const consume = (action: SpecialExecutableAction) => {
+describe('SpecialExecutableEffect', () => {
+  it('narrows built-in executable effect fields by type', () => {
+    const consume = (action: SpecialExecutableEffect) => {
       switch (action.type) {
         case '@xstate.spawn':
           noop(action.actor);
@@ -121,10 +126,10 @@ describe('SpecialExecutableAction', () => {
 
     noop(consume);
 
-    const action = {} as ExecutableActionObject;
+    const action = {} as ExecutableEffect;
 
-    if (isBuiltInExecutableAction(action)) {
-      const builtInAction: BuiltInExecutableActionObject = action;
+    if (isBuiltInExecutableEffect(action)) {
+      const builtInAction: BuiltInExecutableEffect = action;
       consume(builtInAction);
     }
   });
@@ -141,7 +146,7 @@ describe('SpecialExecutableAction', () => {
     const [, actions] = initialTransition(machine);
     const action = actions[0];
 
-    if (isBuiltInExecutableAction(action) && action.type === '@xstate.spawn') {
+    if (isBuiltInExecutableEffect(action) && action.type === '@xstate.spawn') {
       noop(action.actor);
       noop(action.id);
       noop(action.logic);
@@ -151,7 +156,7 @@ describe('SpecialExecutableAction', () => {
       noop(action.event);
     }
 
-    if (isBuiltInExecutableAction(action) && action.type === '@xstate.start') {
+    if (isBuiltInExecutableEffect(action) && action.type === '@xstate.start') {
       noop(action.actor);
       noop(action.id);
       // @ts-expect-error start actions no longer expose logic
@@ -164,7 +169,7 @@ describe('SpecialExecutableAction', () => {
       noop(action.event);
     }
 
-    if (isBuiltInExecutableAction(action) && action.type === '@xstate.raise') {
+    if (isBuiltInExecutableEffect(action) && action.type === '@xstate.raise') {
       noop(action.event);
       noop(action.id);
       noop(action.delay);
@@ -173,7 +178,7 @@ describe('SpecialExecutableAction', () => {
     }
   });
 
-  it('preserves custom executable actions in transition results', () => {
+  it('preserves custom executable effects in transition results', () => {
     const machine = createMachine({
       entry: (_, enq) => enq(function customEffect() {})
     });
@@ -182,7 +187,7 @@ describe('SpecialExecutableAction', () => {
     const action = actions[0];
 
     if (action.kind === 'action') {
-      const customAction: CustomExecutableActionObject = action;
+      const customAction: CustomExecutableEffect = action;
       noop(customAction.type);
       noop(customAction.args);
       noop(customAction.action);
@@ -566,6 +571,61 @@ describe('context', () => {
       })
     });
   });
+
+  it('should infer context from a context function without schemas.context', () => {
+    const connection = createCallbackLogic(() => () => {});
+
+    const machine = createMachine({
+      actors: { connection },
+      context: ({ spawn, actors }) => ({
+        count: 0,
+        connection: spawn(actors.connection, { id: 'connection' })
+      }),
+      on: {
+        inc: ({ context }) => ({ context: { count: context.count + 1 } })
+      }
+    });
+
+    const context = createActor(machine).getSnapshot().context;
+    context.count satisfies number;
+    context.connection satisfies ActorRefFrom<typeof connection>;
+    // @ts-expect-error the spawned ref is typed, not `any`
+    context.connection satisfies number;
+
+    const lazy = createMachine({ context: () => ({ count: 0 }) });
+    createActor(lazy).getSnapshot().context.count satisfies number;
+  });
+
+  it('should infer context from a context function next to an invoked logic object', () => {
+    // Implements `ActorLogic` without its optional members, like a machine in
+    // the published declarations, where `getExecutionErrorEvent` is stripped.
+    class MinimalLogic implements ActorLogic<Snapshot<undefined>, EventObject> {
+      transition(
+        snapshot: Snapshot<undefined>
+      ): ActorLogicTransitionResult<Snapshot<undefined>> {
+        return [snapshot, []];
+      }
+      initialTransition(): ActorLogicTransitionResult<Snapshot<undefined>> {
+        return [this.getInitialSnapshot(), []];
+      }
+      getInitialSnapshot(): Snapshot<undefined> {
+        return { status: 'active', output: undefined, error: undefined };
+      }
+      getPersistedSnapshot(snapshot: Snapshot<undefined>) {
+        return snapshot;
+      }
+    }
+
+    const machine = createMachine({
+      context: ({ input }) => ({ count: 0, input }),
+      initial: 'idle',
+      states: {
+        idle: { invoke: { src: new MinimalLogic() } }
+      }
+    });
+
+    createActor(machine).getSnapshot().context.count satisfies number;
+  });
 });
 
 describe('output', () => {
@@ -746,7 +806,7 @@ describe('emitted', () => {
     // @ts-expect-error
     actor.on('unknown', () => {});
 
-    const actorRef: ActorRefFromLogic<typeof m> = actor;
+    const actorRef: ActorRefFrom<typeof m> = actor;
 
     actorRef.on('onClick', (ev) => {
       ev.y satisfies number;
@@ -1390,18 +1450,20 @@ describe('events', () => {
   });
 
   it('should reject string target shorthand in transition configs', () => {
-    createMachine({
-      initial: 'a',
-      // @ts-expect-error
-      states: {
-        a: {
-          on: {
-            NEXT: 'b'
-          }
-        },
-        b: {}
-      }
-    });
+    expect(() =>
+      createMachine({
+        initial: 'a',
+        // @ts-expect-error
+        states: {
+          a: {
+            on: {
+              NEXT: 'b'
+            }
+          },
+          b: {}
+        }
+      })
+    ).toThrow('is the string "b"');
   });
 
   it('should reject transition arrays in authored machine configs', () => {
@@ -2692,11 +2754,11 @@ describe('invoke', () => {
     });
 
     createAsyncLogic({
-      // @ts-expect-error
       schemas: {
         input: types<{ userId: string }>(),
         output: types<{ name: string }>()
       },
+      // @ts-expect-error output does not match the declared schema
       run: async () => {
         return { age: 42 };
       }
@@ -3195,7 +3257,7 @@ describe('invoke', () => {
   });
 
   it('should infer custom logic input and output from source schemas', () => {
-    const logic = createLogic({
+    const logic = createStepLogic({
       schemas: {
         input: types<{ step: number }>(),
         output: types<{ total: number }>()
@@ -3582,6 +3644,7 @@ describe('invoke', () => {
       //   };
       // },
       actors: { child },
+      // @ts-expect-error input is required by the resolved logic
       invoke: {
         src: ({ actors }) => actors.child
       }
@@ -4104,6 +4167,67 @@ describe('actor sources', () => {
   });
 });
 
+describe('ActorRefFrom', () => {
+  it('accepts actor logic', () => {
+    const machine = createMachine({ initial: 'a', states: { a: {} } });
+    const asyncLogic = createAsyncLogic({ run: async () => 42 });
+
+    type MachineRef = ActorRefFrom<typeof machine>;
+    type AsyncRef = ActorRefFrom<typeof asyncLogic>;
+
+    ((ref: MachineRef) => {
+      ref.getSnapshot().value satisfies string;
+    }) satisfies unknown;
+    ((ref: AsyncRef) => {
+      ref.getSnapshot().output satisfies number | undefined;
+    }) satisfies unknown;
+  });
+
+  it('types machine snapshots fully', () => {
+    const child = createMachine({
+      id: 'child',
+      schemas: { context: z.object({ count: z.number() }) },
+      context: { count: 0 },
+      initial: 'idle',
+      states: { idle: { id: 'known' }, busy: {} }
+    });
+    const parent = createMachine({
+      schemas: {
+        context: z.object({ ref: z.custom<ActorRefFrom<typeof child>>() })
+      },
+      context: ({ spawn }) => ({ ref: spawn(child) })
+    });
+
+    ((ref: ActorRefFrom<typeof child>) => {
+      const snapshot = ref.getSnapshot();
+      snapshot.context.count satisfies number;
+      // @ts-expect-error context is typed
+      snapshot.context.count satisfies string;
+      snapshot.matches('#known');
+      snapshot.matches('#child.busy');
+      // @ts-expect-error unknown state id
+      snapshot.matches('#nope');
+      snapshot.matches('busy');
+    }) satisfies unknown;
+    ((snapshot: SnapshotFrom<typeof parent>) => {
+      snapshot.context.ref.getSnapshot().matches('#known');
+      // @ts-expect-error unknown state id
+      snapshot.context.ref.getSnapshot().matches('#nope');
+    }) satisfies unknown;
+  });
+
+  it('rejects types that are not actor logic', () => {
+    const machine = createMachine({});
+
+    // @ts-expect-error a promise is not actor logic
+    type _PromiseRef = ActorRefFrom<Promise<number>>;
+    // @ts-expect-error an actor ref is not actor logic
+    type _RefRef = ActorRefFrom<ActorRefFrom<typeof machine>>;
+    // @ts-expect-error a function is not actor logic
+    type _FnRef = ActorRefFrom<() => typeof machine>;
+  });
+});
+
 describe('state.children without setup', () => {
   it('should return the correct child type on the available snapshot when the child ID for the actor was configured', () => {
     const child = createMachine({
@@ -4142,7 +4266,9 @@ describe('state.children without setup', () => {
 
     childSnapshot.context.foo satisfies string | undefined;
     childSnapshot.context.foo satisfies string;
+    // @ts-expect-error - inferred context is string, not a single literal
     childSnapshot.context.foo satisfies '';
+    // @ts-expect-error - inferred context is not a number
     childSnapshot.context.foo satisfies number | undefined;
   });
 
@@ -4823,6 +4949,93 @@ describe('setup.extend', () => {
       }
     });
   });
+
+  it('checks a source that reuses a base name against the base source', () => {
+    type Form = { street: string; zip: string };
+    const base = setup({
+      schemas: { context: types<Form>(), events: { next: types<{}>() } },
+      guards: {
+        isComplete: (form: Form) => form.street !== '' && form.zip !== ''
+      },
+      actions: { track: (_params: { step: string }) => {} },
+      actors: {
+        save: createAsyncLogic({
+          schemas: { input: types<Form>(), output: types<{ id: string }>() },
+          run: async ({ input }) => ({ id: input.zip })
+        })
+      }
+    });
+
+    base.extend({
+      guards: {
+        // @ts-expect-error - the replacement must accept the base arguments
+        isComplete: (zip: string) => /^\d{5}$/.test(zip)
+      }
+    });
+    base.extend({
+      actions: {
+        // @ts-expect-error - the replacement must accept the base params
+        track: (count: number) => {}
+      }
+    });
+    base.extend({
+      actors: {
+        // @ts-expect-error - the replacement must accept the base input and produce the base output
+        save: createAsyncLogic({
+          schemas: {
+            input: types<{ zip: number }>(),
+            output: types<{ ok: boolean }>()
+          },
+          run: async () => ({ ok: true })
+        })
+      }
+    });
+
+    // Compatible replacements, fewer parameters and new names are accepted.
+    const tenant = base.extend({
+      guards: {
+        isComplete: () => true,
+        isCedex: (zip: string) => zip.endsWith('CEDEX')
+      },
+      actions: {
+        track: (_params: { step: string }) => {},
+        extra: (_params: { count: number }) => {}
+      },
+      actors: {
+        save: createAsyncLogic({
+          schemas: { input: types<Form>(), output: types<{ id: string }>() },
+          run: async () => ({ id: 'tenant' })
+        })
+      }
+    });
+
+    const machine = tenant.createMachine({
+      context: { street: '', zip: '75001' },
+      initial: 'editing',
+      states: {
+        editing: {
+          on: {
+            next: ({ context, guards, actions }, enq) => {
+              if (!guards.isComplete(context) || guards.isCedex(context.zip)) {
+                return;
+              }
+              enq(actions.track, { step: 'next' });
+              enq(actions.extra, { count: 1 });
+              return { target: 'done' };
+            }
+          }
+        },
+        done: {}
+      }
+    });
+
+    const actor = createActor(machine).start();
+    actor.send({ type: 'next' });
+
+    // The tenant's `isComplete` replaced the base one, which would reject the
+    // empty street.
+    expect(actor.getSnapshot().value).toBe('done');
+  });
 });
 
 describe('choice state types', () => {
@@ -4951,7 +5164,7 @@ describe('children schemas', () => {
     setup({}).createMachine({
       schemas: {
         children: {
-          someId: z.custom<ActorRefFromLogic<typeof child>>()
+          someId: z.custom<ActorRefFrom<typeof child>>()
         }
       },
       invoke: {
@@ -4982,7 +5195,7 @@ describe('children schemas', () => {
     createMachine({
       schemas: {
         children: {
-          someId: z.custom<ActorRefFromLogic<typeof child>>()
+          someId: z.custom<ActorRefFrom<typeof child>>()
         }
       },
       // @ts-expect-error
@@ -4995,7 +5208,7 @@ describe('children schemas', () => {
     setup({}).createMachine({
       schemas: {
         children: {
-          someId: z.custom<ActorRefFromLogic<typeof child>>()
+          someId: z.custom<ActorRefFrom<typeof child>>()
         }
       },
       // @ts-expect-error
@@ -5010,7 +5223,7 @@ describe('children schemas', () => {
     setup({}).createMachine({
       schemas: {
         children: {
-          someId: z.custom<ActorRefFromLogic<typeof child>>()
+          someId: z.custom<ActorRefFrom<typeof child>>()
         }
       },
       actors: {
@@ -5121,7 +5334,7 @@ describe('input', () => {
       input: { id: 'a' }
     }).getPersistedSnapshot();
 
-    createActor(machine, { snapshot: persisted });
+    restoreActor(machine, persisted);
     if (false) {
       // @ts-expect-error the removed `state` option does not satisfy the input requirement
       createActor(machine, { state: persisted });
@@ -5639,7 +5852,7 @@ describe('delays', () => {
       },
       timeout: 200,
       onTimeout: ({ event }) => {
-        event.type satisfies 'xstate.timeout';
+        event.type satisfies 'xstate.timeout.state';
         event.stateId satisfies string;
         return {};
       },
@@ -5910,7 +6123,7 @@ describe('delays', () => {
     createMachine({
       schemas: {
         children: {
-          worker: z.custom<ActorRefFromLogic<typeof child>>()
+          worker: z.custom<ActorRefFrom<typeof child>>()
         }
       },
       invoke: {
@@ -6442,6 +6655,77 @@ describe('snapshot methods', () => {
     void [parent, children];
   });
 
+  it('should reject unknown state values in matches', () => {
+    const machine = setup({}).createMachine({
+      initial: 'idle',
+      states: {
+        idle: {},
+        checkout: {
+          initial: 'payment',
+          states: { payment: {}, review: {} }
+        }
+      }
+    });
+
+    const snapshot = createActor(machine).getSnapshot();
+
+    snapshot.matches('idle');
+    snapshot.matches('checkout.payment');
+    snapshot.matches({ checkout: 'review' });
+    // @ts-expect-error 'noSuchState' is not a state of this machine
+    snapshot.matches('noSuchState');
+    // @ts-expect-error 'nope' is not a child state of 'checkout'
+    snapshot.matches('checkout.nope');
+    // @ts-expect-error 'nope' is not a child state of 'checkout'
+    snapshot.matches({ checkout: 'nope' });
+    // @ts-expect-error 'nope' is not a state of this machine
+    snapshot.matches({ nope: 'payment' });
+
+    const wide = (value: StateValue) => snapshot.matches(value);
+    const leaf: string = 'review';
+    snapshot.matches({ checkout: leaf });
+    const inferred = { checkout: 'review' };
+    snapshot.matches(inferred);
+    const either: 'idle' | { checkout: string } = inferred;
+    snapshot.matches(either);
+    // @ts-expect-error 'nope' is not a state of this machine
+    snapshot.matches({ nope: 'payment', checkout: leaf });
+    // @ts-expect-error 'idle' has no child states
+    snapshot.matches({ idle: leaf });
+
+    const formMachine = setup({}).createMachine({
+      initial: 'form',
+      states: {
+        form: {
+          type: 'parallel',
+          states: {
+            shipping: {
+              initial: 'address',
+              states: { address: {}, done: {} }
+            },
+            billing: {
+              initial: 'card',
+              states: { card: {}, done: {} }
+            }
+          }
+        }
+      }
+    });
+    const formSnapshot = createActor(formMachine).getSnapshot();
+    formSnapshot.matches({ form: { shipping: leaf, billing: 'card' } });
+    // @ts-expect-error 'nope' is not a child state of 'billing'
+    formSnapshot.matches({ form: { shipping: leaf, billing: 'nope' } });
+    // @ts-expect-error 'nope' is not a region of 'form'
+    formSnapshot.matches({ form: { shipping: leaf, nope: 'card' } });
+    const fromState = (state: StateFrom<typeof machine>) => {
+      state.matches('checkout.review');
+      // @ts-expect-error 'noSuchState' is not a state of this machine
+      state.matches('noSuchState');
+    };
+
+    void [wide, fromState];
+  });
+
   it('should type infer actor union snapshot methods', () => {
     const typeOne = createMachine({
       schemas: {
@@ -6490,6 +6774,7 @@ describe('snapshot methods', () => {
 
     snapshot.matches('one');
     snapshot.matches('two');
+    // @ts-expect-error
     snapshot.matches('three');
 
     snapshot.getMeta();
@@ -6526,15 +6811,15 @@ it('UnknownActorRef should return a Snapshot-typed value from getSnapshot()', ()
   actor.getSnapshot().status === 'FOO';
 });
 
-it('Actor<T> should be assignable to ActorRefFromLogic<T>', () => {
+it('Actor<T> should be assignable to ActorRefFrom<T>', () => {
   const logic = createMachine({});
 
   class ActorThing<T extends AnyActorLogic> {
-    actorRef: ActorRefFromLogic<T>;
+    actorRef: ActorRefFrom<T>;
     constructor(actorLogic: T, options: ActorOptions<T>) {
       const actor = createActor(actorLogic, options);
 
-      actor satisfies ActorRefFromLogic<typeof actorLogic>;
+      actor satisfies ActorRefFrom<typeof actorLogic>;
       this.actorRef = actor;
     }
   }
@@ -6630,7 +6915,7 @@ it('createSystem().createActor requires input for required-input machines', () =
     const persisted = app
       .createActor(machine, { input: { id: 'a' } })
       .getPersistedSnapshot();
-    app.createActor(machine, { snapshot: persisted });
+    restoreActor(machine, persisted, { system: app });
     // @ts-expect-error the removed `state` option does not satisfy the input requirement
     app.createActor(machine, { state: persisted });
 
@@ -6775,6 +7060,69 @@ describe('invoke onDone inference with heterogeneous actor maps', () => {
       }
     });
   });
+
+  // TypeScript 5.9 lost these contextual types (TS7031) when the setup also
+  // had a validator and an event with a payload. TypeScript 6 types them
+  // either way, so only a TypeScript 5.9 check fails without the fix.
+  it('should infer per-actor event.output with a validator and event payloads', () => {
+    const events = {
+      'user.pick': z.object({ value: z.string() }),
+      'user.next': z.object({})
+    };
+
+    setup({
+      schemas: { events },
+      validator: standardSchemaValidator(),
+      actors: { numberLogic, stringLogic },
+      states: { a: {}, b: {}, done: {} }
+    }).createMachine({
+      initial: 'a',
+      states: {
+        a: {
+          invoke: {
+            src: 'numberLogic',
+            onDone: ({ event }) => {
+              event.output satisfies number;
+              // @ts-expect-error output is a number
+              event.output satisfies string;
+              return { target: 'done' };
+            }
+          }
+        },
+        b: {
+          invoke: {
+            src: stringLogic,
+            onDone: ({ event }) => {
+              event.output satisfies string;
+              return { target: 'done' };
+            }
+          }
+        },
+        done: {}
+      }
+    });
+
+    setup({
+      schemas: { context: z.object({ length: z.number() }), events },
+      validator: standardSchemaValidator(),
+      actors: { numberLogic, stringLogic }
+    }).createMachine({
+      context: { length: 0 },
+      initial: 'a',
+      states: {
+        a: {
+          invoke: {
+            src: 'stringLogic',
+            onDone: {
+              target: 'done',
+              context: ({ event }) => ({ length: event.output.length })
+            }
+          }
+        },
+        done: {}
+      }
+    });
+  });
 });
 
 it('generic aliases preserve invocation metadata, state input, and transition children', () => {
@@ -6888,4 +7236,20 @@ it('generic state node containers keep arbitrary metadata as any', () => {
       .flat()
       .every(Boolean)
   ).toBe(true);
+});
+
+it('retains concrete event schemas through provide', () => {
+  const field = z4.object({ value: z4.string() }).meta({ label: 'Name' });
+  const machine = setup({
+    schemas: { events: { change: field } }
+  }).createMachine({});
+  machine.schemas?.events.change.meta();
+  machine.provide({}).schemas?.events.change.meta();
+});
+it('widens inferred schema-free async output for compatible replacements', () => {
+  const save = createAsyncLogic({ run: async () => ({ ok: true }) });
+  const machine = setup({ actors: { save } }).createMachine({});
+  machine.provide({
+    actors: { save: createAsyncLogic({ run: async () => ({ ok: false }) }) }
+  });
 });

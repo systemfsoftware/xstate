@@ -1,13 +1,8 @@
 import isDevelopment from '#is-development';
-import { ACTOR_REF_TYPE, createActor } from './createActor.ts';
-import {
-  createErrorPlatformEvent,
-  createInitEvent,
-  createInvokeTimeoutEvent
-} from './eventUtils.ts';
-import { XSTATE_TIMER } from './constants.ts';
-import { parseGeneratedActorId } from './system.ts';
-import { createRemoteActorRef } from './remoteActorRef.ts';
+import { xstateError } from './xstateError.ts';
+import { createActor } from './createActor.ts';
+import { createErrorPlatformEvent, createInitEvent } from './eventUtils.ts';
+import { STATE_DELIMITER, XSTATE_TIMER } from './constants.ts';
 
 import { createSpawner } from './spawn.ts';
 import {
@@ -20,6 +15,7 @@ import { withActorSelf } from './actorScope.ts';
 import {
   createMachineSnapshot,
   cloneMachineSnapshot,
+  freezeContext,
   getPersistedSnapshot,
   MachineSnapshot
 } from './State.ts';
@@ -28,7 +24,6 @@ import { StateNode } from './StateNode.ts';
 import {
   formatRouteTransitions,
   getAllStateNodes,
-  getStateNodeByPath,
   getStateNodes,
   getTransitionResult,
   hasEffect,
@@ -45,6 +40,7 @@ import {
   createDeadLetterEffect,
   createSpawnEffect,
   createStartEffect,
+  detachedScopes,
   resolveActionsWithContext,
   mergeActorIdCounters,
   takeSpawnAllocationCounters
@@ -62,27 +58,24 @@ import type {
   AnyStateMachine,
   AnyMachineSnapshot,
   AnyTransitionDefinition,
-  Equals,
   EventDescriptor,
   EmittedFrom,
   EventObject,
   EventFromLogic,
-  ExecutableActionObject,
-  ExecutableActionObjectFromLogic,
+  ExecutableEffect,
+  ExecutableEffectFrom,
   HistoryValue,
   InputFrom,
-  IsAny,
-  LogicalTimer,
   MachineContext,
   MetaObject,
   OutputFrom,
-  Snapshot,
   SnapshotFrom,
   StateValue,
   StateSchema,
   SnapshotStatus,
   AnyStateNode
 } from './types.ts';
+import type { Equals, IsAny } from './typeUtils.ts';
 import {
   AnyMachineSchemas,
   DelaySourceMap,
@@ -92,34 +85,15 @@ import {
   MachineOptions
 } from './types.v6.ts';
 import {
+  describeMachine,
+  assertUnreservedSourceName,
   matchesEventDescriptor,
-  resolveReferencedActor,
   toStatePath
 } from './utils.ts';
 import { assertValid } from './validation.ts';
 import type { ActorLogicValidator } from './validation.types.ts';
-import type { StandardSchemaV1 } from './schema.types.ts';
-import type { PersistedMachineSnapshot } from './machineVersion.types.ts';
 
 const STATE_IDENTIFIER = '#';
-
-function findEventSchema(
-  schemas: Record<string, StandardSchemaV1> | undefined,
-  eventType: string
-): StandardSchemaV1 | undefined {
-  if (!schemas) {
-    return undefined;
-  }
-
-  if (Object.hasOwn(schemas, eventType)) {
-    return schemas[eventType];
-  }
-
-  const descriptor = Object.keys(schemas).find((key) =>
-    matchesEventDescriptor(eventType, key)
-  );
-  return descriptor === undefined ? undefined : schemas[descriptor];
-}
 
 let emptyCanActor: AnyActor | undefined;
 let emptyCanActorScope: AnyActorScope | undefined;
@@ -127,7 +101,7 @@ let emptyCanActorScope: AnyActorScope | undefined;
 function getEmptyCanActor(): AnyActor {
   // A minimal inert actor used purely as the `self`/`parent` argument when
   // dry-running transitions for `snapshot.can(...)`. Intentionally not built
-  // on `createLogic` so `can()` does not pull that machinery into bundles.
+  // on `createStepLogic` so `can()` does not pull that machinery into bundles.
   return (emptyCanActor ??= createActor({
     transition: (snapshot: any) => [snapshot, []],
     initialTransition: () => [
@@ -160,10 +134,11 @@ function getEmptyCanActorScope(): AnyActorScope {
     emit: () => {},
     actionExecutor: () => {}
   };
+  detachedScopes.add(emptyCanActorScope);
   return emptyCanActorScope;
 }
 
-type CompatibleProvidedActorSource<
+export type CompatibleProvidedActorSource<
   TExpected extends AnyActorLogic,
   TActual extends AnyActorLogic
 > =
@@ -209,13 +184,75 @@ type ProvidedSourceMap<TDeclared, TProvided> = {
     : TDeclared[K];
 };
 
-// Action implementations may return integration-specific values. Their
-// positional arguments must still match the declared source.
-type ProvidedActionContracts<T> = {
-  [K in keyof T]: T[K] extends (...args: infer TArgs) => any
-    ? (...args: TArgs) => void
+// The action as the machine declared it. A provided action keeps its own type,
+// so integrations can infer from what it returns, and records the declared one,
+// so that the next `provide(...)` is checked against the same contract.
+type DeclaredAction<T> = T extends {
+  readonly '~declaredAction'?: infer TDeclared;
+}
+  ? unknown extends TDeclared
+    ? T
+    : Exclude<TDeclared, undefined>
+  : T;
+
+type ProvidedActionSourceMap<TDeclared, TProvided> = {
+  [K in keyof TDeclared]: K extends keyof TProvided
+    ? ({} extends Pick<TProvided, K>
+        ? TDeclared[K] | Exclude<TProvided[K], undefined>
+        : Exclude<TProvided[K], undefined>) & {
+        readonly '~declaredAction'?: DeclaredAction<TDeclared[K]>;
+      }
+    : TDeclared[K];
+};
+
+// Positional arguments must match the declared action. An action declared to
+// return nothing (or a result that admits `void`, as an action only declared
+// in `schemas.actions` does) is an effect: the implementation may return
+// integration-specific values, such as an Effect. Any other declared result,
+// such as a context patch, can be returned from a transition, which applies
+// it, so the implementation must return a compatible one.
+export type ProvidedActionContracts<T> = {
+  [K in keyof T]: DeclaredAction<T[K]> extends (
+    ...args: infer TArgs
+  ) => infer TResult
+    ? (...args: TArgs) => ProvidedActionResult<TResult>
     : never;
 };
+
+// `Extract` keeps the result within `Sources['actions']`, which declared
+// actions already satisfy.
+type ProvidedActionResult<TResult> = void extends TResult
+  ? void
+  : Extract<TResult, ReturnType<Sources['actions'][string]>>;
+
+export { InvalidSnapshotError } from './persistedSnapshotValidation.ts';
+
+/**
+ * The development message for an id that matches no state. When a prefix of
+ * the id is a state id and the rest resolves beneath it as a relative path,
+ * suggests the target's own id.
+ */
+function describeUnknownStateId(
+  idMap: Map<string, AnyStateNode>,
+  id: string
+): string {
+  const message = `No state has id "${id}".`;
+  const segments = toStatePath(id);
+  for (let i = segments.length - 1; i > 0; i--) {
+    let node: AnyStateNode | undefined = idMap.get(
+      segments.slice(0, i).join(STATE_DELIMITER)
+    );
+    for (let j = i; node && j < segments.length; j++) {
+      node = node.states?.[segments[j]];
+    }
+    if (node) {
+      return node.config.id
+        ? `${message} Use "#${node.id}".`
+        : `${message} Use "#${node.id}", or give that state an id.`;
+    }
+  }
+  return message;
+}
 
 /** @public */
 export class StateMachine<
@@ -283,16 +320,11 @@ export class StateMachine<
     ? TVersion
     : undefined;
 
-  public schemas: AnyMachineSchemas | undefined;
-
-  /** Standard Schema for snapshots persisted by this machine version. */
-  public readonly snapshotSchema: StandardSchemaV1<
-    unknown,
-    Snapshot<unknown> & PersistedMachineSnapshot & { context: TContext }
-  >;
-
-  /** Standard Schema for complete events accepted by this machine version. */
-  public readonly eventSchema: StandardSchemaV1<unknown, TEvent>;
+  public schemas:
+    | (TConfig extends { schemas: infer TSchemas extends AnyMachineSchemas }
+        ? TSchemas
+        : AnyMachineSchemas)
+    | undefined;
 
   public sources: Sources;
 
@@ -304,9 +336,21 @@ export class StateMachine<
 
   public root: StateNode<TContext, TEvent, TMeta, TTransitionMeta>;
 
-  public id: TConfig extends { id: infer TId extends string }
-    ? TId
-    : '(machine)';
+  /**
+   * Returns the machine itself, never a Proxy wrapped around it (a function
+   * member is not wrapped by reactive proxies, so it still closes over the raw
+   * instance). Persistence resolves state nodes through it, matching the
+   * bound `transition` / `getInitialSnapshot`.
+   *
+   * @internal
+   */
+  public readonly _raw: () => this = () => this;
+
+  /**
+   * The machine's `id`, or the empty string when the config declares none.
+   * The root state node has this id; a machine without one has no `#id` root.
+   */
+  public id: TConfig extends { id: infer TId extends string } ? TId : '';
 
   public states: StateNode<TContext, TEvent, TMeta, TTransitionMeta>['states'];
   public events: Array<EventDescriptor<TEvent>>;
@@ -344,7 +388,15 @@ export class StateMachine<
     sources?: Sources,
     public validator?: ActorLogicValidator
   ) {
-    this.id = (config.id || '(machine)') as typeof this.id;
+    if (config.version !== undefined && !config.id) {
+      // Persisted snapshots record `{ id, version }`; a version needs an id.
+      throw new Error(
+        isDevelopment
+          ? `Machine with version '${config.version}' must declare an id.`
+          : xstateError(18, config.version)
+      );
+    }
+    this.id = (config.id ?? '') as typeof this.id;
     this.sources = {
       actors: config.actors ?? {},
       actions: config.actions ?? {},
@@ -353,150 +405,14 @@ export class StateMachine<
       ...sources
     };
     if (isDevelopment) {
-      // The `@xstate.` prefix is reserved for built-in serialized action and
-      // guard descriptors — user source names must not collide.
       for (const kind of ['actions', 'guards', 'actors', 'delays'] as const) {
         for (const key of Object.keys(this.sources[kind])) {
-          if (key.startsWith('@xstate.')) {
-            throw new Error(
-              `Invalid ${kind} name '${key}': the '@xstate.' prefix is reserved for built-in descriptors.`
-            );
-          }
+          assertUnreservedSourceName(kind, key);
         }
       }
     }
     this.version = this.config.version as typeof this.version;
-    this.schemas = this.config.schemas;
-    this.snapshotSchema = {
-      '~standard': {
-        version: 1,
-        vendor: 'xstate',
-        validate: async (value) => {
-          if (value === null || typeof value !== 'object') {
-            return { issues: [{ message: 'Expected a persisted snapshot.' }] };
-          }
-          const snapshot: Record<string, unknown> = {
-            historyValue: {},
-            timers: {},
-            ...(value as Record<string, unknown>)
-          };
-          const contextSchema = this.schemas?.context;
-          let context = snapshot.context;
-          if (contextSchema) {
-            const result = await contextSchema['~standard'].validate(context);
-            if (result.issues) {
-              return {
-                issues: [
-                  {
-                    message: `Invalid context for machine '${this.id}' version '${this.version}': ${result.issues[0]?.message}`
-                  }
-                ]
-              };
-            }
-            context = result.value;
-          }
-          for (const key of ['value', 'children'] as const) {
-            if (!(key in snapshot)) {
-              return {
-                issues: [{ message: `Persisted snapshot is missing '${key}'.` }]
-              };
-            }
-          }
-          if (
-            !['active', 'done', 'error', 'stopped'].includes(
-              snapshot.status as string
-            )
-          ) {
-            return {
-              issues: [{ message: 'Persisted snapshot has invalid status.' }]
-            };
-          }
-          for (const key of ['children', 'historyValue', 'timers'] as const) {
-            if (
-              snapshot[key] === null ||
-              typeof snapshot[key] !== 'object' ||
-              Array.isArray(snapshot[key])
-            ) {
-              return {
-                issues: [
-                  { message: `Persisted snapshot has invalid '${key}'.` }
-                ]
-              };
-            }
-          }
-          try {
-            this.resolveState({
-              value: snapshot.value as StateValue,
-              context
-            } as any);
-          } catch (error) {
-            return {
-              issues: [
-                {
-                  message:
-                    error instanceof Error
-                      ? error.message
-                      : 'Persisted snapshot has invalid state value.'
-                }
-              ]
-            };
-          }
-          return {
-            value: { ...snapshot, context } as Snapshot<unknown> &
-              PersistedMachineSnapshot & { context: TContext }
-          };
-        }
-      }
-    };
-    this.eventSchema = {
-      '~standard': {
-        version: 1,
-        vendor: 'xstate',
-        validate: async (value) => {
-          if (
-            value === null ||
-            typeof value !== 'object' ||
-            typeof (value as EventObject).type !== 'string'
-          ) {
-            return { issues: [{ message: 'Expected an event object.' }] };
-          }
-          const event = value as EventObject;
-          const eventSchemas = this.schemas?.events;
-          const internalEventSchemas = this.schemas?.internalEvents;
-          const isFrameworkEvent =
-            event.type.startsWith('xstate.') ||
-            event.type.startsWith('@xstate.');
-          const schema =
-            findEventSchema(internalEventSchemas, event.type) ??
-            findEventSchema(eventSchemas, event.type);
-          if (
-            (eventSchemas || internalEventSchemas) &&
-            !schema &&
-            !isFrameworkEvent
-          ) {
-            return {
-              issues: [
-                {
-                  message: `Unknown event '${event.type}' for machine '${this.id}' version '${this.version}'.`
-                }
-              ]
-            };
-          }
-          if (!schema) {
-            return { value: event as TEvent };
-          }
-          const { type, ...payload } = event;
-          const result = await schema['~standard'].validate(payload);
-          if (result.issues) {
-            return result;
-          }
-          if (result.value === null || typeof result.value !== 'object') {
-            return { issues: [{ message: 'Expected an event payload.' }] };
-          }
-          return { value: { ...result.value, type } as TEvent };
-        }
-      }
-    };
+    this.schemas = this.config.schemas as typeof this.schemas;
     this.internalEventDescriptors = Object.keys(
       this.schemas?.internalEvents ?? {}
     );
@@ -506,7 +422,6 @@ export class StateMachine<
     this.initialTransition = this.initialTransition.bind(this);
     this.getInitialSnapshot = this.getInitialSnapshot.bind(this);
     this.getPersistedSnapshot = this.getPersistedSnapshot.bind(this);
-    this.restoreSnapshot = this.restoreSnapshot.bind(this);
     this.start = this.start.bind(this);
 
     this.root = new StateNode<TContext, TEvent, TMeta, TTransitionMeta>(
@@ -568,7 +483,7 @@ export class StateMachine<
     TEmitted,
     TMeta,
     TConfig,
-    ProvidedSourceMap<TActionMap, TProvidedActionMap>,
+    ProvidedActionSourceMap<TActionMap, TProvidedActionMap>,
     ProvidedSourceMap<TActorMap, TProvidedActorMap>,
     TGuardMap,
     TDelayMap,
@@ -609,7 +524,7 @@ export class StateMachine<
       TEmitted,
       TMeta,
       TConfig,
-      ProvidedSourceMap<TActionMap, TProvidedActionMap>,
+      ProvidedActionSourceMap<TActionMap, TProvidedActionMap>,
       ProvidedSourceMap<TActorMap, TProvidedActorMap>,
       TGuardMap,
       TDelayMap,
@@ -709,7 +624,7 @@ export class StateMachine<
       TMeta,
       TConfig
     >,
-    ExecutableActionObjectFromLogic<this>
+    ExecutableEffectFrom<this>
   > {
     const usesInertScope = !actorScope;
     const resolvedActorScope = (actorScope ??
@@ -747,7 +662,7 @@ export class StateMachine<
                   .issues,
                 error
               }
-            ) as ExecutableActionObjectFromLogic<this>
+            ) as ExecutableEffectFrom<this>
           ]
         ];
       }
@@ -818,12 +733,12 @@ export class StateMachine<
 
   private _collectEffects(
     microsteps: ReadonlyArray<
-      readonly [unknown, ReadonlyArray<ExecutableActionObject>, ...unknown[]]
+      readonly [unknown, ReadonlyArray<ExecutableEffect>, ...unknown[]]
     >
-  ): ExecutableActionObjectFromLogic<this>[] {
+  ): ExecutableEffectFrom<this>[] {
     return microsteps.flatMap(
       ([, actions]) => actions
-    ) as ExecutableActionObjectFromLogic<this>[];
+    ) as ExecutableEffectFrom<this>[];
   }
 
   private _attachPureActorRef<TSnapshot extends AnyMachineSnapshot>(
@@ -943,9 +858,16 @@ export class StateMachine<
       (actorScope.self as any)._collectedMicrosteps = collectedMicrosteps;
     }
 
+    const rootInput = snapshot._stateInputs[this.root.id];
     return cloneMachineSnapshot(snapshot, {
       ...(context !== snapshot.context ? { context } : {}),
-      ...(stateChanged ? { _nodes: [this.root, targetNode] } : {})
+      ...(stateChanged
+        ? {
+            _nodes: [this.root, targetNode],
+            // The source state exited, so only the root input remains.
+            _stateInputs: rootInput ? { [this.root.id]: rootInput } : {}
+          }
+        : {})
     });
   }
 
@@ -1040,6 +962,9 @@ export class StateMachine<
    * @internal
    */
   public _canTransition(snapshot: AnyMachineSnapshot, event: TEvent): boolean {
+    if (snapshot.status !== 'active') {
+      return false;
+    }
     const emptyActorScope = getEmptyCanActorScope();
     const transitionData = this.getTransitionData(
       snapshot as any,
@@ -1163,6 +1088,9 @@ export class StateMachine<
       ) as any;
       if (resolvedContext) {
         nextState.context = resolvedContext;
+        if (isDevelopment) {
+          freezeContext(resolvedContext);
+        }
       }
       if (Object.keys(children).length > 0) {
         nextState.children = {
@@ -1249,7 +1177,7 @@ export class StateMachine<
       TMeta,
       TConfig
     >,
-    ExecutableActionObjectFromLogic<this>
+    ExecutableEffectFrom<this>
   > {
     if (this.validator) {
       assertValid(this.validator, {
@@ -1267,11 +1195,11 @@ export class StateMachine<
     const finalizeInitialResult = (
       macroState: AnyMachineSnapshot,
       microsteps: ReadonlyArray<
-        readonly [unknown, ReadonlyArray<ExecutableActionObject>, ...unknown[]]
+        readonly [unknown, ReadonlyArray<ExecutableEffect>, ...unknown[]]
       >
     ): ActorLogicTransitionResult<
       SnapshotFrom<this>,
-      ExecutableActionObjectFromLogic<this>
+      ExecutableEffectFrom<this>
     > => {
       if (usesInertScope) {
         setInertActorScopeSnapshot(resolvedActorScope, macroState, false);
@@ -1337,7 +1265,7 @@ export class StateMachine<
         [
           [nextState, [...contextSpawnEffects, ...initialActions]] as [
             AnyMachineSnapshot,
-            ExecutableActionObject[]
+            ExecutableEffect[]
           ]
         ]
       );
@@ -1355,7 +1283,7 @@ export class StateMachine<
         [
           [preInitialState, contextSpawnEffects] as [
             AnyMachineSnapshot,
-            ExecutableActionObject[]
+            ExecutableEffect[]
           ]
         ]
       );
@@ -1421,24 +1349,29 @@ export class StateMachine<
   public getStateNodeById(
     stateId: string
   ): StateNode<TContext, TEvent, TMeta, TTransitionMeta> {
-    const fullPath = toStatePath(stateId);
-    const relativePath = fullPath.slice(1);
-    const resolvedStateId = isStateId(fullPath[0])
-      ? fullPath[0].slice(STATE_IDENTIFIER.length)
-      : fullPath[0];
+    // `#id` is an exact id lookup: the text after `#` is never split into a
+    // path. It names a state's explicit `id` or its implicit id.
+    const hasPrefix = isStateId(stateId);
+    const id = hasPrefix ? stateId.slice(STATE_IDENTIFIER.length) : stateId;
 
-    const stateNode = this.idMap.get(resolvedStateId);
-    if (!stateNode) {
+    if (id === '' && hasPrefix) {
       throw new Error(
-        `Child state node '#${resolvedStateId}' does not exist on machine '${this.id}'`
+        !isDevelopment
+          ? xstateError(19, this.id)
+          : this.id
+            ? `State id '#' is empty. Target the root of ${describeMachine(this.id)} with '#${this.id}'.`
+            : "State id '#' is empty: the root of a machine without an `id` cannot be referenced by id. Give the machine an `id` to reference its root as '#<id>'."
       );
     }
-    return getStateNodeByPath(stateNode, relativePath) as StateNode<
-      TContext,
-      TEvent,
-      TMeta,
-      TTransitionMeta
-    >;
+    const stateNode = this.idMap.get(id);
+    if (stateNode) {
+      return stateNode as StateNode<TContext, TEvent, TMeta, TTransitionMeta>;
+    }
+    throw new Error(
+      isDevelopment
+        ? describeUnknownStateId(this.idMap, id)
+        : xstateError(20, id)
+    );
   }
 
   public getPersistedSnapshot(
@@ -1459,400 +1392,10 @@ export class StateMachine<
 
   /**
    * The original JSON definition this machine was created from (set by
-   * `createMachineFromConfig`), if any. Used by `serializeMachine` for lossless
+   * `machineFromJSON`), if any. Used by `machineToJSON` for lossless
    * round-trips.
    *
    * @internal
    */
   public _json?: Record<string, unknown>;
-
-  /**
-   * @internal Builds a machine-shaped `'error'` snapshot (root configuration,
-   * no children) for a persisted snapshot that failed to restore, so
-   * consumers keep `matches()`, `can()` and friends.
-   */
-  public _createRestoreErrorSnapshot(
-    persisted: unknown,
-    error: unknown
-  ): MachineSnapshot<
-    TContext,
-    TEvent,
-    TChildren,
-    TStateValue,
-    TTag,
-    TOutput,
-    TMeta,
-    TConfig
-  > {
-    const context = (persisted as { context?: unknown } | undefined)?.context;
-    return cloneMachineSnapshot(
-      createMachineSnapshot(
-        {
-          context:
-            context && typeof context === 'object'
-              ? (context as TContext)
-              : ({} as TContext),
-          _nodes: [this.root],
-          children: {},
-          status: 'active'
-        },
-        this
-      ),
-      { status: 'error', error }
-    ) as any;
-  }
-
-  public restoreSnapshot(
-    snapshot: Snapshot<unknown>,
-    actorScope?: ActorScope<
-      MachineSnapshot<
-        TContext,
-        TEvent,
-        TChildren,
-        TStateValue,
-        TTag,
-        TOutput,
-        TMeta,
-        TConfig
-      >,
-      TEvent,
-      AnyActorSystem,
-      TEmitted
-    >
-  ): MachineSnapshot<
-    TContext,
-    TEvent,
-    TChildren,
-    TStateValue,
-    TTag,
-    TOutput,
-    TMeta,
-    TConfig
-  > {
-    const usesInertScope = !actorScope;
-    const resolvedActorScope = (actorScope ??
-      createInertActorScope(this)) as NonNullable<typeof actorScope>;
-    const snapshotMachine = (snapshot as any).machine;
-    // A live machine snapshot carries its producing machine so helpers such as
-    // `matches()` can resolve state nodes. That runtime association is not the
-    // persisted `{ id, version }` identity written by getPersistedSnapshot().
-    const persistedMachine =
-      snapshotMachine &&
-      typeof snapshotMachine === 'object' &&
-      typeof snapshotMachine.transition === 'function' &&
-      'root' in snapshotMachine
-        ? undefined
-        : snapshotMachine;
-    const legacyPersistedVersion: string | undefined = (snapshot as any)
-      .version;
-    const persistedVersion: string | undefined =
-      typeof persistedMachine?.version === 'string'
-        ? persistedMachine.version
-        : legacyPersistedVersion;
-    if (
-      legacyPersistedVersion !== undefined &&
-      persistedMachine?.version !== undefined &&
-      persistedMachine.version !== legacyPersistedVersion
-    ) {
-      throw new Error(
-        `Persisted snapshot version '${legacyPersistedVersion}' conflicts with machine version '${persistedMachine.version}'.`
-      );
-    }
-    if (
-      persistedMachine &&
-      typeof persistedMachine.id === 'string' &&
-      persistedMachine.id !== this.id
-    ) {
-      throw new Error(
-        isDevelopment
-          ? `Machine ID mismatch: persisted snapshot was created by machine '${persistedMachine.id}', but machine '${this.id}' was provided.`
-          : `Machine ID mismatch: persisted snapshot machine '${persistedMachine.id}' does not match '${this.id}'.`
-      );
-    }
-    if (persistedVersion !== this.version) {
-      const migrate = (this.config as any).migrate;
-      if (typeof migrate !== 'function') {
-        throw new Error(
-          isDevelopment
-            ? `Persisted snapshot version '${persistedVersion}' does not match machine version '${this.version}' for machine '${this.id}'. Provide a \`migrate(persistedSnapshot, fromVersion)\` function in the machine config to migrate old snapshots.`
-            : `Persisted snapshot version '${persistedVersion}' does not match machine version '${this.version}'.`
-        );
-      }
-      snapshot = migrate(snapshot, persistedVersion);
-    }
-
-    const snapshotData = snapshot as any;
-    const children: Record<string, AnyActor> = {};
-    const snapshotChildren: Record<
-      string,
-      {
-        src: string | AnyActorLogic;
-        snapshot?: Snapshot<unknown>;
-        address?: string;
-        remote?: boolean;
-        incarnation?: string;
-        syncSnapshot?: boolean;
-        registryKey?: string;
-      }
-    > = snapshotData.children;
-
-    for (const actorId of Object.keys(snapshotChildren)) {
-      const actorData = snapshotChildren[actorId];
-
-      if (actorData.remote === true && actorData.address !== undefined) {
-        if (typeof actorData.src !== 'string') {
-          // Fail loudly instead of fabricating a source key that hosts would
-          // route by.
-          throw new Error(
-            `Unable to restore remote child '${actorId}': a child referenced by address requires a registered source key.`
-          );
-        }
-        // The child's state lives with another runtime; restore a
-        // location-transparent handle constructed from its identity alone.
-        // The handle keeps its persisted address verbatim: the owning
-        // runtime's identity for the child wins over the local parent chain.
-        const handle = createRemoteActorRef(resolvedActorScope.system, {
-          id: actorId,
-          address: actorData.address,
-          src: actorData.src,
-          parent: resolvedActorScope.self,
-          registryKey: actorData.registryKey,
-          syncSnapshot: actorData.syncSnapshot,
-          incarnation: actorData.incarnation
-        });
-        if (actorData.registryKey) {
-          resolvedActorScope.system._set(actorData.registryKey, handle);
-        }
-        children[actorId] = handle;
-        continue;
-      }
-
-      const childState = actorData.snapshot;
-      const src = actorData.src;
-
-      const logic =
-        typeof src === 'string' ? resolveReferencedActor(this, src) : src;
-
-      if (!logic) {
-        const sourceId = typeof src === 'string' ? src : '<unknown>';
-        throw new Error(
-          `Unable to restore child actor '${actorId}': child source '${sourceId}' is not provided in machine '${this.id}'.`
-        );
-      }
-
-      const actor = resolvedActorScope.system.createActorRef(logic, {
-        id: actorId,
-        parent: resolvedActorScope.self,
-        syncSnapshot: actorData.syncSnapshot,
-        snapshot: childState,
-        src,
-        registryKey: actorData.registryKey
-      });
-      // Mark so `start()` knows to start this child (freshly invoked/spawned
-      // children are started via deferred `@xstate.start` actions instead).
-      (actor as any)._rehydrated = true;
-
-      children[actorId] = actor;
-    }
-
-    const timers: Record<string, LogicalTimer> = {};
-    const persistedTimers: Record<
-      string,
-      {
-        id: string;
-        delay: number;
-        type: '@xstate.raise' | '@xstate.sendTo';
-        event: EventObject;
-        target: string | { type: 'parent' };
-      }
-    > = snapshotData.timers ?? {};
-    for (const [id, timer] of Object.entries(persistedTimers)) {
-      let event = timer.event;
-      if (event.type === 'xstate.timeout.actor') {
-        const actorId = (event as AnyEventObject).actorId as string;
-        const child = children[actorId];
-        if (child) {
-          event = createInvokeTimeoutEvent(actorId, child.sessionId);
-        }
-      }
-      const target =
-        typeof timer.target === 'string'
-          ? timer.target === 'self'
-            ? 'self'
-            : children[timer.target]
-          : resolvedActorScope.self._parent;
-      if (!target) {
-        const targetDescription =
-          typeof timer.target === 'string' ? timer.target : timer.target.type;
-        throw new Error(
-          `Unable to restore timer '${id}': target actor '${targetDescription}' is unavailable.`
-        );
-      }
-      timers[id] = { ...timer, event, target };
-    }
-
-    const reviveHistoryValue = (
-      historyValue: Record<
-        string,
-        ({ id: string } | StateNode<TContext, TEvent>)[]
-      >
-    ): HistoryValue => {
-      if (!historyValue || typeof historyValue !== 'object') {
-        return {};
-      }
-      const revived: HistoryValue = {};
-      for (const key of Object.keys(historyValue)) {
-        const arr = historyValue[key];
-
-        for (const item of arr) {
-          let resolved: StateNode<TContext, TEvent> | undefined;
-
-          if (item instanceof StateNode) {
-            resolved = item;
-          } else {
-            try {
-              resolved = this.root.machine.getStateNodeById(item.id);
-            } catch {
-              if (isDevelopment) {
-                console.warn(`Could not resolve StateNode for id: ${item.id}`);
-              }
-            }
-          }
-
-          if (!resolved) {
-            continue;
-          }
-
-          revived[key] ??= [];
-          revived[key].push(resolved);
-        }
-      }
-      return revived;
-    };
-
-    const revivedHistoryValue = reviveHistoryValue(snapshotData.historyValue);
-
-    const validateStateValue = (
-      stateValue: StateValue,
-      node: AnyStateNode,
-      path: string[]
-    ): void => {
-      const missingStateError = (statePath: string[]) =>
-        new Error(
-          `Persisted snapshot references state '${statePath.join('.')}' which does not exist on machine '${this.id}'.`
-        );
-      if (typeof stateValue === 'string') {
-        if (!node.states[stateValue]) {
-          throw missingStateError(path.concat(stateValue));
-        }
-        return;
-      }
-      if (!stateValue || typeof stateValue !== 'object') {
-        return;
-      }
-      for (const key of Object.keys(stateValue)) {
-        const childNode = node.states[key];
-        if (!childNode) {
-          throw missingStateError(path.concat(key));
-        }
-        validateStateValue(stateValue[key]!, childNode, path.concat(key));
-      }
-    };
-    validateStateValue(snapshotData.value, this.root, []);
-
-    const nodes = Array.from(
-      getAllStateNodes(getStateNodes(this.root, snapshotData.value))
-    );
-
-    if (isDevelopment && snapshotData.status === 'active') {
-      // Restored snapshots are opaque: eventless transitions are not
-      // re-evaluated on restore. Detected structurally; guards never run.
-      const eventlessNode = nodes.find(
-        (node) => node.always?.length || node.type === 'choice'
-      );
-      if (eventlessNode) {
-        console.warn(
-          `Restored snapshot is in state "${eventlessNode.id}" which has eventless transitions; they are not re-evaluated until the next event`
-        );
-      }
-    }
-
-    const {
-      version: _persistedSnapshotVersion,
-      // The legacy system-wide counter: superseded by per-snapshot
-      // `_nextActorIds` plus the child-id fold below; dropped so old and new
-      // snapshots round-trip to the same shape.
-      _nextActorId: _legacyNextActorId,
-      ...persistedRest
-    } = snapshot as any;
-    // Fold generated-shaped child ids into the counters as a floor: snapshots
-    // persisted before per-actor counters (or hand-crafted ones) still must
-    // never reuse a live child's id.
-    let restoredCounters: Record<string, number> | undefined =
-      persistedRest._nextActorIds;
-    for (const childId of Object.keys(snapshotChildren)) {
-      const generated = parseGeneratedActorId(childId);
-      if (
-        generated &&
-        (restoredCounters?.[generated.prefix] ?? 0) <= generated.index
-      ) {
-        restoredCounters = {
-          ...restoredCounters,
-          [generated.prefix]: generated.index + 1
-        };
-      }
-    }
-    const restoredSnapshot = createMachineSnapshot(
-      {
-        ...persistedRest,
-        children,
-        timers,
-        _nextActorIds: restoredCounters,
-        _nodes: nodes,
-        value: snapshotData.value,
-        historyValue: revivedHistoryValue,
-        _stateInputs: snapshotData.stateInputs ?? {}
-      },
-      this,
-      resolvedActorScope.self
-    ) as MachineSnapshot<
-      TContext,
-      TEvent,
-      TChildren,
-      TStateValue,
-      TTag,
-      TOutput,
-      TMeta,
-      TConfig
-    >;
-
-    const seen = new WeakSet<Record<string, unknown>>();
-
-    function reviveContext(contextPart: Record<string, unknown>) {
-      if (seen.has(contextPart)) {
-        return;
-      }
-      seen.add(contextPart);
-      for (const key of Object.keys(contextPart)) {
-        const value: unknown = contextPart[key];
-
-        if (value && typeof value === 'object') {
-          if ('xstate$type' in value && value.xstate$type === ACTOR_REF_TYPE) {
-            contextPart[key] = children[(value as any).id];
-            continue;
-          }
-          reviveContext(value as typeof contextPart);
-        }
-      }
-    }
-
-    reviveContext(restoredSnapshot.context);
-
-    if (usesInertScope) {
-      setInertActorScopeSnapshot(resolvedActorScope, restoredSnapshot, false);
-      return attachSnapshotActorRef(resolvedActorScope, restoredSnapshot);
-    }
-
-    return this._attachPureActorRef(restoredSnapshot, resolvedActorScope);
-  }
 }

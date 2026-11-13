@@ -66,7 +66,7 @@ actor.send({ type: 'xstate.route', to: '#overview' });
 
 In a parallel machine, a route only moves the region that contains the target. Routing to `#filter-active` in a todo machine changes `filter` from `all` to `active` and leaves the `todo` region untouched.
 
-Route targets are always a single `#id`. Dot-separated paths like `#dashboard.overview` are not valid route targets and do nothing.
+Route targets are always a single whole `#id` of a routable state, matched exactly. An id followed by a path, such as `#dashboard.overview` when only `dashboard` has an `id`, does nothing. An explicit id that contains dots is a whole id: a routable state with `id: 'dashboard.overview'` is routed with `to: '#dashboard.overview'`.
 
 Routing to the state the actor is already in re-enters it: exit and entry actions run again. If that state's `route` function blocks, nothing happens.
 
@@ -80,7 +80,7 @@ Use route states for:
 
 Route events are strongly typed. The `to` field only accepts `#id` strings for states that declare both an `id` and a `route`. A plain state key, the machine's own id, and a name that does not exist are all type errors. `machine.root.on['xstate.route']` is defined whenever the machine contains at least one route.
 
-Inside a route function, `context`, `event` and `guards` are inferred from the machine's schemas. When a machine is built from JSON with `createMachineFromConfig`, a route may reference a guard by name; an unimplemented name errors the actor at route time with `Guard 'isReady' is not implemented in machine 'flow'`.
+Inside a route function, `context`, `event` and `guards` are inferred from the machine's schemas. When a machine is built from JSON with `machineFromJSON`, a route may reference a guard by name; an unimplemented name errors the actor at route time with `Guard 'isReady' is not implemented in machine 'flow'`.
 
 For a setup-defined route, declare `id` and `route: true` in the state
 contract. The machine config may omit both fields, and the route event remains

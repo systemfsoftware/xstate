@@ -1,5 +1,71 @@
 # Changelog
 
+## 7.0.0-beta.0
+
+### Minor Changes
+
+- 81dd3dd: `useActorRef`, `useActor` and `useMachine` accept an already-created actor, such as one from `restoreActor`. The `snapshot` option is removed; restore the actor with `restoreActor` from `xstate/persist` and pass it to the hook. The hook starts the actor on mount and stops it on unmount, as it does for actors it creates. Create the actor once per component instance.
+  
+  ```tsx
+  import { useActor } from '@xstate/react';
+  import { restoreActor } from 'xstate/persist';
+  
+  function App({ persisted }) {
+    const [actor] = useState(() => restoreActor(machine, persisted));
+    const [snapshot, send] = useActor(actor);
+    // ...
+  }
+  ```
+  
+  `createActorContext(...).Provider` accepts the same actor through its `actor` prop:
+  
+  ```tsx
+  <SomeContext.Provider actor={actor}>{children}</SomeContext.Provider>
+  ```
+
+### Patch Changes
+
+- 6cf6982: XState v6 enters beta. No further breaking changes are planned for APIs tagged `@public`; any that are needed will be called out with a migration path. APIs tagged `@experimental` may still change.
+
+## 7.0.0-alpha.7
+
+### Patch Changes
+
+- ce9fab5: Public exports now carry `@public` or `@experimental` stability tags.
+
+## 7.0.0-alpha.6
+
+### Patch Changes
+
+- 5b6df81: `xstate` is now a required peer dependency of `@xstate/react`, `@xstate/vue`, `@xstate/svelte`, and `@xstate/solid`. Package managers now warn when `xstate` is missing instead of letting the adapter fail at runtime.
+  
+  `useActorRef()`, `useActor()`, and `useMachine()` in `@xstate/react` no longer write implementations provided on a later render onto the machine passed on the first render. A module-level machine shared by several components keeps its own implementations:
+  
+  ```tsx
+  const machine = createMachine({
+    actions: { notify: () => {} },
+    on: { DO: ({ actions }, enq) => enq(actions.notify) }
+  });
+  
+  function Custom({ onNotify }) {
+    // Only this component's actor uses `onNotify`.
+    useActorRef(machine.provide({ actions: { notify: onNotify } }));
+    return null;
+  }
+  
+  function Plain() {
+    // Still uses the original `notify`.
+    useActorRef(machine);
+    return null;
+  }
+  ```
+
+## 7.0.0-alpha.5
+
+### Major Changes
+
+- d2c518b: The `Provider` returned by `createActorContext` no longer declares the deprecated `machine` prop. Pass `logic` instead.
+
 ## 7.0.0-alpha.4
 
 ### Minor Changes

@@ -1,6 +1,7 @@
 import { createActor, createMachine, createCallbackLogic } from '../src/index';
 import { trackEntries } from './utils';
 import { StateNode } from '../src/StateNode';
+import { restoreActor } from '../src/persist/index.ts';
 
 describe('history states', () => {
   it('rejects a history state without a non-empty default target at runtime', () => {
@@ -17,9 +18,7 @@ describe('history states', () => {
           }
         }
       })
-    ).toThrow(
-      'History state "(machine).on.history" must declare a non-empty `target`.'
-    );
+    ).toThrow('History state "on.history" must declare a non-empty `target`.');
   });
 
   it('should go to the most recently visited state (explicit shallow history type)', () => {
@@ -1573,9 +1572,7 @@ describe('revive history states', () => {
   it('should restore from stringified snapshot', () => {
     expect(persistedSnapshot.value).toBe('off');
 
-    const actorRef = createActor(machine, {
-      snapshot: persistedSnapshot
-    }).start();
+    const actorRef = restoreActor(machine, persistedSnapshot).start();
     actorRef.send({ type: 'POWER' });
 
     expect(actorRef.getSnapshot().value).toEqual({ on: 'second' });
@@ -1585,13 +1582,11 @@ describe('revive history states', () => {
     const consoleSpy = vi.spyOn(console, 'warn');
     const fakeSnapshot = {
       ...persistedSnapshot,
-      historyValue: { ['(machine).on.hist']: [{ id: 'nonexistent' }] }
+      historyValue: { ['on.hist']: [{ id: 'nonexistent' }] }
     };
     expect(fakeSnapshot.value).toBe('off');
 
-    const actorRef = createActor(machine, {
-      snapshot: fakeSnapshot
-    }).start();
+    const actorRef = restoreActor(machine, fakeSnapshot).start();
     actorRef.send({ type: 'POWER' });
 
     expect(consoleSpy).toHaveBeenCalledWith(
@@ -1604,13 +1599,9 @@ describe('revive history states', () => {
 
   it('should not re-resolve already-instantiated StateNode', () => {
     expect(snapshot.value).toBe('off');
-    expect(snapshot.historyValue['(machine).on.hist'][0]).toBeInstanceOf(
-      StateNode
-    );
+    expect(snapshot.historyValue['on.hist'][0]).toBeInstanceOf(StateNode);
 
-    const actorRef = createActor(machine, {
-      snapshot
-    }).start();
+    const actorRef = restoreActor(machine, snapshot).start();
     actorRef.send({ type: 'POWER' });
 
     expect(actorRef.getSnapshot().value).toEqual({ on: 'second' });
@@ -1621,9 +1612,7 @@ describe('revive history states', () => {
       const fakeSnapshot = { ...persistedSnapshot, historyValue: val };
       expect(fakeSnapshot.value).toBe('off');
 
-      const actorRef = createActor(machine, {
-        snapshot: fakeSnapshot
-      }).start();
+      const actorRef = restoreActor(machine, fakeSnapshot).start();
       actorRef.send({ type: 'POWER' });
 
       expect(actorRef.getSnapshot().value).toEqual({ on: 'first' });

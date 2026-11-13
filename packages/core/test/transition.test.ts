@@ -3,7 +3,7 @@ import {
   createMachine,
   EventFrom,
   createAsyncLogic,
-  createLogic,
+  createStepLogic,
   createCallbackLogic,
   toPromise,
   transition,
@@ -11,39 +11,45 @@ import {
   getInitialMicrosteps,
   getMicrosteps,
   getNextTransitions,
-  isBuiltInExecutableAction
+  isBuiltInExecutableEffect
 } from '../src';
 import { createMachineFromCompiledConfig } from '../src/createMachine.ts';
 import type {
+  ActorLogic,
+  Snapshot,
   AnyActor,
   AnyEventObject,
-  ExecutableActionObject,
-  SpecialExecutableAction
+  ExecutableEffect,
+  SpecialExecutableEffect
 } from '../src/types';
 import { createDoneActorEvent } from '../src/eventUtils';
 import { initialTransition } from '../src/transition';
 import { listenerLogic } from '../src/actors/listener';
 import { subscriptionLogic } from '../src/actors/subscription';
-import { XSTATE_SPAWN, XSTATE_START, XSTATE_STOP } from '../src/constants';
+import {
+  XSTATE_SPAWN,
+  XSTATE_START,
+  XSTATE_STOP_EFFECT
+} from '../src/constants';
 import { getSnapshotActorRef } from '../src/snapshotActorRef';
 import { setInertActorMaterializationObserver } from '../src/inertActorScope';
 import { z } from 'zod';
+import { restoreActor } from '../src/persist/index.ts';
+import { createDurable } from '../src/durable/index.ts';
 
 const isEffect =
-  <T extends SpecialExecutableAction['type']>(type: T) =>
-  (
-    e: ExecutableActionObject
-  ): e is Extract<SpecialExecutableAction, { type: T }> =>
-    isBuiltInExecutableAction(e) && e.type === type;
+  <T extends SpecialExecutableEffect['type']>(type: T) =>
+  (e: ExecutableEffect): e is Extract<SpecialExecutableEffect, { type: T }> =>
+    isBuiltInExecutableEffect(e) && e.type === type;
 
-function describeEffects(effects: ExecutableActionObject[]): string[] {
+function describeEffects(effects: ExecutableEffect[]): string[] {
   // Classify each spawned actor exactly once, from its authored-position
   // `@xstate.spawn` effect (which carries `logic`/`input`; listener and
   // subscription actors carry their target actor ref in `input.actor`). Slim
   // `@xstate.start` effects then reuse the label via their `actor` ref.
   const labelByActor = new Map<any, string>();
   for (const e of effects) {
-    if (!isBuiltInExecutableAction(e) || e.type !== XSTATE_SPAWN) {
+    if (!isBuiltInExecutableEffect(e) || e.type !== XSTATE_SPAWN) {
       continue;
     }
     const input = e.input as { actor: { id: string } };
@@ -56,9 +62,9 @@ function describeEffects(effects: ExecutableActionObject[]): string[] {
     labelByActor.set(e.actor, label);
   }
 
-  return effects.filter(isBuiltInExecutableAction).flatMap((e) => {
+  return effects.filter(isBuiltInExecutableEffect).flatMap((e) => {
     switch (e.type) {
-      case XSTATE_STOP:
+      case XSTATE_STOP_EFFECT:
         return `stop(${e.actor.id})`;
       case XSTATE_SPAWN:
         return labelByActor.get(e.actor)!;
@@ -156,6 +162,38 @@ describe('transition function', () => {
     }
   });
 
+  it('does not materialize an unchanged durable transition scope to wire its runtime', () => {
+    const initial: Snapshot<never> = {
+      status: 'active',
+      output: undefined,
+      error: undefined
+    };
+    const logic: ActorLogic<Snapshot<never>, { type: 'GO' }, undefined> = {
+      initialTransition: () => [initial, []],
+      transition: (snapshot) => [snapshot, []],
+      getInitialSnapshot: () => initial,
+      getPersistedSnapshot: (snapshot) => snapshot
+    };
+    const execution = createDurable(logic, {
+      executionId: 'pinned',
+      executeAction: (effect) => effect.exec(),
+      waitForEvent: () => ({ type: 'GO' }),
+      sendEvent: () => {}
+    });
+    const [snapshot] = execution.initialTransition();
+    execution.getActorRef(snapshot);
+    let materializations = 0;
+    setInertActorMaterializationObserver(() => materializations++);
+    try {
+      const [next, effects] = execution.transition(snapshot, { type: 'GO' });
+      expect(next).toBe(snapshot);
+      expect(effects).toEqual([]);
+      expect(materializations).toBe(0);
+    } finally {
+      setInertActorMaterializationObserver(undefined);
+    }
+  });
+
   it('preserves callback argument surfaces while planning lazily', () => {
     let contextKeys: string[] = [];
     let guardKeys: string[] = [];
@@ -234,6 +272,88 @@ describe('transition function', () => {
 
     expect(update).toHaveBeenCalledTimes(1);
     expect(actor.getSnapshot().context).toEqual({ count: 1 });
+  });
+
+  it('does not repeatedly resolve object transition mappers during a microstep', () => {
+    const contextMapper = vi.fn(
+      ({ context }: { context: { count: number } }) => ({
+        count: context.count + 1
+      })
+    );
+    const inputMapper = vi.fn(() => ({ value: 'a' }));
+    const machine = createMachine({
+      context: { count: 0 },
+      initial: 'idle',
+      states: {
+        idle: {
+          on: {
+            UPDATE: { context: contextMapper },
+            GO: { target: 'active', context: contextMapper, input: inputMapper }
+          }
+        },
+        active: {}
+      }
+    });
+    const actor = createActor(machine).start();
+
+    actor.send({ type: 'UPDATE' });
+    expect(contextMapper).toHaveBeenCalledTimes(1);
+
+    actor.send({ type: 'GO' });
+    expect(contextMapper).toHaveBeenCalledTimes(2);
+    expect(inputMapper).toHaveBeenCalledTimes(1);
+    expect(actor.getSnapshot().context).toEqual({ count: 2 });
+  });
+
+  it('does not resolve object transition mappers while removing conflicting transitions', () => {
+    const contextA = vi.fn(() => ({ a: 1 }));
+    const contextB = vi.fn(() => ({ b: 1 }));
+    const machine = createMachine({
+      type: 'parallel',
+      context: { a: 0, b: 0 },
+      states: {
+        a: {
+          initial: 'idle',
+          states: {
+            idle: { on: { GO: { target: 'done', context: contextA } } },
+            done: {}
+          }
+        },
+        b: {
+          initial: 'idle',
+          states: {
+            idle: { on: { GO: { target: 'done', context: contextB } } },
+            done: {}
+          }
+        }
+      }
+    });
+    const actor = createActor(machine).start();
+
+    actor.send({ type: 'GO' });
+
+    expect(contextA).toHaveBeenCalledTimes(1);
+    expect(contextB).toHaveBeenCalledTimes(1);
+    expect(actor.getSnapshot().context).toEqual({ a: 1, b: 1 });
+  });
+
+  it('does not repeatedly resolve an initial transition input mapper', () => {
+    const inputMapper = vi.fn(() => ({ value: 'a' }));
+    const machine = createMachine({
+      initial: 'idle',
+      states: {
+        idle: { on: { GO: { target: 'active' } } },
+        active: {
+          initial: { target: 'child', input: inputMapper },
+          states: { child: {} }
+        }
+      }
+    });
+    const actor = createActor(machine).start();
+
+    actor.send({ type: 'GO' });
+
+    expect(inputMapper).toHaveBeenCalledTimes(1);
   });
 
   it('resolves a selected transition with the real parent', () => {
@@ -529,14 +649,12 @@ describe('transition function', () => {
         type: '@xstate.raise',
         args: [
           expect.anything(),
-          { type: 'xstate.after', delay: 10, stateId: '(machine).a' },
-          expect.objectContaining({
-            delay: 10,
-            id: 'xstate.after.10.(machine).a'
-          })
+          { type: 'xstate.after', delay: 10, stateId: 'a' },
+          { delay: 10 }
         ]
       })
     );
+    expect(actions[0]).toHaveProperty('id', undefined);
   });
 
   it('cancel action should be returned', async () => {
@@ -570,7 +688,8 @@ describe('transition function', () => {
         // params: expect.objectContaining({
         //   sendId: 'myRaise'
         // })
-        args: [expect.anything(), 'myRaise']
+        id: 'myRaise',
+        args: [expect.anything(), { id: 'myRaise' }]
       })
     );
   });
@@ -706,7 +825,7 @@ describe('transition function', () => {
       }
     });
     const actor = createActor(machine);
-    const child = actor.getSnapshot().children.child;
+    const child = actor.getSnapshot().children.child!;
 
     expect(actor.system.get('child')).toBe(child);
 
@@ -730,7 +849,7 @@ describe('transition function', () => {
       invoke: { id: 'child', src: childLogic }
     });
     const actor = createActor(machine).start();
-    const child = actor.getSnapshot().children.child;
+    const child = actor.getSnapshot().children.child!;
 
     child.send({ type: 'PING' });
 
@@ -863,7 +982,7 @@ describe('transition function', () => {
       id: 'raise-id'
     });
 
-    const stopAction = actions.find(isEffect(XSTATE_STOP))!;
+    const stopAction = actions.find(isEffect(XSTATE_STOP_EFFECT))!;
     expect(stopAction.type).toBe('@xstate.stop');
     expect(stopAction.actor).toBe(state.children.child);
     expect(stopAction.id).toBe('child');
@@ -893,9 +1012,9 @@ describe('transition function', () => {
       });
 
       expect(mini.children).toEqual({});
-      expect(effects.filter(isEffect(XSTATE_STOP))).toEqual([
+      expect(effects.filter(isEffect(XSTATE_STOP_EFFECT))).toEqual([
         expect.objectContaining({
-          type: XSTATE_STOP,
+          type: XSTATE_STOP_EFFECT,
           actor: child,
           id: 'keyEscape',
           args: [expect.anything(), child]
@@ -922,12 +1041,12 @@ describe('transition function', () => {
 
       expect(effects.map((effect) => effect.type)).toEqual([
         'exitAction',
-        XSTATE_STOP
+        XSTATE_STOP_EFFECT
       ]);
     });
 
-    it('preserves one-argument exit actions before an invoke stop', () => {
-      function exitAction(_: unknown) {}
+    it('does not add a placeholder effect for a one-argument exit function', () => {
+      const exitAction = vi.fn((_: unknown) => {});
       const machine = createMachine({
         initial: 'active',
         states: {
@@ -943,9 +1062,12 @@ describe('transition function', () => {
       const [active] = initialTransition(machine);
       const [, effects] = transition(machine, active, { type: 'EXIT' });
 
-      expect(effects).toHaveLength(2);
-      expect(effects[0].type).not.toBe(XSTATE_STOP);
-      expect(effects[1]).toMatchObject({ type: XSTATE_STOP, id: 'child' });
+      expect(exitAction).toHaveBeenCalledTimes(1);
+      expect(effects).toHaveLength(1);
+      expect(effects[0]).toMatchObject({
+        type: XSTATE_STOP_EFFECT,
+        id: 'child'
+      });
     });
 
     it('orders after cancellation before the invoke stop', () => {
@@ -965,15 +1087,19 @@ describe('transition function', () => {
       const [, effects] = transition(machine, active, { type: 'EXIT' });
       const lifecycleEffects = effects.filter(
         (effect) =>
-          effect.type === '@xstate.cancel' || effect.type === XSTATE_STOP
+          effect.type === '@xstate.cancel' || effect.type === XSTATE_STOP_EFFECT
       );
 
       expect(lifecycleEffects).toEqual([
         expect.objectContaining({
           type: '@xstate.cancel',
-          id: 'xstate.after.1000.(machine).active'
+          event: {
+            type: 'xstate.after',
+            stateId: 'active',
+            delay: 1000
+          }
         }),
-        expect.objectContaining({ type: XSTATE_STOP, id: 'child' })
+        expect.objectContaining({ type: XSTATE_STOP_EFFECT, id: 'child' })
       ]);
     });
 
@@ -997,7 +1123,7 @@ describe('transition function', () => {
       const [, effects] = transition(machine, active, { type: 'EXIT' });
 
       expect(
-        effects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id)
+        effects.filter(isEffect(XSTATE_STOP_EFFECT)).map((effect) => effect.id)
       ).toEqual(['right', 'left']);
     });
 
@@ -1020,7 +1146,7 @@ describe('transition function', () => {
       const [, effects] = transition(machine, active, { type: 'EXIT' });
 
       expect(
-        effects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id)
+        effects.filter(isEffect(XSTATE_STOP_EFFECT)).map((effect) => effect.id)
       ).toEqual(['first', 'second']);
     });
 
@@ -1044,7 +1170,7 @@ describe('transition function', () => {
       const [, effects] = transition(machine, active, { type: 'EXIT' });
 
       expect(
-        effects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id)
+        effects.filter(isEffect(XSTATE_STOP_EFFECT)).map((effect) => effect.id)
       ).toEqual(['child', 'parent']);
     });
 
@@ -1064,7 +1190,7 @@ describe('transition function', () => {
       expect(done.status).toBe('done');
       expect(done.children).toEqual({});
       expect(
-        effects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id)
+        effects.filter(isEffect(XSTATE_STOP_EFFECT)).map((effect) => effect.id)
       ).toEqual(['rootChild']);
     });
 
@@ -1119,7 +1245,7 @@ describe('transition function', () => {
           (id) => !(id in next.children)
         );
         const stoppedIds = effects
-          .filter(isEffect(XSTATE_STOP))
+          .filter(isEffect(XSTATE_STOP_EFFECT))
           .map((effect) => effect.id);
 
         expect(stoppedIds).toEqual(removedIds);
@@ -1146,11 +1272,11 @@ describe('transition function', () => {
       expect(microsteps).toHaveLength(1);
       expect(
         microsteps[0][1]
-          .filter(isEffect(XSTATE_STOP))
+          .filter(isEffect(XSTATE_STOP_EFFECT))
           .map((effect) => effect.id)
       ).toEqual(
         transitionEffects
-          .filter(isEffect(XSTATE_STOP))
+          .filter(isEffect(XSTATE_STOP_EFFECT))
           .map((effect) => effect.id)
       );
 
@@ -1170,10 +1296,12 @@ describe('transition function', () => {
       expect(initialMicrosteps).toHaveLength(2);
       expect(
         initialMicrosteps[1][1]
-          .filter(isEffect(XSTATE_STOP))
+          .filter(isEffect(XSTATE_STOP_EFFECT))
           .map((effect) => effect.id)
       ).toEqual(
-        initialEffects.filter(isEffect(XSTATE_STOP)).map((effect) => effect.id)
+        initialEffects
+          .filter(isEffect(XSTATE_STOP_EFFECT))
+          .map((effect) => effect.id)
       );
     });
 
@@ -1231,12 +1359,12 @@ describe('transition function', () => {
       });
       const [active, initialEffects] = initialTransition(machine);
       initialEffects.forEach((effect) => void effect.exec());
-      const child = active.children.child;
+      const child = active.children.child!;
 
       const [stopped, effects] = transition(machine, active, { type: 'STOP' });
 
       expect(stopped.children).toEqual({});
-      expect(effects.filter(isEffect(XSTATE_STOP))).toEqual([
+      expect(effects.filter(isEffect(XSTATE_STOP_EFFECT))).toEqual([
         expect.objectContaining({ actor: child, id: 'child' })
       ]);
       effects.forEach((effect) => void effect.exec());
@@ -1267,7 +1395,7 @@ describe('transition function', () => {
 
       const [active] = initialTransition(machine);
       const [, effects] = transition(machine, active, { type: 'EXIT' });
-      expect(effects.filter(isEffect(XSTATE_STOP))).toHaveLength(1);
+      expect(effects.filter(isEffect(XSTATE_STOP_EFFECT))).toHaveLength(1);
     });
 
     it('supports naive sequential execution of invoke lifecycle effects', () => {
@@ -1288,7 +1416,7 @@ describe('transition function', () => {
         void effect.exec();
       }
 
-      const child = active.children.child;
+      const child = active.children.child!;
       expect(child.getSnapshot().status).toBe('active');
 
       const [reentered, restartEffects] = transition(machine, active, {
@@ -1304,7 +1432,7 @@ describe('transition function', () => {
       }
 
       expect(child.getSnapshot().status).toBe('stopped');
-      expect(reentered.children.child.getSnapshot().status).toBe('active');
+      expect(reentered.children.child!.getSnapshot().status).toBe('active');
       expect(dispose).toHaveBeenCalledTimes(1);
     });
 
@@ -1324,7 +1452,7 @@ describe('transition function', () => {
       initialEffects.forEach((effect) => void effect.exec());
 
       const [, effects] = transition(machine, active, { type: 'SEND' });
-      effects.forEach((effect: ExecutableActionObject) => void effect.exec());
+      effects.forEach((effect: ExecutableEffect) => void effect.exec());
 
       expect(received).toHaveBeenCalledWith({ type: 'PING' });
     });
@@ -1349,7 +1477,7 @@ describe('transition function', () => {
       ).toHaveLength(1);
 
       const [, effects] = machine.transition(waiting, { type: 'CANCEL' });
-      effects.forEach((effect: ExecutableActionObject) => void effect.exec());
+      effects.forEach((effect: ExecutableEffect) => void effect.exec());
 
       expect(
         Object.keys(source.system.getSnapshot()._scheduledTimers)
@@ -1392,7 +1520,7 @@ describe('transition function', () => {
 
       const [a] = machine.initialTransition(undefined);
       const [, effects] = machine.transition(a, { type: 'NEXT' });
-      effects.forEach((effect: ExecutableActionObject) => void effect.exec());
+      effects.forEach((effect: ExecutableEffect) => void effect.exec());
 
       expect(effectSnapshot).toBe('b');
     });
@@ -1421,9 +1549,7 @@ describe('transition function', () => {
       const [a] = machine.initialTransition(undefined);
       const [, leftEffects] = machine.transition(a, { type: 'LEFT' });
       machine.transition(a, { type: 'RIGHT' });
-      leftEffects.forEach(
-        (effect: ExecutableActionObject) => void effect.exec()
-      );
+      leftEffects.forEach((effect: ExecutableEffect) => void effect.exec());
 
       expect(effectSnapshot).toBe('left');
     });
@@ -1523,7 +1649,7 @@ describe('transition function', () => {
       const actor = createActor(machine).start();
       const oldSnapshot = actor.getSnapshot();
 
-      oldSnapshot.children.child.send({ type: 'SPAWN' });
+      oldSnapshot.children.child!.send({ type: 'SPAWN' });
       transition(machine, oldSnapshot, { type: 'CHECK' });
 
       expect(oldSnapshotSawGrandchild).toBe(false);
@@ -1571,11 +1697,11 @@ describe('transition function', () => {
         }
       });
       const [active] = initialTransition(machine);
-      const firstSessionId = active.children.child.sessionId;
+      const firstSessionId = active.children.child!.sessionId;
       const [inactive] = transition(machine, active, { type: 'EXIT' });
       const [reentered] = transition(machine, inactive, { type: 'ENTER' });
 
-      expect(reentered.children.child.sessionId).not.toBe(firstSessionId);
+      expect(reentered.children.child!.sessionId).not.toBe(firstSessionId);
     });
 
     it('assigns distinct opaque session IDs across pure initial transitions', () => {
@@ -1586,8 +1712,8 @@ describe('transition function', () => {
       const [first] = initialTransition(machine);
       const [second] = initialTransition(machine);
 
-      expect(first.children.child.sessionId).not.toBe(
-        second.children.child.sessionId
+      expect(first.children.child!.sessionId).not.toBe(
+        second.children.child!.sessionId
       );
     });
 
@@ -1605,8 +1731,8 @@ describe('transition function', () => {
       const [second] = transition(machine, idle, { type: 'ENTER' });
 
       expect(first.children.child).not.toBe(second.children.child);
-      expect(first.children.child.sessionId).not.toBe(
-        second.children.child.sessionId
+      expect(first.children.child!.sessionId).not.toBe(
+        second.children.child!.sessionId
       );
     });
 
@@ -1629,7 +1755,7 @@ describe('transition function', () => {
       });
 
       const [initial] = machine.initialTransition(undefined);
-      const grandchild = initial.children.child.getSnapshot().children
+      const grandchild = initial.children.child!.getSnapshot().children
         .grandchild as AnyActor;
       machine.transition(initial, { type: 'CHECK' });
 
@@ -1646,7 +1772,7 @@ describe('transition function', () => {
       const parent = createActor(
         createMachine({ invoke: { id: 'child', src: child } })
       ).start();
-      const childSnapshot = parent.getSnapshot().children.child.getSnapshot();
+      const childSnapshot = parent.getSnapshot().children.child!.getSnapshot();
 
       const [, effects] = transition(child, childSnapshot, { type: 'CHECK' });
       effects.forEach((effect) => void effect.exec());
@@ -1813,13 +1939,13 @@ describe('transition function', () => {
         'start(child)'
       ]);
       effects.forEach((effect) => void effect.exec());
-      expect(snapshot.children.child.getSnapshot().status).toBe('active');
+      expect(snapshot.children.child!.getSnapshot().status).toBe('active');
       expect(started).toHaveBeenCalledOnce();
     });
   });
 
   describe('terminal child cleanup', () => {
-    const child = createLogic({
+    const child = createStepLogic({
       context: undefined,
       run: () => undefined
     });
@@ -1845,14 +1971,14 @@ describe('transition function', () => {
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(child, { id: 'child' }),
         on: {
-          'xstate.error.actor.child': {}
+          'xstate.error.actor': { matches: { actorId: 'child' } }
         }
       });
       const [active] = initialTransition(machine);
       const childRef = active.children.child;
 
       const [failed] = transition(machine, active, {
-        type: 'xstate.error.actor.child',
+        type: 'xstate.error.actor',
         actorId: 'child',
         sessionId: childRef.sessionId,
         error: new Error('failed')
@@ -1867,9 +1993,12 @@ describe('transition function', () => {
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(child, { id: 'child' }),
         on: {
-          'xstate.done.actor.child': ({ children, event }, _enq) => {
-            observedChild = children.child;
-            observedEvent = event;
+          'xstate.done.actor': {
+            matches: { actorId: 'child' },
+            to: ({ children, event }, _enq) => {
+              observedChild = children.child;
+              observedEvent = event;
+            }
           }
         }
       });
@@ -1877,7 +2006,7 @@ describe('transition function', () => {
       const childRef = active.children.child;
 
       const [completed] = transition(machine, active, {
-        type: 'xstate.done.actor.child',
+        type: 'xstate.done.actor',
         actorId: 'child',
         sessionId: childRef.sessionId,
         output: 42
@@ -1902,14 +2031,14 @@ describe('transition function', () => {
         }
       });
       const [firstSnapshot] = initialTransition(machine);
-      const firstChild = firstSnapshot.children.child;
+      const firstChild = firstSnapshot.children.child!;
       const [secondSnapshot] = transition(machine, firstSnapshot, {
         type: 'REPLACE'
       });
       const secondChild = secondSnapshot.children.child;
 
       const [afterStaleDone] = transition(machine, secondSnapshot, {
-        type: 'xstate.done.actor.child',
+        type: 'xstate.done.actor',
         actorId: 'child',
         sessionId: firstChild.sessionId,
         output: undefined
@@ -1935,7 +2064,7 @@ describe('transition function', () => {
         }
       });
       const [firstSnapshot] = initialTransition(machine);
-      const firstChild = firstSnapshot.children.child;
+      const firstChild = firstSnapshot.children.child!;
       const [secondSnapshot] = transition(machine, firstSnapshot, {
         type: 'RESET'
       });
@@ -1973,7 +2102,7 @@ describe('transition function', () => {
       const [afterStaleError] = transition(machine, secondSnapshot, {
         type: 'xstate.error.actor',
         actorId: 'child',
-        sessionId: firstSnapshot.children.child.sessionId,
+        sessionId: firstSnapshot.children.child!.sessionId,
         error: new Error('stale')
       } as any);
 
@@ -1983,21 +2112,21 @@ describe('transition function', () => {
       );
     });
 
-    it('accepts legacy suffixed actor terminal events', () => {
+    it('ignores suffixed actor terminal events', () => {
       const machine = createMachine({
         entry: (_, enq) => enq.spawn(child, { id: 'child' })
       });
       const [active] = initialTransition(machine);
       const childRef = active.children.child;
 
-      const [completed] = transition(machine, active, {
+      const [next] = transition(machine, active, {
         type: 'xstate.done.actor.child',
         actorId: 'child',
         sessionId: childRef.sessionId,
         output: undefined
       } as any);
 
-      expect(completed.children).toEqual({});
+      expect(next.children.child).toBe(childRef);
     });
 
     it('reports the pruned child in the final microstep', () => {
@@ -2008,7 +2137,7 @@ describe('transition function', () => {
       const childRef = active.children.child;
 
       const microsteps = getMicrosteps(machine, active, {
-        type: 'xstate.done.actor.child',
+        type: 'xstate.done.actor',
         actorId: 'child',
         sessionId: childRef.sessionId,
         output: undefined
@@ -2018,7 +2147,7 @@ describe('transition function', () => {
     });
 
     it('removes a completed dynamically spawned child on the live path', () => {
-      const completingChild = createLogic({
+      const completingChild = createStepLogic({
         context: undefined,
         run: () => ({ status: 'done', output: 42 })
       });
@@ -2032,8 +2161,8 @@ describe('transition function', () => {
     });
   });
 
-  describe('legacy suffixed internal events', () => {
-    it('accepts state completion events', () => {
+  describe('suffixed internal events', () => {
+    it('does not match state completion transitions', () => {
       const machine = createMachine({
         initial: 'parent',
         states: {
@@ -2047,15 +2176,15 @@ describe('transition function', () => {
       });
       const [active] = initialTransition(machine);
 
-      const [completed] = transition(machine, active, {
-        type: 'xstate.done.state.(machine).parent',
+      const [next] = transition(machine, active, {
+        type: 'xstate.done.state.parent',
         output: undefined
       } as any);
 
-      expect(completed.value).toBe('done');
+      expect(next.value).toEqual({ parent: 'active' });
     });
 
-    it('accepts delayed transition events', () => {
+    it('does not match delayed transitions', () => {
       const machine = createMachine({
         initial: 'waiting',
         states: {
@@ -2065,11 +2194,11 @@ describe('transition function', () => {
       });
       const [waiting] = initialTransition(machine);
 
-      const [completed] = transition(machine, waiting, {
-        type: 'xstate.after.10.(machine).waiting'
+      const [next] = transition(machine, waiting, {
+        type: 'xstate.after.waiting:10'
       } as any);
 
-      expect(completed.value).toBe('done');
+      expect(next.value).toBe('waiting');
     });
   });
 
@@ -2077,7 +2206,7 @@ describe('transition function', () => {
     emit({ type: 'someEvent' });
   });
 
-  const completingLogic = createLogic({
+  const completingLogic = createStepLogic({
     context: undefined,
     run: () => ({
       status: 'done',
@@ -2369,7 +2498,7 @@ describe('transition function', () => {
 
   it('does not classify inherited object keys as built-in actions', () => {
     expect(
-      isBuiltInExecutableAction({
+      isBuiltInExecutableEffect({
         kind: 'action',
         type: 'toString',
         params: undefined,
@@ -2392,7 +2521,7 @@ describe('transition function', () => {
       (effect) => effect.type === XSTATE_SPAWN
     )!;
 
-    expect(isBuiltInExecutableAction(emittedEffect)).toBe(false);
+    expect(isBuiltInExecutableEffect(emittedEffect)).toBe(false);
     expect(effects.filter(isEffect(XSTATE_START))).toHaveLength(0);
   });
 
@@ -2400,7 +2529,7 @@ describe('transition function', () => {
     const actor = createActor(createMachine({}));
 
     expect(
-      isBuiltInExecutableAction({
+      isBuiltInExecutableEffect({
         kind: 'action',
         type: XSTATE_SPAWN,
         params: undefined,
@@ -2494,7 +2623,7 @@ describe('transition function', () => {
   });
 
   it('should calculate the next snapshot for custom logic', () => {
-    const logic = createLogic({
+    const logic = createStepLogic({
       context: { count: 0 },
       run: ({ context, event }) => {
         if (event.type === 'next') {
@@ -2605,9 +2734,9 @@ describe('transition function', () => {
       }
     });
 
-    async function execute(action: ExecutableActionObject) {
+    async function execute(action: ExecutableEffect) {
       if (
-        isBuiltInExecutableAction(action) &&
+        isBuiltInExecutableEffect(action) &&
         action.type === '@xstate.raise' &&
         action.delay
       ) {
@@ -2692,8 +2821,8 @@ describe('transition function', () => {
 
     const calls: string[] = [];
 
-    async function execute(action: ExecutableActionObject) {
-      if (!isBuiltInExecutableAction(action)) {
+    async function execute(action: ExecutableEffect) {
+      if (!isBuiltInExecutableEffect(action)) {
         return;
       }
       switch (action.type) {
@@ -2837,19 +2966,19 @@ describe('transition function', () => {
 describe('getNextTransitions', () => {
   it('should return no transitions for an error snapshot', () => {
     const machineV1 = createMachine({
+      id: 'machine',
       version: '1',
       initial: 'a',
       states: { a: {} }
     });
     const machineV2 = createMachine({
+      id: 'machine',
       version: '2',
       initial: 'a',
       states: { a: {} }
     });
     const persisted = createActor(machineV1).start().getPersistedSnapshot();
-    const errorSnapshot = createActor(machineV2, {
-      snapshot: persisted
-    }).getSnapshot();
+    const errorSnapshot = restoreActor(machineV2, persisted).getSnapshot();
 
     expect(errorSnapshot.status).toBe('error');
     expect(getNextTransitions(errorSnapshot)).toEqual([]);
@@ -3005,7 +3134,7 @@ describe('getNextTransitions', () => {
     ]);
     expect(transitions[1].matches).toEqual({
       delay: 1000,
-      stateId: '(machine).a'
+      stateId: 'a'
     });
     expect(transitions.map((t) => t.target?.[0]?.key)).toEqual(['c', 'b']);
   });
