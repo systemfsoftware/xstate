@@ -1,7 +1,7 @@
 {
   "name": "@systemfsoftware/xstate-store",
   "license": "MIT",
-  "version": "5.0.0-alpha.5",
+  "version": "5.0.0-beta.6",
   "author": "Ryan Lee <drdgvhbh@gmail.com>",
   "repository": {
     "type": "git",
