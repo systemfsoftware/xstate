@@ -6,7 +6,7 @@ queue_rules:
     merge_method: merge
     queue_conditions:
       # Recognised from the commits themselves: both anchored git-subtree trailer
-      # lines must be present (ruling 9, SYS-1246). Same checks as default.
+      # lines must be present. Same checks as default.
       - "commits[*].commit_message ~= (?m)^git-subtree-dir: \\S+$"
       - "commits[*].commit_message ~= (?m)^git-subtree-split: [0-9a-f]{40}$"
       - check-success = check (dist)
