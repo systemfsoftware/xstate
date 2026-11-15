@@ -16,10 +16,10 @@ This package is experimental. It targets XState v6 alpha and Effect 4.
 <!-- package name and peer dependencies from package.json -->
 
 ```bash
-nix build github:systemfsoftware/xstate#xstate-effect
+pnpm add @systemfsoftware/xstate-effect @systemfsoftware/xstate 'effect@^4.1.0'
 ```
 
-See the root README's [Install](../../README.md#install) section for wiring a catalog entry. Its peer `@systemfsoftware/xstate` comes from the same flake (`#xstate`), and `effect@^4` from your own package manager.
+Its peers, `@systemfsoftware/xstate` and `effect@^4.1.0`, come from your project.
 
 ## XState Effect: Quick start
 

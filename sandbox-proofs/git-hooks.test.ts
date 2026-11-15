@@ -49,10 +49,6 @@ Deno.test('git hooks run their dependency code inside the sandbox from a linked 
   const pinnedHooks = ['-c', `core.hooksPath=${worktree}/.husky`]
   try {
     await must('git', ['-C', root, 'worktree', 'add', '--detach', worktree, 'HEAD'])
-    await Deno.mkdir(`${worktree}/.deps`)
-    for await (const entry of Deno.readDir(`${root}/.deps`)) {
-      await Deno.copyFile(`${root}/.deps/${entry.name}`, `${worktree}/.deps/${entry.name}`)
-    }
     await must('sandbox', ['--', 'pnpm', 'install'], worktree)
     await Deno.writeTextFile(`${worktree}/${PROBE}`, '{"probe":1}\n')
     await must('git', ['add', PROBE], worktree)

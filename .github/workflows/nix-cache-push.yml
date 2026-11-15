@@ -13,7 +13,6 @@ env:
   EXTRA_OUTPUTS: >-
     sandbox-proofs
     pnpm-store
-    producer-tarballs
 
 jobs:
   push:

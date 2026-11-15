@@ -1,5 +1,5 @@
 {
-  description = "xstate — the @systemfsoftware/xstate* package tarballs, plus the formatter, runtimes, the producer packages and dependency sandbox the check chain shells out to";
+  description = "xstate — the @systemfsoftware/xstate* package tarballs, plus the formatter, runtimes and dependency sandbox the check chain shells out to";
 
   nixConfig = {
     extra-substituters = "https://nix.systemfsoftware.com";
@@ -12,8 +12,8 @@
       url = "github:systemfsoftware/comment-checker";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # The tarball builder and the consumer store. main carries
-    # mkProducerTarballs and the hashless store; no pin older than that has them.
+    # The tarball builder and the consumer store. main carries the hashless
+    # store; no pin older than that has it.
     pnpm-release-management = {
       url = "github:systemfsoftware/pnpm-release-management/741c8c4334c261058dd4a3b2976c9f2e3796d523";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -30,7 +30,7 @@
     };
     # The release workflows run pnpm-release-management's main; the Changeset
     # Check runs its changeset-management CLI from this pin inside the dev
-    # shell, where the `.deps` tarballs the install needs exist. This pin
+    # shell. This pin
     # keeps its own nixpkgs: its deno-compile runtime is pinned to that deno.
     # PR #95 moved release.jsonc to the `changesets` versioning strategy, which
     # pnpm-release-management#9 retired `pnpm` in favour of, so the CLI here
@@ -40,36 +40,23 @@
     # workspace's turbo, so the offline sandbox in changeset-check.yml stays
     # offline — opening the sandbox to npm is rejected.
     release-tools.url = "github:systemfsoftware/pnpm-release-management/1bd7289bd788e62961016bab46257877d25cef56";
-    # Producers: each is pinned to its default-branch commit that pushes
-    # `workspace-tarballs`. A producer input carries no `follows`.
-    systemfsoftware.url = "github:systemfsoftware/systemfsoftware/3ef6c21c36f19a539078b6817b495df3039cc163";
-    stryker-js-effect.url = "github:systemfsoftware/stryker-js-effect/bc8680e836d3df9f80dc69770a9a91390447f8f1";
-    are-the-types-wrong-effect.url = "github:systemfsoftware/are-the-types-wrong-effect/2650b6a0c6cd3b2abdb7f429a5a55dd5221588ca";
   };
 
-  outputs = { self, nixpkgs, comment-checker, pnpm-release-management, pnpm-release-management-sandbox, release-tools, systemfsoftware, stryker-js-effect, are-the-types-wrong-effect }:
+  outputs = { self, nixpkgs, comment-checker, pnpm-release-management, pnpm-release-management-sandbox, release-tools }:
     let
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forEachSystem = fn: lib.genAttrs systems (system: fn nixpkgs.legacyPackages.${system});
-
-      # Every public member of each producer, as `<attr>.tgz` under `.deps/`.
-      producerTarballsOf = pkgs: pnpm-release-management.lib.mkProducerTarballs {
-        inherit pkgs;
-        producers = { inherit systemfsoftware stryker-js-effect are-the-types-wrong-effect; };
-      };
     in
     {
       packages = forEachSystem (pkgs:
         let
           system = pkgs.stdenv.hostPlatform.system;
-          producerTarballs = producerTarballsOf pkgs;
           workspace = removeAttrs (pnpm-release-management.lib.mkPnpmWorkspacePackages {
             inherit pkgs;
             src = self;
             pname = "xstate";
             pnpm = pkgs.pnpm_12;
-            files.".deps" = producerTarballs;
           }) [ "pnpm-store" ];
           unwrapped = comment-checker.packages.${system}.comment-checker;
           sandbox-source = pkgs.applyPatches {
@@ -80,12 +67,10 @@
           sandbox = pkgs.callPackage "${sandbox-source}/default.nix" { };
           own = {
             inherit sandbox;
-            producer-tarballs = producerTarballs;
             pnpm-store = pnpm-release-management.lib.mkPnpmConsumerStore {
               inherit pkgs;
               src = self;
               pname = "xstate";
-              files.".deps" = producerTarballs;
             };
             dprint = pkgs.callPackage ./nix/dprint.nix { dprintConfig = ./dprint.json; };
             sandbox-proofs = pkgs.callPackage "${sandbox-source}/proofs.nix" { inherit sandbox; };
@@ -116,12 +101,8 @@
               pkgs.deno
             ];
             SANDBOX_PNPM_STORE = own.pnpm-store;
-            # The lockfile names the producer tarballs under `.deps/`. The hook
-            # copies them in as real files: the sandbox cannot read a store path
-            # outside its own closure.
             shellHook = ''
               git config core.hooksPath .husky
-              ${own.producer-tarballs.shellHook}
             '';
           };
         });

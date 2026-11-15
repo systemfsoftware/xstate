@@ -18,63 +18,18 @@ xstate holds the `@systemfsoftware/xstate*` packages: a fork of [XState](https:/
 
 ## Install
 
-These packages are not on npm. They are distributed as Nix tarballs from [nix.systemfsoftware.com](https://nix.systemfsoftware.com), the registry for `@systemfsoftware` packages.
+Install the packages you use from npm, with their peers:
 
-Add this repository as a flake input, and take its tarballs through [pnpm-release-management](https://github.com/systemfsoftware/pnpm-release-management#distribution-through-nix):
-
-```nix
-{
-  nixConfig = {
-    extra-substituters = "https://nix.systemfsoftware.com";
-    extra-trusted-public-keys = "nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=";
-  };
-
-  inputs = {
-    nixpkgs.follows = "xstate/nixpkgs";
-    xstate.url = "github:systemfsoftware/xstate/<rev>";
-    pnpm-release-management.url = "github:systemfsoftware/pnpm-release-management";
-  };
-
-  outputs = { self, nixpkgs, xstate, pnpm-release-management }:
-    let
-      lib = nixpkgs.lib;
-      forEachSystem = fn: lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: fn nixpkgs.legacyPackages.${system});
-    in
-    {
-      packages = forEachSystem (pkgs: rec {
-        producer-tarballs = pnpm-release-management.lib.mkProducerTarballs {
-          inherit pkgs;
-          producers = { inherit xstate; };
-        };
-        pnpm-store = pnpm-release-management.lib.mkPnpmConsumerStore {
-          inherit pkgs;
-          src = self;
-          files.".deps" = producer-tarballs;
-        };
-      });
-
-      devShells = forEachSystem (pkgs: {
-        default = pkgs.mkShell {
-          shellHook = self.packages.${pkgs.stdenv.hostPlatform.system}.producer-tarballs.shellHook;
-        };
-      });
-    };
-}
+```sh
+pnpm add @systemfsoftware/xstate
+pnpm add @systemfsoftware/xstate-effect @systemfsoftware/xstate 'effect@^4.1.0'
+pnpm add @systemfsoftware/xstate-react @systemfsoftware/xstate 'react@^19.3.0'
+pnpm add @systemfsoftware/xstate-store @systemfsoftware/xstate
+pnpm add @systemfsoftware/xstate-store-react 'react@^19.3.0'
+pnpm add -D @systemfsoftware/xstate-test @systemfsoftware/xstate 'effect@^4.1.0' 'fast-check@^4' 'vitest@^5' 'zod@^4'
 ```
 
-Replace `<rev>` with the commit you pin. Nix only applies `nixConfig` for trusted users or with `--accept-flake-config`.
-
-Each package is a tarball named after its last segment, so `@systemfsoftware/xstate-store` is `xstate-store.tgz`. Point your `package.json` at the ones you use:
-
-```json
-{
-  "dependencies": {
-    "@systemfsoftware/xstate": "file:.deps/xstate.tgz"
-  }
-}
-```
-
-Add `.deps/` to `.gitignore`, then run `pnpm install` inside the dev shell. Third-party peers such as `effect`, `react`, `fast-check`, `vitest` and `zod` install from npm as usual, for the packages you use.
+The packages are published under the `latest` tag while the repository is in pre-release, so pnpm resolves their beta versions.
 
 ## Quick start
 
