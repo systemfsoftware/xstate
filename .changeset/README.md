@@ -31,8 +31,5 @@ Short release note for the change.
 - This README is NOT a changeset: the gate requires a file whose frontmatter
   parses as `"<pkg>": <none|patch|minor|major>`.
 
-Nothing is published to a registry. The release path writes a `<pkg>@vX.Y.Z` git
-tag and a GitHub Release for each unreleased version; distribution is this
-repository's Nix flake outputs consumed from a git ref (pinned by `flake.lock`
-rev + narHash). There is no npm token, no OIDC trusted publishing, and no
-registry to configure.
+The release path writes a `<pkg>@vX.Y.Z` git tag and a GitHub Release for each unreleased version, and publishes
+the packages to npm through trusted publishing.

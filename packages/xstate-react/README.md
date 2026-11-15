@@ -12,10 +12,10 @@ This package contains utilities for using [XState](https://github.com/statelyai/
 1. Install `@systemfsoftware/xstate-react`:
 
 ```bash
-nix build github:systemfsoftware/xstate#xstate-react
+pnpm add @systemfsoftware/xstate-react @systemfsoftware/xstate 'react@^19.3.0'
 ```
 
-See the root README's [Install](../../README.md#install) section for wiring a catalog entry. Its peer `@systemfsoftware/xstate` comes from the same flake (`#xstate`), and `react` from your own package manager.
+Its peers, `@systemfsoftware/xstate` and `react@^19.3.0`, come from your project.
 
 2. Import the `useMachine` hook:
 

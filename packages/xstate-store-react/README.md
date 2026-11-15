@@ -7,10 +7,10 @@ React adapter for [@xstate/store](https://stately.ai/docs/xstate-store).
 ## Installation
 
 ```bash
-nix build github:systemfsoftware/xstate#xstate-store-react
+pnpm add @systemfsoftware/xstate-store-react 'react@^19.3.0'
 ```
 
-See the root README's [Install](../../README.md#install) section for wiring a catalog entry. Its peer `react` comes from your own package manager.
+Its peer `react@^19.3.0` comes from your project.
 
 ## Quickstart
 

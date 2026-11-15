@@ -12,5 +12,4 @@ packages/*/temp/
 .direnv/
 result
 result-*
-.deps
 .cache/

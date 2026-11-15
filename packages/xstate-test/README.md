@@ -32,10 +32,10 @@ complete worked example.
 ## Installation
 
 ```bash
-pnpm add -D @xstate/test fast-check xstate
+pnpm add -D @systemfsoftware/xstate-test @systemfsoftware/xstate fast-check
 ```
 
-`xstate` and `fast-check` are required peer dependencies. The other peer
+`@systemfsoftware/xstate` and `fast-check` are required peer dependencies. The other peer
 dependencies are optional:
 
 | Package                                    | Needed for                                                                           |
