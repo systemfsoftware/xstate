@@ -28,7 +28,7 @@ catalog:
   effect: 4.1.2
   fast-check: 4.9.0
   lint-staged: 17.6.0
-  oxlint: ~1.90.0
+  oxlint: ~1.93.0
   oxlint-tsgolint: 7.0.2005
   react: 19.3.0
   react-dom: 19.3.0
