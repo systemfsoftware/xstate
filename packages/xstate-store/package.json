@@ -44,14 +44,14 @@
     "@systemfsoftware/xstate": "workspace:^",
     "@types/node": "catalog:",
     "effect": "catalog:",
-    "happy-dom": "20.14.5",
-    "immer": "10.2.0",
+    "happy-dom": "21.0.4",
+    "immer": "11.2.10",
     "react": "catalog:",
     "rimraf": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "publishConfig": {
     "access": "public",
