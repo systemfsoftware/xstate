@@ -5,8 +5,8 @@ allowBuilds:
   protobufjs: false
   sharp: false
 catalog:
-  "@commitlint/cli": 21.2.3
-  "@commitlint/config-conventional": 21.2.3
+  "@commitlint/cli": 21.2.4
+  "@commitlint/config-conventional": 21.2.4
   "@commitlint/types": 21.2.3
   "@effect/tsgo": 0.64.1
   "@microsoft/api-extractor": 7.59.1
