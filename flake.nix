@@ -15,7 +15,7 @@
     # The tarball builder and the consumer store. main carries the hashless
     # store; no pin older than that has it.
     pnpm-release-management = {
-      url = "github:systemfsoftware/pnpm-release-management/741c8c4334c261058dd4a3b2976c9f2e3796d523";
+      url = "github:systemfsoftware/pnpm-release-management/3da32f4fa6f01af0a9a0cdab5cc8eb5d134b2de3";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.comment-checker.follows = "comment-checker";
     };
