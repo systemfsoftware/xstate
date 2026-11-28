@@ -47,7 +47,7 @@
   "devDependencies": {
     "@effect/tsgo": "catalog:",
     "@microsoft/api-extractor": "catalog:",
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.65.1",
     "@systemfsoftware/arethetypeswrong-cli": "catalog:",
     "@systemfsoftware/tsconfig": "catalog:",
     "@systemfsoftware/vitest": "catalog:",
