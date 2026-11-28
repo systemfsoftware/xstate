@@ -213,8 +213,8 @@ catalogs:
       specifier: 16.3.3
       version: 16.3.3
     '@types/node':
-      specifier: 24.19.1
-      version: 24.19.1
+      specifier: 24.19.2
+      version: 24.19.2
     '@types/react':
       specifier: 19.3.0
       version: 19.3.0
@@ -283,19 +283,19 @@ importers:
         version: 0.3.1(rolldown@1.2.16)
       '@systemfsoftware/stryker-js':
         specifier: 'catalog:'
-        version: 22.0.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+        version: 22.0.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       '@systemfsoftware/stryker-js-typescript-checker':
         specifier: 'catalog:'
         version: 9.0.1(@opentelemetry/api-logs@0.222.0)(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(rolldown@1.2.16)(supports-color@8.1.1)
       '@systemfsoftware/stryker-js-vitest-runner':
         specifier: 'catalog:'
-        version: 10.1.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+        version: 10.1.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       '@systemfsoftware/tsconfig':
         specifier: 'catalog:'
         version: 2.1.0
       '@types/node':
         specifier: 'catalog:'
-        version: 24.19.1
+        version: 24.19.2
       lint-staged:
         specifier: 'catalog:'
         version: 17.6.0
@@ -313,7 +313,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
 
   packages/xstate:
     devDependencies:
@@ -322,7 +322,7 @@ importers:
         version: 0.64.1
       '@microsoft/api-extractor':
         specifier: 'catalog:'
-        version: 7.59.1(@types/node@24.19.1)
+        version: 7.59.1(@types/node@24.19.2)
       '@systemfsoftware/arethetypeswrong-cli':
         specifier: 'catalog:'
         version: 4.2.0
@@ -331,16 +331,16 @@ importers:
         version: 1.1.4(effect@4.1.2)
       '@systemfsoftware/effect-gherkin-spec':
         specifier: 'catalog:'
-        version: 8.1.4(@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))))(effect@4.1.2)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+        version: 8.1.4(@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))))(effect@4.1.2)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       '@systemfsoftware/tsconfig':
         specifier: 'catalog:'
         version: 2.1.0
       '@systemfsoftware/vitest':
         specifier: 'catalog:'
-        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       '@types/node':
         specifier: 'catalog:'
-        version: 24.19.1
+        version: 24.19.2
       ajv:
         specifier: 8.20.0
         version: 8.20.0
@@ -361,7 +361,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
       zod:
         specifier: 3.25.76
         version: 3.25.76
@@ -373,7 +373,7 @@ importers:
         version: 0.64.1
       '@microsoft/api-extractor':
         specifier: 'catalog:'
-        version: 7.59.1(@types/node@24.19.1)
+        version: 7.59.1(@types/node@24.19.2)
       '@systemfsoftware/arethetypeswrong-cli':
         specifier: 'catalog:'
         version: 4.2.0
@@ -382,13 +382,13 @@ importers:
         version: 2.1.0
       '@systemfsoftware/vitest':
         specifier: 'catalog:'
-        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       '@systemfsoftware/xstate':
         specifier: workspace:^
         version: link:../xstate
       '@types/node':
         specifier: 'catalog:'
-        version: 24.19.1
+        version: 24.19.2
       effect:
         specifier: 4.1.2
         version: 4.1.2
@@ -406,7 +406,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
 
   packages/xstate-react:
     dependencies:
@@ -422,7 +422,7 @@ importers:
         version: 0.64.1
       '@microsoft/api-extractor':
         specifier: 'catalog:'
-        version: 7.59.1(@types/node@24.19.1)
+        version: 7.59.1(@types/node@24.19.2)
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.9.1
@@ -434,7 +434,7 @@ importers:
         version: 2.1.0
       '@systemfsoftware/vitest':
         specifier: 'catalog:'
-        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       '@systemfsoftware/xstate':
         specifier: workspace:^
         version: link:../xstate
@@ -443,7 +443,7 @@ importers:
         version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@types/node':
         specifier: 'catalog:'
-        version: 24.19.1
+        version: 24.19.2
       '@types/react':
         specifier: 'catalog:'
         version: 19.3.0
@@ -476,7 +476,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
       zod:
         specifier: 3.25.76
         version: 3.25.76
@@ -488,7 +488,7 @@ importers:
         version: 0.64.1
       '@microsoft/api-extractor':
         specifier: 'catalog:'
-        version: 7.59.1(@types/node@24.19.1)
+        version: 7.59.1(@types/node@24.19.2)
       '@statelyai/inspect':
         specifier: 0.7.2
         version: 0.7.2(xstate@5.33.4)
@@ -500,13 +500,13 @@ importers:
         version: 2.1.0
       '@systemfsoftware/vitest':
         specifier: 'catalog:'
-        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       '@systemfsoftware/xstate':
         specifier: workspace:^
         version: link:../xstate
       '@types/node':
         specifier: 'catalog:'
-        version: 24.19.1
+        version: 24.19.2
       effect:
         specifier: 4.1.2
         version: 4.1.2
@@ -530,7 +530,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -546,7 +546,7 @@ importers:
         version: 0.64.1
       '@microsoft/api-extractor':
         specifier: 'catalog:'
-        version: 7.59.1(@types/node@24.19.1)
+        version: 7.59.1(@types/node@24.19.2)
       '@systemfsoftware/arethetypeswrong-cli':
         specifier: 'catalog:'
         version: 4.2.0
@@ -555,13 +555,13 @@ importers:
         version: 2.1.0
       '@systemfsoftware/vitest':
         specifier: 'catalog:'
-        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       '@testing-library/react':
         specifier: 'catalog:'
         version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@types/node':
         specifier: 'catalog:'
-        version: 24.19.1
+        version: 24.19.2
       '@types/react':
         specifier: 'catalog:'
         version: 19.3.0
@@ -588,7 +588,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -600,7 +600,7 @@ importers:
         version: 0.64.1
       '@microsoft/api-extractor':
         specifier: 'catalog:'
-        version: 7.59.1(@types/node@24.19.1)
+        version: 7.59.1(@types/node@24.19.2)
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0
@@ -612,13 +612,13 @@ importers:
         version: 2.1.0
       '@systemfsoftware/vitest':
         specifier: 'catalog:'
-        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+        version: 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       '@systemfsoftware/xstate':
         specifier: workspace:^
         version: link:../xstate
       '@types/node':
         specifier: 'catalog:'
-        version: 24.19.1
+        version: 24.19.2
       effect:
         specifier: 4.1.2
         version: 4.1.2
@@ -636,7 +636,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 'catalog:'
-        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+        version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -2140,8 +2140,8 @@ packages:
   '@types/estree@1.0.10':
     resolution: {integrity: sha512-lTyOMnOcmRBzdCv6/4zUZCrEhV0xrqQiUZBZtVcbmLHBXKLnN8q89v/wKRF/Q0HbwVsqbIG3o5HDoFl9sduM+g==}
 
-  '@types/node@24.19.1':
-    resolution: {integrity: sha512-aS3/DG0oM05K0RIXXP+hKjinGG5IgSSVGzswZxW3O0sS3pH4/fycXundUC9XsszgKCk4gHXylTEK6hyFxVxnoQ==}
+  '@types/node@24.19.2':
+    resolution: {integrity: sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==}
 
   '@types/react-dom@19.3.0':
     resolution: {integrity: sha512-ZI7bU42mZXXKHn/qNLEw2IrbiINU7X5+vfgdixBHkCNpYWXjKgfQ/P+uyGb5CjOLB9UcnTeg3rylQtV2hym44Q==}
@@ -3555,18 +3555,22 @@ packages:
   yuku-ast@0.19.0:
     resolution: {integrity: sha512-PyCsiScaelhxBGzL8dyeJkLqvRZycoh78R31Vrt/WqYrm0hMFoKwIw/X7Dx5mBKLWAMlV9I9HEyBOHnj2gZVyw==}
     engines: {node: '>=14.18.0'}
+    deprecated: 'Yuku is now one package with one core. Use "yuku" instead: https://yuku.fyi/javascript/. Existing installs keep working but get no more fixes.'
 
   yuku-codegen@0.19.0:
     resolution: {integrity: sha512-uymAKHjDuaP4BEpkXC/BSLz4DUEF5oArZ5AuD3888nb2miChjWSgpPdojEJxm3pjpXkgUaCRJQyNAbnMN33wHg==}
     engines: {node: '>=14.18.0'}
+    deprecated: 'Yuku is now one package with one core. Use "yuku" instead: https://yuku.fyi/javascript/. Existing installs keep working but get no more fixes.'
 
   yuku-core@0.19.0:
     resolution: {integrity: sha512-kYK9e1XdfirNhkipzW0wmMcSWcVF/CWnuugodfVYRCUwvoBefweL9HzB96OiKEhsx78V5WbUxbJqlizMX869Qg==}
     engines: {node: '>=14.18.0'}
+    deprecated: 'Yuku is now one package with one core. Use "yuku" instead: https://yuku.fyi/javascript/. Existing installs keep working but get no more fixes.'
 
   yuku-parser@0.19.0:
     resolution: {integrity: sha512-XrBh9ZiQK5mJVRxZBAvD6LwRyAYrK3MFtH3+onyuxFL5hFD44EC3QOmIC1FjTj6H2MMwq46/NAI+NZxLZPZgxg==}
     engines: {node: '>=14.18.0'}
+    deprecated: 'Yuku is now one package with one core. Use "yuku" instead: https://yuku.fyi/javascript/. Existing installs keep working but get no more fixes.'
 
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
@@ -3791,23 +3795,23 @@ snapshots:
 
   '@js-sdsl/ordered-map@4.4.2': {}
 
-  '@microsoft/api-extractor-model@7.33.12(@types/node@24.19.1)':
+  '@microsoft/api-extractor-model@7.33.12(@types/node@24.19.2)':
     dependencies:
       '@microsoft/tsdoc': 0.16.0
       '@microsoft/tsdoc-config': 0.18.3
-      '@rushstack/node-core-library': 5.24.1(@types/node@24.19.1)
+      '@rushstack/node-core-library': 5.24.1(@types/node@24.19.2)
     transitivePeerDependencies:
       - '@types/node'
 
-  '@microsoft/api-extractor@7.59.1(@types/node@24.19.1)':
+  '@microsoft/api-extractor@7.59.1(@types/node@24.19.2)':
     dependencies:
-      '@microsoft/api-extractor-model': 7.33.12(@types/node@24.19.1)
+      '@microsoft/api-extractor-model': 7.33.12(@types/node@24.19.2)
       '@microsoft/tsdoc': 0.16.0
       '@microsoft/tsdoc-config': 0.18.3
-      '@rushstack/node-core-library': 5.24.1(@types/node@24.19.1)
+      '@rushstack/node-core-library': 5.24.1(@types/node@24.19.2)
       '@rushstack/rig-package': 0.7.3
-      '@rushstack/terminal': 0.24.4(@types/node@24.19.1)
-      '@rushstack/ts-command-line': 5.3.14(@types/node@24.19.1)
+      '@rushstack/terminal': 0.24.4(@types/node@24.19.2)
+      '@rushstack/ts-command-line': 5.3.14(@types/node@24.19.2)
       diff: 8.0.4
       minimatch: 10.2.3
       resolve: 1.22.14
@@ -4580,7 +4584,7 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
-  '@rushstack/node-core-library@5.24.1(@types/node@24.19.1)':
+  '@rushstack/node-core-library@5.24.1(@types/node@24.19.2)':
     dependencies:
       ajv: 8.20.0
       ajv-draft-04: 1.0.0(ajv@8.20.0)
@@ -4591,28 +4595,28 @@ snapshots:
       resolve: 1.22.14
       semver: 7.7.4
     optionalDependencies:
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
 
-  '@rushstack/problem-matcher@0.2.1(@types/node@24.19.1)':
+  '@rushstack/problem-matcher@0.2.1(@types/node@24.19.2)':
     optionalDependencies:
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
 
   '@rushstack/rig-package@0.7.3':
     dependencies:
       jju: 1.4.0
       resolve: 1.22.14
 
-  '@rushstack/terminal@0.24.4(@types/node@24.19.1)':
+  '@rushstack/terminal@0.24.4(@types/node@24.19.2)':
     dependencies:
-      '@rushstack/node-core-library': 5.24.1(@types/node@24.19.1)
-      '@rushstack/problem-matcher': 0.2.1(@types/node@24.19.1)
+      '@rushstack/node-core-library': 5.24.1(@types/node@24.19.2)
+      '@rushstack/problem-matcher': 0.2.1(@types/node@24.19.2)
       supports-color: 8.1.1
     optionalDependencies:
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
 
-  '@rushstack/ts-command-line@5.3.14(@types/node@24.19.1)':
+  '@rushstack/ts-command-line@5.3.14(@types/node@24.19.2)':
     dependencies:
-      '@rushstack/terminal': 0.24.4(@types/node@24.19.1)
+      '@rushstack/terminal': 0.24.4(@types/node@24.19.2)
       '@types/argparse': 1.0.38
       argparse: 1.0.10
       string-argv: 0.3.2
@@ -4653,23 +4657,23 @@ snapshots:
     dependencies:
       effect: 4.1.2
 
-  '@systemfsoftware/effect-gherkin-spec@8.1.4(@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))))(effect@4.1.2)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))':
+  '@systemfsoftware/effect-gherkin-spec@8.1.4(@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))))(effect@4.1.2)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))':
     dependencies:
-      '@systemfsoftware/effect-spec-runtime': 1.1.5(@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))))(effect@4.1.2)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
-      '@systemfsoftware/vitest': 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+      '@systemfsoftware/effect-spec-runtime': 1.1.5(@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))))(effect@4.1.2)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
+      '@systemfsoftware/vitest': 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       effect: 4.1.2
-      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
 
   '@systemfsoftware/effect-sim-kernel@2.0.5(effect@4.1.2)':
     dependencies:
       effect: 4.1.2
 
-  '@systemfsoftware/effect-spec-runtime@1.1.5(@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))))(effect@4.1.2)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))':
+  '@systemfsoftware/effect-spec-runtime@1.1.5(@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))))(effect@4.1.2)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))':
     dependencies:
       '@systemfsoftware/effect-sim-kernel': 2.0.5(effect@4.1.2)
-      '@systemfsoftware/vitest': 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))
+      '@systemfsoftware/vitest': 4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))
       effect: 4.1.2
-      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
 
   '@systemfsoftware/oxlint-config-cell-architecture@6.0.1(effect@4.1.2)(oxlint@1.90.0(oxlint-tsgolint@7.0.2005))(typescript@7.0.2)':
     dependencies:
@@ -4840,14 +4844,14 @@ snapshots:
       - rolldown
       - supports-color
 
-  '@systemfsoftware/stryker-js-vitest-runner@10.1.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))':
+  '@systemfsoftware/stryker-js-vitest-runner@10.1.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))':
     dependencies:
       '@effect/opentelemetry': 4.1.4(@opentelemetry/api-logs@0.222.0)(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)
       '@opentelemetry/exporter-trace-otlp-http': 0.222.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-node': 0.222.0(@opentelemetry/api@1.9.1)(supports-color@8.1.1)
       '@opentelemetry/sdk-trace-base': 2.12.0(@opentelemetry/api@1.9.1)
       '@systemfsoftware/effect-cell-types': 12.1.4(effect@4.1.2)
-      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@opentelemetry/api-logs'
@@ -4860,7 +4864,7 @@ snapshots:
       - effect
       - supports-color
 
-  '@systemfsoftware/stryker-js@22.0.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))':
+  '@systemfsoftware/stryker-js@22.0.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))':
     dependencies:
       '@effect/opentelemetry': 4.1.4(@opentelemetry/api-logs@0.222.0)(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)
       '@effect/platform-node': 4.1.4(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))
@@ -4872,7 +4876,7 @@ snapshots:
       '@opentelemetry/sdk-metrics': 2.12.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-trace-base': 2.12.0(@opentelemetry/api@1.9.1)
       '@systemfsoftware/effect-cell-types': 12.1.4(effect@4.1.2)
-      '@systemfsoftware/stryker-js-vm-runner': '@systemfsoftware/stryker-js-vitest-runner@10.1.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))'
+      '@systemfsoftware/stryker-js-vm-runner': '@systemfsoftware/stryker-js-vitest-runner@10.1.0(@opentelemetry/api-logs@0.222.0)(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-logs@0.222.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-metrics@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-node@2.11.0(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.45.0)(effect@4.1.2)(supports-color@8.1.1)(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))'
       effect: 4.1.2
       yaml: 2.9.1
     transitivePeerDependencies:
@@ -4890,11 +4894,11 @@ snapshots:
 
   '@systemfsoftware/tsconfig@2.1.0': {}
 
-  '@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)))':
+  '@systemfsoftware/vitest@4.1.1(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))(vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)))':
     dependencies:
       '@effect/platform-node': 4.1.4(effect@4.1.2)(redis@6.3.1(@opentelemetry/api@1.9.1))
       effect: 4.1.2
-      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+      vitest: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
     transitivePeerDependencies:
       - bufferutil
       - redis
@@ -4952,7 +4956,7 @@ snapshots:
 
   '@types/estree@1.0.10': {}
 
-  '@types/node@24.19.1':
+  '@types/node@24.19.2':
     dependencies:
       undici-types: 7.24.6
 
@@ -4970,7 +4974,7 @@ snapshots:
 
   '@types/ws@8.18.2':
     dependencies:
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -5032,14 +5036,14 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@vitest/mocker@5.0.3(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))':
+  '@vitest/mocker@5.0.3(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@vitest/spy': 5.0.3
       estree-walker: 3.0.3
       magic-string: 1.4.5
     optionalDependencies:
-      vite: 8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)
+      vite: 8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)
 
   '@vitest/spy@5.0.3': {}
 
@@ -5150,7 +5154,7 @@ snapshots:
 
   buffer-image-size@0.6.4:
     dependencies:
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
 
   cac@7.1.0: {}
 
@@ -5343,7 +5347,7 @@ snapshots:
 
   happy-dom@20.14.5:
     dependencies:
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
       '@types/whatwg-mimetype': 3.0.2
       '@types/ws': 8.18.2
       buffer-image-size: 0.6.4
@@ -5740,7 +5744,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.2
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
       long: 5.3.2
 
   pure-rand@8.4.2: {}
@@ -6022,7 +6026,7 @@ snapshots:
 
   verkit@0.5.0: {}
 
-  vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1):
+  vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -6030,15 +6034,15 @@ snapshots:
       rolldown: 1.2.16
       tinyglobby: 0.2.17
     optionalDependencies:
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
       fsevents: 2.3.3
       jiti: 2.7.0
       yaml: 2.9.1
 
-  vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)):
+  vitest@5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(happy-dom@20.14.5)(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.3(vite@8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1))
+      '@vitest/mocker': 5.0.3(vite@8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
       chai: 6.3.0
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -6049,11 +6053,11 @@ snapshots:
       tinybench: 6.2.3
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
-      vite: 8.3.6(@types/node@24.19.1)(jiti@2.7.0)(yaml@2.9.1)
+      vite: 8.3.6(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)
       why-is-node-running: 3.2.1
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
-      '@types/node': 24.19.1
+      '@types/node': 24.19.2
       happy-dom: 20.14.5
     transitivePeerDependencies:
       - msw
