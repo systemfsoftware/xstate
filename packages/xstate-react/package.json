@@ -52,7 +52,7 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@types/use-sync-external-store": "1.7.0",
-    "happy-dom": "20.14.5",
+    "happy-dom": "21.0.4",
     "react": "catalog:",
     "react-dom": "catalog:",
     "rimraf": "catalog:",
@@ -60,7 +60,7 @@
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
-    "zod": "3.25.76"
+    "zod": "4.6.7"
   },
   "publishConfig": {
     "access": "public",
